@@ -582,6 +582,14 @@ export function createHttpServer() {
         projectId,
         characterId
       });
+      const trainingSparksCost = Number(trained.sparksCost ?? 0);
+      await mcpHost.invoke("billing", "debit", {
+        userId: auth.userId,
+        amount: trainingSparksCost,
+        idempotencyKey: `character-train:${characterId}`,
+        relatedResourceType: "character",
+        relatedResourceId: characterId
+      });
       const character = await saveCharacter({
         id: characterId,
         projectId,
@@ -590,7 +598,7 @@ export function createHttpServer() {
         status: trained.character?.status ?? "trained",
         previewUrl: trained.character?.previewUrl ?? null
       });
-      return json(response, 200, { character, sparksCost: trained.sparksCost ?? 0 });
+      return json(response, 200, { character, sparksCost: trainingSparksCost });
     }
 
     const shotsMatch = url.pathname.match(/^\/api\/v1\/cinefuse\/projects\/([^/]+)\/shots$/);

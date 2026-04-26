@@ -19,13 +19,56 @@ const memoryState = {
 
 let pool;
 
+function resolveConnectionString() {
+  if (process.env.NODE_ENV === "test") {
+    return process.env.CINEFUSE_DATABASE_URL_TEST
+      ?? process.env.DATABASE_URL_TEST
+      ?? process.env.CINEFUSE_DATABASE_URL
+      ?? process.env.DATABASE_URL
+      ?? null;
+  }
+  return process.env.CINEFUSE_DATABASE_URL ?? process.env.DATABASE_URL ?? null;
+}
+
+function resolvePoolConfig(connectionString) {
+  const config = { connectionString };
+  let sslMode = "";
+  try {
+    const parsed = new URL(connectionString);
+    sslMode = (parsed.searchParams.get("sslmode") ?? "").toLowerCase();
+  } catch {
+    return config;
+  }
+
+  const sslEnabled = ["require", "verify-ca", "verify-full"].includes(sslMode)
+    || (process.env.DATABASE_SSL ?? "").toLowerCase() === "true";
+  if (!sslEnabled) {
+    return config;
+  }
+
+  const explicitRejectUnauthorized = process.env.DATABASE_SSL_REJECT_UNAUTHORIZED;
+  const rejectUnauthorized = explicitRejectUnauthorized
+    ? explicitRejectUnauthorized !== "false"
+    : sslMode === "verify-full";
+  const ssl = { rejectUnauthorized };
+  const sslCA = process.env.DATABASE_SSL_CA ?? process.env.PGSSLROOTCERT_CONTENT;
+  if (sslCA) {
+    ssl.ca = sslCA.replace(/\\n/g, "\n");
+  }
+  config.ssl = ssl;
+  return config;
+}
+
 function getPool() {
-  const connectionString = process.env.CINEFUSE_DATABASE_URL ?? process.env.DATABASE_URL;
+  if (process.env.NODE_ENV === "test" && process.env.CINEFUSE_USE_DB_IN_TESTS !== "true") {
+    return null;
+  }
+  const connectionString = resolveConnectionString();
   if (!connectionString) {
     return null;
   }
   if (!pool) {
-    pool = new Pool({ connectionString });
+    pool = new Pool(resolvePoolConfig(connectionString));
   }
   return pool;
 }

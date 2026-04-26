@@ -17,6 +17,7 @@
     "test": "turbo run test",
     "contract-test": "turbo run contract-test",
     "eval:clip": "pnpm --filter @cinefuse/eval eval:clip",
+    "eval:character": "pnpm --filter @cinefuse/eval eval:character",
     "clean": "turbo run clean && rm -rf node_modules .turbo"
   },
   "devDependencies": {

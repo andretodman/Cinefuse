@@ -365,6 +365,13 @@ test("api contract: character create/train and shot lock", async () => {
     }
   );
   assert.equal(trainCharacter.status, 200);
+  const trainedBody = await trainCharacter.json();
+  assert.equal(trainedBody.sparksCost, 500);
+
+  const balance = await fetch(`${baseUrl}/api/v1/cinefuse/sparks/balance`, { headers });
+  assert.equal(balance.status, 200);
+  const balanceBody = await balance.json();
+  assert.equal(balanceBody.balance, 99500);
 
   const listCharacters = await fetch(`${baseUrl}/api/v1/cinefuse/projects/${projectId}/characters`, { headers });
   assert.equal(listCharacters.status, 200);

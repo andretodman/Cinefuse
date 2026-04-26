@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "eval:clip": "node clip-eval.js"
+    "eval:clip": "node clip-eval.js",
+    "eval:character": "node character-eval.js"
   }
 }
