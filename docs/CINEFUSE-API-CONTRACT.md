@@ -12,6 +12,7 @@ All clients and services should target these routes.
 - `projects`
 - `shots`
 - `jobs`
+- `sparks`
 
 ## Endpoints
 
@@ -30,6 +31,12 @@ All clients and services should target these routes.
 
 - `POST /api/v1/cinefuse/projects/{projectId}/jobs`
 - `GET /api/v1/cinefuse/projects/{projectId}/jobs`
+
+### Sparks
+
+- `GET /api/v1/cinefuse/sparks/balance`
+- `POST /api/v1/cinefuse/sparks/debit`
+- `POST /api/v1/cinefuse/sparks/credit`
 
 ## Error envelope
 
@@ -53,5 +60,9 @@ During migration, legacy Cinefuse gateway route `/v1/projects` may remain as an 
 
 - `GET /api/v1/cinefuse/projects`
 - `POST /api/v1/cinefuse/projects`
+
+Legacy Spark balance route `/v1/sparks/balance` may remain as an alias to:
+
+- `GET /api/v1/cinefuse/sparks/balance`
 
 Alias removal is allowed after iOS/Android/Cinefuse clients adopt the canonical prefix.

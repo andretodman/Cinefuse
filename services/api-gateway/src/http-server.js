@@ -37,6 +37,14 @@ function applyLegacyProjectsAliasHeaders(response, pathName) {
   response.setHeader("x-cinefuse-canonical-route", "/api/v1/cinefuse/projects");
 }
 
+function applyLegacySparksAliasHeaders(response, pathName) {
+  if (pathName !== "/v1/sparks/balance") {
+    return;
+  }
+  response.setHeader("x-cinefuse-deprecated-route", "/v1/sparks/balance");
+  response.setHeader("x-cinefuse-canonical-route", "/api/v1/cinefuse/sparks/balance");
+}
+
 export function createHttpServer() {
   const mcpHost = createMcpHost();
 
@@ -61,11 +69,75 @@ export function createHttpServer() {
       return writeError(response, 401, "unauthorized", "UNAUTHORIZED");
     }
 
-    if (method === "GET" && url.pathname === "/v1/sparks/balance") {
+    if (
+      method === "GET"
+      && (url.pathname === "/api/v1/cinefuse/sparks/balance" || url.pathname === "/v1/sparks/balance")
+    ) {
+      applyLegacySparksAliasHeaders(response, url.pathname);
       const result = await mcpHost.invoke("billing", "get_balance", { userId: auth.userId });
       return json(response, 200, {
         userId: auth.userId,
         balance: result.balance
+      });
+    }
+
+    if (method === "POST" && url.pathname === "/api/v1/cinefuse/sparks/debit") {
+      const payload = await readBody(request);
+      if (typeof payload.idempotencyKey !== "string" || payload.idempotencyKey.length === 0) {
+        return writeError(response, 400, "idempotency key required", "IDEMPOTENCY_KEY_REQUIRED");
+      }
+      const amount = Number(payload.amount ?? 0);
+      if (!Number.isFinite(amount) || amount < 0) {
+        return writeError(response, 400, "invalid debit amount", "INVALID_DEBIT_AMOUNT");
+      }
+      await mcpHost.invoke("billing", "debit", {
+        userId: auth.userId,
+        amount,
+        idempotencyKey: payload.idempotencyKey,
+        relatedResourceType: payload.relatedResourceType ?? null,
+        relatedResourceId: payload.relatedResourceId ?? null
+      });
+      const balanceResult = await mcpHost.invoke("billing", "get_balance", { userId: auth.userId });
+      return json(response, 200, {
+        ok: true,
+        transaction: {
+          kind: "debit",
+          amount,
+          idempotencyKey: payload.idempotencyKey,
+          relatedResourceType: payload.relatedResourceType ?? null,
+          relatedResourceId: payload.relatedResourceId ?? null
+        },
+        balance: balanceResult.balance
+      });
+    }
+
+    if (method === "POST" && url.pathname === "/api/v1/cinefuse/sparks/credit") {
+      const payload = await readBody(request);
+      if (typeof payload.idempotencyKey !== "string" || payload.idempotencyKey.length === 0) {
+        return writeError(response, 400, "idempotency key required", "IDEMPOTENCY_KEY_REQUIRED");
+      }
+      const amount = Number(payload.amount ?? 0);
+      if (!Number.isFinite(amount) || amount < 0) {
+        return writeError(response, 400, "invalid credit amount", "INVALID_CREDIT_AMOUNT");
+      }
+      await mcpHost.invoke("billing", "credit", {
+        userId: auth.userId,
+        amount,
+        idempotencyKey: payload.idempotencyKey,
+        relatedResourceType: payload.relatedResourceType ?? null,
+        relatedResourceId: payload.relatedResourceId ?? null
+      });
+      const balanceResult = await mcpHost.invoke("billing", "get_balance", { userId: auth.userId });
+      return json(response, 200, {
+        ok: true,
+        transaction: {
+          kind: "credit",
+          amount,
+          idempotencyKey: payload.idempotencyKey,
+          relatedResourceType: payload.relatedResourceType ?? null,
+          relatedResourceId: payload.relatedResourceId ?? null
+        },
+        balance: balanceResult.balance
       });
     }
 

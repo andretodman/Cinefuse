@@ -77,7 +77,7 @@ struct APIClient {
     }
 
     func getBalance(token: String) async throws -> Int {
-        var request = URLRequest(url: baseURL.appending(path: "/v1/sparks/balance"))
+        var request = URLRequest(url: baseURL.appending(path: "\(Self.cinefusePrefix)/sparks/balance"))
         request.httpMethod = "GET"
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         let (data, response) = try await URLSession.shared.data(for: request)
