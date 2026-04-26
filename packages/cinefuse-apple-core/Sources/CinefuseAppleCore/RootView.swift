@@ -1,9 +1,14 @@
 import SwiftUI
+#if canImport(AppKit) && !targetEnvironment(macCatalyst)
+import AppKit
+#endif
 
-struct RootView: View {
+public struct CinefuseRootView: View {
     @Environment(AppModel.self) private var model
 
-    var body: some View {
+    public init() {}
+
+    public var body: some View {
         if model.isAuthenticated {
             ProjectGalleryView()
         } else {
@@ -141,11 +146,9 @@ struct ProjectGalleryView: View {
 
                                 if let quotedShotCost {
                                     let durationText = quotedShotCost.estimatedDurationSec.map { "~\($0)s" } ?? "~5s"
-                                    Text(
-                                        "This shot will cost \(quotedShotCost.sparksCost) Sparks (\(quotedShotCost.modelId), \(durationText))"
-                                    )
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
+                                    Text("This shot will cost \(quotedShotCost.sparksCost) Sparks (\(quotedShotCost.modelId), \(durationText))")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
                                 }
 
                                 if shots.isEmpty {
@@ -241,9 +244,18 @@ struct ProjectGalleryView: View {
             }
             .padding(20)
             .frame(minWidth: 420)
+            .onAppear {
+                forceAppFocusForTextEntry()
+            }
             .task {
                 titleDraft = ""
-                isCreateProjectTitleFocused = true
+                forceFieldFocusSoon()
+            }
+        }
+        .onChange(of: isCreateProjectSheetPresented) { _, isPresented in
+            if isPresented {
+                forceAppFocusForTextEntry()
+                forceFieldFocusSoon()
             }
         }
         .task {
@@ -308,7 +320,26 @@ struct ProjectGalleryView: View {
     }
 
     private func openCreateProjectSheet() {
+        forceAppFocusForTextEntry()
         isCreateProjectSheetPresented = true
+    }
+
+    private func forceAppFocusForTextEntry() {
+#if canImport(AppKit) && !targetEnvironment(macCatalyst)
+        NSApp.activate(ignoringOtherApps: true)
+        NSApp.windows.forEach { window in
+            window.makeKeyAndOrderFront(nil)
+        }
+#endif
+    }
+
+    private func forceFieldFocusSoon() {
+        DispatchQueue.main.async {
+            isCreateProjectTitleFocused = true
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+            isCreateProjectTitleFocused = true
+        }
     }
 
     private func loadSelectedProjectDetails() async {

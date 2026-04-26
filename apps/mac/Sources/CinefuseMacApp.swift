@@ -1,4 +1,5 @@
 import SwiftUI
+import CinefuseAppleCore
 
 @main
 struct CinefuseMacApp: App {
@@ -6,7 +7,7 @@ struct CinefuseMacApp: App {
 
     var body: some Scene {
         WindowGroup {
-            RootView()
+            CinefuseRootView()
                 .environment(model)
                 .frame(minWidth: 780, minHeight: 520)
         }

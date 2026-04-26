@@ -1,4 +1,5 @@
 import XCTest
+import CinefuseAppleCore
 @testable import CinefuseMacApp
 
 final class MacAppTests: XCTestCase {
