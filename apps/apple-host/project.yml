@@ -1,0 +1,35 @@
+name: CinefuseAppleHost
+options:
+  deploymentTarget:
+    iOS: "17.0"
+packages:
+  CinefuseAppleCore:
+    path: ../../packages/cinefuse-apple-core
+targets:
+  CinefuseAppleHost:
+    type: application
+    platform: iOS
+    deploymentTarget: "17.0"
+    sources:
+      - Sources
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.cinefuse.applehost
+        PRODUCT_NAME: CinefuseAppleHost
+        MARKETING_VERSION: 0.1.0
+        CURRENT_PROJECT_VERSION: 1
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_CFBundleDisplayName: Cinefuse
+        INFOPLIST_KEY_UIApplicationSceneManifest_Generation: YES
+        TARGETED_DEVICE_FAMILY: "1,2"
+        SUPPORTS_MACCATALYST: YES
+        SWIFT_VERSION: 5.9
+      configs:
+        Debug:
+          CODE_SIGNING_ALLOWED: NO
+          CODE_SIGNING_REQUIRED: NO
+    dependencies:
+      - package: CinefuseAppleCore
+        product: CinefuseAppleCore
+    scheme:
+      testTargets: []
