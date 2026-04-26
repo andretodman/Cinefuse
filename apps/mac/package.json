@@ -1,0 +1,14 @@
+{
+  "name": "@cinefuse/mac-app",
+  "version": "0.0.0",
+  "private": true,
+  "scripts": {
+    "build": "swift build",
+    "dev": "swift run",
+    "lint": "swift format lint --recursive Sources Tests || true",
+    "typecheck": "swift build",
+    "test": "swift test",
+    "contract-test": "swift test --filter MacAppContractTests",
+    "clean": "swift package clean"
+  }
+}

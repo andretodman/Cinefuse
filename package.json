@@ -1,0 +1,26 @@
+{
+  "name": "cinefuse",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Cinefuse — make movies with your imagination. Powered by Pubfuse.",
+  "license": "UNLICENSED",
+  "packageManager": "pnpm@9.12.0",
+  "engines": {
+    "node": ">=22",
+    "pnpm": ">=9"
+  },
+  "scripts": {
+    "build": "turbo run build",
+    "dev": "turbo run dev --parallel",
+    "lint": "turbo run lint",
+    "typecheck": "turbo run typecheck",
+    "test": "turbo run test",
+    "contract-test": "turbo run contract-test",
+    "clean": "turbo run clean && rm -rf node_modules .turbo"
+  },
+  "devDependencies": {
+    "@types/node": "^22.7.0",
+    "turbo": "^2.1.3",
+    "typescript": "^5.6.2"
+  }
+}

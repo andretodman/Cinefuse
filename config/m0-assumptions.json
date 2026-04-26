@@ -1,0 +1,30 @@
+{
+  "version": "2026-04-25",
+  "scope": "M0 foundations assumptions until founder confirmations arrive",
+  "assumptions": {
+    "pubfuseStorage": {
+      "mode": "sharedBucketWithPrefix",
+      "prefix": "cinefuse/",
+      "notes": "Generated artifacts and project archives are tagged with project and asset-kind metadata."
+    },
+    "sparkBalanceField": {
+      "sourceOfTruth": "cinefuse_spark_transactions ledger",
+      "cachedFieldLocation": "pubfuse.users.balance",
+      "m0DefaultBalance": 100000,
+      "notes": "billing MCP computes balance from append-only ledger and syncs cache best-effort."
+    },
+    "appStoreEntity": {
+      "team": "Pubfuse Inc",
+      "bundleId": "com.pubfuse.cinefuse",
+      "notes": "StoreKit purchase flows are out of scope for M0 and enabled in M6."
+    },
+    "contentPolicy": {
+      "mode": "use PLAN policy baseline",
+      "requiresHumanSignoffBeforeM6": true
+    },
+    "betaStrategy": {
+      "mode": "closedTestFlight",
+      "reason": "Reduce moderation and support risk while creative loop stabilizes."
+    }
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "name": "@cinefuse/mcp-character",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "src/index.js",
+  "scripts": {
+    "build": "node -e \"console.log('mcp-character build ok')\"",
+    "dev": "node src/index.js",
+    "lint": "node -e \"console.log('mcp-character lint ok')\"",
+    "typecheck": "node -e \"console.log('mcp-character typecheck ok')\"",
+    "test": "node --test src/index.test.js",
+    "contract-test": "node --test src/contract.test.js",
+    "clean": "node -e \"console.log('mcp-character clean ok')\""
+  }
+}

@@ -18,6 +18,8 @@ Locally and inside the Mac app, MCPs run in-process: the Mac app embeds a Node M
 
 Authentication between the API gateway and the MCPs uses signed internal tokens (HMAC over the request body with a service-account secret). User identity is passed through as a `cinefuse_user_id` field on every tool call; MCPs do not authenticate the user themselves, but they do enforce that the caller has supplied a user ID and rejected if not. The `billing` MCP additionally enforces idempotency-key uniqueness as a hard contract.
 
+The external HTTP contract used by clients is versioned under `/api/v1/cinefuse/*`. Canonical routes are documented in `docs/CINEFUSE-API-CONTRACT.md` and include project, shot, and job resources (`/projects`, `/projects/{id}/shots`, `/projects/{id}/jobs`). Legacy `/v1/projects` is a temporary gateway alias during migration only.
+
 ## Per-server specifications
 
 Each section below covers: purpose, dependencies, tool surface (intent only — schemas in code), failure modes, and notable invariants.

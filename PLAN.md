@@ -46,12 +46,13 @@ What Cinefuse does *not* use from Pubfuse on day one is LiveKit streaming for li
 
 The eventual extension of Pubfuse — once the Cinefuse-specific endpoints prove out — adds a small set of endpoints to the Pubfuse REST API:
 
-- `POST /api/projects` — create a film project (title, owner, settings, current state)
-- `GET /api/projects/{id}` and `PUT /api/projects/{id}` — read and update project structure (scenes, shots, characters, audio tracks)
-- `POST /api/jobs` — enqueue a generation job (clip, audio, render, export); returns a job ID
-- `GET /api/jobs/{id}` and `GET /api/jobs/{id}/events` — poll status or stream events via SSE
-- `POST /api/sparks/debit` and `POST /api/sparks/credit` — Spark ledger operations, idempotent
-- `POST /api/sparks/iap-redeem` — redeem an Apple StoreKit transaction for Sparks; server validates the receipt with Apple
+- `POST /api/v1/cinefuse/projects` — create a film project (title, owner, settings, current state)
+- `GET /api/v1/cinefuse/projects` — list projects for the authenticated user
+- `GET /api/v1/cinefuse/projects/{id}` and `PUT /api/v1/cinefuse/projects/{id}` — read and update project structure (scenes, shots, characters, audio tracks)
+- `POST /api/v1/cinefuse/projects/{id}/shots` and `GET /api/v1/cinefuse/projects/{id}/shots` — create/list shot records
+- `POST /api/v1/cinefuse/projects/{id}/jobs` and `GET /api/v1/cinefuse/projects/{id}/jobs` — create/list render jobs
+- `POST /api/v1/cinefuse/sparks/debit` and `POST /api/v1/cinefuse/sparks/credit` — Spark ledger operations, idempotent
+- `POST /api/v1/cinefuse/sparks/iap-redeem` — redeem an Apple StoreKit transaction for Sparks; server validates the receipt with Apple
 
 These endpoints initially live in the Cinefuse cloud backend talking to Pubfuse for auth and file ops. Once they stabilize (post-M6), they migrate into Pubfuse proper so future Pubfuse SDK Clients (other apps your company or partners build) get a project/job/sparks system for free. This is the "extend Pubfuse so any new app benefits" goal from the spec, but staged so we don't block on it.
 

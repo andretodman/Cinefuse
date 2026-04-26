@@ -1,0 +1,9 @@
+packages:
+  - "apps/mac"
+  - "apps/web"
+  - "mcp/*"
+  - "services/api-gateway"
+  - "services/render-worker"
+  - "services/webhook-receiver"
+  - "packages/*"
+  - "tools/eval"

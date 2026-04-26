@@ -1,0 +1,62 @@
+# OS
+.DS_Store
+Thumbs.db
+
+# Editors
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Node / pnpm / Turbo
+node_modules/
+.pnpm-store/
+.turbo/
+dist/
+build/
+*.tsbuildinfo
+
+# Next.js
+apps/web/.next/
+apps/web/out/
+
+# Python (render-worker, eval)
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+.uv-cache/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Swift / Xcode
+apps/mac/.build/
+apps/mac/.swiftpm/
+apps/mac/DerivedData/
+apps/mac/*.xcodeproj/xcuserdata/
+apps/mac/*.xcworkspace/xcuserdata/
+
+# Env & secrets — NEVER commit these
+.env
+.env.local
+.env.*.local
+*.pem
+*.p8
+*.p12
+
+# Coverage
+coverage/
+*.lcov
+
+# Local databases / docker volumes
+.docker/
+infra/docker/data/
+
+# Logs
+logs/
+*.log
+
+# Build artifacts from eval / render
+tools/eval/runs/
+services/render-worker/scratch/
