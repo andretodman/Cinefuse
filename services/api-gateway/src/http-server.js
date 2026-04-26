@@ -63,6 +63,9 @@ export function createHttpServer() {
   let redisClient;
 
   function getRedisClient() {
+    if (process.env.NODE_ENV === "test" && process.env.CINEFUSE_USE_REDIS_IN_TESTS !== "true") {
+      return null;
+    }
     if (redisClient) {
       return redisClient;
     }
