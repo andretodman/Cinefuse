@@ -38,10 +38,15 @@ export function createServer() {
         if (!existing) {
           throw new Error("character not found");
         }
+        const consistencyScore = 0.87;
+        const consistencyThreshold = 0.8;
         const trained = {
           ...existing,
           status: "trained",
-          previewUrl: `https://pubfuse.local/cinefuse/characters/${existing.id}/preview.jpg`
+          previewUrl: `https://pubfuse.local/cinefuse/characters/${existing.id}/preview.jpg`,
+          consistencyScore,
+          consistencyThreshold,
+          consistencyPassed: consistencyScore >= consistencyThreshold
         };
         characters.set(trained.id, trained);
         return { ok: true, server: "character", tool, character: trained, sparksCost: 500 };

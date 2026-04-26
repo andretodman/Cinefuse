@@ -8,6 +8,7 @@ import {
   getProject,
   getShot,
   listCharacters,
+  listAudioTracks,
   listJobs,
   listProjects,
   listScenes,
@@ -16,6 +17,7 @@ import {
   saveProject,
   saveScene,
   saveCharacter,
+  saveAudioTrack,
   saveShot
 } from "./project-store.js";
 
@@ -38,6 +40,13 @@ function writeError(response, status, message, code) {
 
 const RENDER_QUEUE_KEY = process.env.CINEFUSE_RENDER_QUEUE_KEY ?? "cinefuse:render_jobs";
 const WORKER_AUTH_TOKEN = process.env.CINEFUSE_WORKER_TOKEN ?? "cinefuse-dev-worker-token";
+
+function deriveThumbnailUrl(clipUrl) {
+  if (typeof clipUrl !== "string" || clipUrl.length === 0) {
+    return null;
+  }
+  return `${clipUrl}?thumb=1`;
+}
 
 function applyLegacyProjectsAliasHeaders(response, pathName) {
   if (pathName !== "/v1/projects") {
@@ -153,7 +162,9 @@ export function createHttpServer() {
       await saveShot({
         ...currentShot,
         status: generation.status ?? "ready",
-        clipUrl: generation.clipUrl ?? null
+        clipUrl: generation.clipUrl ?? null,
+        thumbnailUrl: deriveThumbnailUrl(generation.clipUrl ?? null),
+        durationSec: generation.durationSec ?? currentShot.durationSec ?? 5
       });
       await saveJob({
         id: task.jobId,
@@ -566,7 +577,10 @@ export function createHttpServer() {
         name: created.character?.name ?? payload.name ?? "Untitled Character",
         description: created.character?.description ?? payload.description ?? "",
         status: created.character?.status ?? "draft",
-        previewUrl: created.character?.previewUrl ?? null
+        previewUrl: created.character?.previewUrl ?? null,
+        consistencyScore: created.character?.consistencyScore ?? null,
+        consistencyThreshold: created.character?.consistencyThreshold ?? null,
+        consistencyPassed: created.character?.consistencyPassed ?? false
       });
       return json(response, 201, { character });
     }
@@ -599,13 +613,224 @@ export function createHttpServer() {
         name: trained.character?.name ?? "Untitled Character",
         description: trained.character?.description ?? "",
         status: trained.character?.status ?? "trained",
-        previewUrl: trained.character?.previewUrl ?? null
+        previewUrl: trained.character?.previewUrl ?? null,
+        consistencyScore: trained.character?.consistencyScore ?? null,
+        consistencyThreshold: trained.character?.consistencyThreshold ?? null,
+        consistencyPassed: trained.character?.consistencyPassed ?? false
       });
       return json(response, 200, { character, sparksCost: trainingSparksCost });
     }
 
     const shotsMatch = url.pathname.match(/^\/api\/v1\/cinefuse\/projects\/([^/]+)\/shots$/);
+    const timelineMatch = url.pathname.match(/^\/api\/v1\/cinefuse\/projects\/([^/]+)\/timeline$/);
+    const timelineReorderMatch = url.pathname.match(/^\/api\/v1\/cinefuse\/projects\/([^/]+)\/timeline\/reorder$/);
+    const audioTracksMatch = url.pathname.match(/^\/api\/v1\/cinefuse\/projects\/([^/]+)\/audio-tracks$/);
+    const dialogueAudioMatch = url.pathname.match(/^\/api\/v1\/cinefuse\/projects\/([^/]+)\/audio\/dialogue$/);
+    const scoreAudioMatch = url.pathname.match(/^\/api\/v1\/cinefuse\/projects\/([^/]+)\/audio\/score$/);
+    const sfxAudioMatch = url.pathname.match(/^\/api\/v1\/cinefuse\/projects\/([^/]+)\/audio\/sfx$/);
+    const mixAudioMatch = url.pathname.match(/^\/api\/v1\/cinefuse\/projects\/([^/]+)\/audio\/mix$/);
+    const lipsyncAudioMatch = url.pathname.match(/^\/api\/v1\/cinefuse\/projects\/([^/]+)\/audio\/lipsync$/);
+    const stitchFinalMatch = url.pathname.match(/^\/api\/v1\/cinefuse\/projects\/([^/]+)\/stitch\/final$/);
+    const exportFinalMatch = url.pathname.match(/^\/api\/v1\/cinefuse\/projects\/([^/]+)\/export\/final$/);
     const shotQuoteMatch = url.pathname.match(/^\/api\/v1\/cinefuse\/projects\/([^/]+)\/shots\/quote$/);
+    if (timelineMatch && method === "GET") {
+      const projectId = decodeURIComponent(timelineMatch[1]);
+      const project = await getProject(projectId, auth.userId);
+      if (!project) {
+        return writeError(response, 404, "project not found", "PROJECT_NOT_FOUND");
+      }
+      return json(response, 200, {
+        projectId,
+        shots: await listShots(projectId),
+        audioTracks: await listAudioTracks(projectId)
+      });
+    }
+    if (timelineReorderMatch && method === "PUT") {
+      const projectId = decodeURIComponent(timelineReorderMatch[1]);
+      const project = await getProject(projectId, auth.userId);
+      if (!project) {
+        return writeError(response, 404, "project not found", "PROJECT_NOT_FOUND");
+      }
+      const payload = await readBody(request);
+      if (!Array.isArray(payload.shotIds) || payload.shotIds.length === 0) {
+        return writeError(response, 400, "shotIds required", "SHOT_IDS_REQUIRED");
+      }
+      const existingShots = await listShots(projectId);
+      const byId = new Map(existingShots.map((shot) => [shot.id, shot]));
+      for (let index = 0; index < payload.shotIds.length; index += 1) {
+        const shotId = payload.shotIds[index];
+        const shot = byId.get(shotId);
+        if (!shot) {
+          continue;
+        }
+        await saveShot({
+          ...shot,
+          orderIndex: index
+        });
+      }
+      return json(response, 200, { shots: await listShots(projectId) });
+    }
+    if (audioTracksMatch && method === "GET") {
+      const projectId = decodeURIComponent(audioTracksMatch[1]);
+      const project = await getProject(projectId, auth.userId);
+      if (!project) {
+        return writeError(response, 404, "project not found", "PROJECT_NOT_FOUND");
+      }
+      return json(response, 200, { audioTracks: await listAudioTracks(projectId) });
+    }
+    if (audioTracksMatch && method === "POST") {
+      const projectId = decodeURIComponent(audioTracksMatch[1]);
+      const project = await getProject(projectId, auth.userId);
+      if (!project) {
+        return writeError(response, 404, "project not found", "PROJECT_NOT_FOUND");
+      }
+      const payload = await readBody(request);
+      const track = await saveAudioTrack({
+        id: payload.id ?? randomUUID(),
+        projectId,
+        shotId: payload.shotId ?? null,
+        kind: payload.kind ?? "score",
+        title: payload.title ?? "Untitled Track",
+        sourceUrl: payload.sourceUrl ?? null,
+        waveformUrl: payload.waveformUrl ?? null,
+        laneIndex: Number(payload.laneIndex ?? 0),
+        startMs: Number(payload.startMs ?? 0),
+        durationMs: Number(payload.durationMs ?? 0),
+        status: payload.status ?? "draft"
+      });
+      return json(response, 201, { audioTrack: track });
+    }
+    const audioToolByPath = dialogueAudioMatch
+      ? "generate_dialogue"
+      : scoreAudioMatch
+        ? "generate_score"
+        : sfxAudioMatch
+          ? "generate_sfx"
+          : mixAudioMatch
+            ? "mix_scene"
+            : lipsyncAudioMatch
+              ? "lipsync"
+              : null;
+    const audioProjectMatch = dialogueAudioMatch || scoreAudioMatch || sfxAudioMatch || mixAudioMatch || lipsyncAudioMatch;
+    if (audioProjectMatch && method === "POST" && audioToolByPath) {
+      const projectId = decodeURIComponent(audioProjectMatch[1]);
+      const project = await getProject(projectId, auth.userId);
+      if (!project) {
+        return writeError(response, 404, "project not found", "PROJECT_NOT_FOUND");
+      }
+      const payload = await readBody(request);
+      const audioResult = await mcpHost.invoke("audio", audioToolByPath, {
+        ...payload,
+        projectId
+      });
+      const sparksCost = Number(audioResult.track?.sparksCost ?? 15);
+      await mcpHost.invoke("billing", "debit", {
+        userId: auth.userId,
+        amount: sparksCost,
+        idempotencyKey: `${audioToolByPath}:${projectId}:${payload.shotId ?? "none"}:${payload.startMs ?? 0}`,
+        relatedResourceType: "project",
+        relatedResourceId: projectId
+      });
+      const track = await saveAudioTrack({
+        id: audioResult.track?.id ?? randomUUID(),
+        projectId,
+        shotId: payload.shotId ?? null,
+        kind: audioResult.track?.kind ?? "audio",
+        title: payload.title ?? `${audioResult.track?.kind ?? "Audio"} track`,
+        sourceUrl: audioResult.track?.sourceUrl ?? null,
+        waveformUrl: audioResult.track?.waveformUrl ?? null,
+        laneIndex: audioResult.track?.laneIndex ?? Number(payload.laneIndex ?? 0),
+        startMs: audioResult.track?.startMs ?? Number(payload.startMs ?? 0),
+        durationMs: audioResult.track?.durationMs ?? Number(payload.durationMs ?? 0),
+        status: audioResult.track?.status ?? "ready"
+      });
+      const job = await saveJob({
+        id: randomUUID(),
+        projectId,
+        shotId: payload.shotId ?? null,
+        kind: "audio",
+        status: "done",
+        inputPayload: payload,
+        outputPayload: { track, sparksCost },
+        costToUsCents: Number(audioResult.track?.costToUsCents ?? 0)
+      });
+      publishProjectEvent(projectId, {
+        type: "job_status_changed",
+        jobId: job.id,
+        shotId: track.shotId ?? null,
+        status: "done"
+      });
+      return json(response, 200, { audioTrack: track, job, sparksCost });
+    }
+    if (stitchFinalMatch && method === "POST") {
+      const projectId = decodeURIComponent(stitchFinalMatch[1]);
+      const project = await getProject(projectId, auth.userId);
+      if (!project) {
+        return writeError(response, 404, "project not found", "PROJECT_NOT_FOUND");
+      }
+      const payload = await readBody(request);
+      const timelineShots = await listShots(projectId);
+      const timelineAudioTracks = await listAudioTracks(projectId);
+      const stitched = await mcpHost.invoke("stitch", "final_stitch", {
+        ...payload,
+        projectId,
+        shots: timelineShots,
+        audioTracks: timelineAudioTracks
+      });
+      const job = await saveJob({
+        id: randomUUID(),
+        projectId,
+        kind: "stitch",
+        status: "done",
+        inputPayload: payload,
+        outputPayload: stitched.result ?? {},
+        costToUsCents: Number(stitched.result?.costToUsCents ?? 0)
+      });
+      return json(response, 200, { stitch: stitched.result, job });
+    }
+    if (exportFinalMatch && method === "POST") {
+      const projectId = decodeURIComponent(exportFinalMatch[1]);
+      const project = await getProject(projectId, auth.userId);
+      if (!project) {
+        return writeError(response, 404, "project not found", "PROJECT_NOT_FOUND");
+      }
+      const payload = await readBody(request);
+      const timelineShots = await listShots(projectId);
+      const timelineAudioTracks = await listAudioTracks(projectId);
+      const stitched = await mcpHost.invoke("stitch", "final_stitch", {
+        projectId,
+        shots: timelineShots,
+        audioTracks: timelineAudioTracks
+      });
+      const exported = await mcpHost.invoke("export", "encode_final", {
+        projectId,
+        stitchedUrl: stitched.result?.stitchedUrl ?? null,
+        ...payload
+      });
+      const sparksCost = Number(exported.export?.sparksCost ?? 40);
+      await mcpHost.invoke("billing", "debit", {
+        userId: auth.userId,
+        amount: sparksCost,
+        idempotencyKey: `export-final:${projectId}`,
+        relatedResourceType: "project",
+        relatedResourceId: projectId
+      });
+      const job = await saveJob({
+        id: randomUUID(),
+        projectId,
+        kind: "export",
+        status: "done",
+        inputPayload: payload,
+        outputPayload: {
+          stitchedUrl: stitched.result?.stitchedUrl ?? null,
+          fileUrl: exported.export?.fileUrl ?? null,
+          archiveUrl: exported.export?.archiveUrl ?? null,
+          sparksCost
+        },
+        costToUsCents: Number(exported.export?.costToUsCents ?? 0) + Number(stitched.result?.costToUsCents ?? 0)
+      });
+      return json(response, 200, { export: exported.export, stitch: stitched.result, job });
+    }
     if (shotQuoteMatch && method === "POST") {
       const projectId = decodeURIComponent(shotQuoteMatch[1]);
       const project = await getProject(projectId, auth.userId);
@@ -648,6 +873,7 @@ export function createHttpServer() {
         return writeError(response, 404, "project not found", "PROJECT_NOT_FOUND");
       }
       const payload = await readBody(request);
+      const existingShots = await listShots(projectId);
       const shot = await saveShot({
         id: payload.id ?? randomUUID(),
         projectId,
@@ -655,6 +881,10 @@ export function createHttpServer() {
         modelTier: payload.modelTier ?? "budget",
         status: payload.status ?? "draft",
         clipUrl: payload.clipUrl ?? null,
+        thumbnailUrl: payload.thumbnailUrl ?? deriveThumbnailUrl(payload.clipUrl ?? null),
+        durationSec: payload.durationSec ?? null,
+        audioRefs: payload.audioRefs ?? [],
+        orderIndex: Number(payload.orderIndex ?? existingShots.length),
         characterLocks: payload.characterLocks ?? []
       });
       return json(response, 201, { shot });

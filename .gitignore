@@ -59,4 +59,5 @@ logs/
 
 # Build artifacts from eval / render
 tools/eval/runs/
+tools/eval/output/
 services/render-worker/scratch/

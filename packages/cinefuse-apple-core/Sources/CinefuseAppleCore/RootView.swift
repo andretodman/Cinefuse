@@ -1,4 +1,7 @@
 import SwiftUI
+#if canImport(AVKit)
+import AVKit
+#endif
 #if canImport(AppKit) && !targetEnvironment(macCatalyst)
 import AppKit
 #endif
@@ -60,6 +63,7 @@ struct ProjectWorkspaceScreen: View {
     @State private var scenes: [StoryScene] = []
     @State private var characters: [CharacterProfile] = []
     @State private var shots: [Shot] = []
+    @State private var audioTracks: [AudioTrack] = []
     @State private var jobs: [Job] = []
     @State private var shotPromptDraft = "Establishing shot of the location"
     @State private var shotModelTierDraft = "standard"
@@ -67,6 +71,8 @@ struct ProjectWorkspaceScreen: View {
     @State private var newCharacterName = ""
     @State private var newCharacterDescription = ""
     @State private var selectedCharacterLockId = ""
+    @State private var audioTrackTitleDraft = "Dialogue pass"
+    @State private var timelineThemeMode: TimelineThemeMode = .system
     @State private var jobKindDraft = "clip"
     @State private var isLoadingProjectDetails = false
     @State private var isRefreshingProjectDetails = false
@@ -106,10 +112,13 @@ struct ProjectWorkspaceScreen: View {
                     scenes: scenes,
                     characters: characters,
                     shots: shots,
+                    audioTracks: audioTracks,
                     jobs: jobs,
                     shotPromptDraft: $shotPromptDraft,
                     shotModelTierDraft: $shotModelTierDraft,
                     selectedCharacterLockId: $selectedCharacterLockId,
+                    audioTrackTitleDraft: $audioTrackTitleDraft,
+                    timelineThemeMode: $timelineThemeMode,
                     quotedShotCost: quotedShotCost,
                     newCharacterName: $newCharacterName,
                     newCharacterDescription: $newCharacterDescription,
@@ -123,7 +132,11 @@ struct ProjectWorkspaceScreen: View {
                     onQuote: { Task { await quoteShot() } },
                     onCreateShot: { Task { await createShot() } },
                     onGenerateShot: { shotId in Task { await generateShot(shotId: shotId) } },
-                    onCreateJob: { Task { await createJob() } }
+                    onCreateJob: { Task { await createJob() } },
+                    onReorderShots: { from, to in Task { await reorderShots(from: from, to: to) } },
+                    onGenerateDialogue: { Task { await generateDialogueTrack() } },
+                    onGenerateScore: { Task { await generateScoreTrack() } },
+                    onExportFinal: { Task { await exportFinalTimeline() } }
                 )
             }
             .onChange(of: selectedProjectId) { _, _ in
@@ -137,6 +150,7 @@ struct ProjectWorkspaceScreen: View {
         .task {
             await refresh(selectProjectId: selectedProjectId)
         }
+        .preferredColorScheme(timelineThemeMode.colorScheme)
         .task(id: selectedProjectId) {
             await monitorInFlightJobs()
         }
@@ -155,6 +169,7 @@ struct ProjectWorkspaceScreen: View {
                     .foregroundStyle(CinefuseTokens.ColorRole.textSecondary)
             }
             Spacer()
+            PubfuseLogoBadge()
             Button("New Project") {
                 openCreateProjectSheet()
             }
@@ -255,6 +270,7 @@ struct ProjectWorkspaceScreen: View {
         characters = []
         quotedShotCost = nil
         shots = []
+        audioTracks = []
         jobs = []
     }
 
@@ -286,6 +302,7 @@ struct ProjectWorkspaceScreen: View {
             scenes = []
             characters = []
             shots = []
+            audioTracks = []
             jobs = []
             return
         }
@@ -305,11 +322,11 @@ struct ProjectWorkspaceScreen: View {
         do {
             async let projectScenes = api.listScenes(token: model.bearerToken, projectId: selectedProjectId)
             async let projectCharacters = api.listCharacters(token: model.bearerToken, projectId: selectedProjectId)
-            async let projectShots = api.listShots(token: model.bearerToken, projectId: selectedProjectId)
+            async let timeline = api.listTimeline(token: model.bearerToken, projectId: selectedProjectId)
             async let projectJobs = api.listJobs(token: model.bearerToken, projectId: selectedProjectId)
             let latestScenes = try await projectScenes
             let latestCharacters = try await projectCharacters
-            let latestShots = try await projectShots
+            let latestTimeline = try await timeline
             let latestJobs = try await projectJobs
             var transaction = Transaction()
             if !showLoadingIndicator {
@@ -318,7 +335,8 @@ struct ProjectWorkspaceScreen: View {
             withTransaction(transaction) {
                 scenes = latestScenes
                 characters = latestCharacters
-                shots = latestShots
+                shots = latestTimeline.shots
+                audioTracks = latestTimeline.audioTracks
                 jobs = latestJobs
             }
             model.errorMessage = nil
@@ -495,6 +513,68 @@ struct ProjectWorkspaceScreen: View {
             model.errorMessage = error.localizedDescription
         }
     }
+
+    private func reorderShots(from: IndexSet, to: Int) async {
+        guard let selectedProjectId else { return }
+        var reordered = shots
+        reordered.move(fromOffsets: from, toOffset: to)
+        shots = reordered
+        do {
+            _ = try await api.reorderTimelineShots(
+                token: model.bearerToken,
+                projectId: selectedProjectId,
+                shotIds: reordered.map(\.id)
+            )
+            await loadSelectedProjectDetails(showLoadingIndicator: false)
+        } catch {
+            model.errorMessage = error.localizedDescription
+        }
+    }
+
+    private func generateDialogueTrack() async {
+        guard let selectedProjectId else { return }
+        do {
+            _ = try await api.generateDialogue(
+                token: model.bearerToken,
+                projectId: selectedProjectId,
+                shotId: shots.first?.id,
+                title: audioTrackTitleDraft,
+                laneIndex: 0,
+                startMs: 0,
+                durationMs: 4000
+            )
+            await loadSelectedProjectDetails(showLoadingIndicator: false)
+        } catch {
+            model.errorMessage = error.localizedDescription
+        }
+    }
+
+    private func generateScoreTrack() async {
+        guard let selectedProjectId else { return }
+        do {
+            _ = try await api.generateScore(
+                token: model.bearerToken,
+                projectId: selectedProjectId,
+                title: "Score bed",
+                laneIndex: 1,
+                startMs: 0,
+                durationMs: 10000
+            )
+            await loadSelectedProjectDetails(showLoadingIndicator: false)
+        } catch {
+            model.errorMessage = error.localizedDescription
+        }
+    }
+
+    private func exportFinalTimeline() async {
+        guard let selectedProjectId else { return }
+        do {
+            _ = try await api.exportFinal(token: model.bearerToken, projectId: selectedProjectId)
+            await loadSelectedProjectDetails(showLoadingIndicator: false)
+        } catch {
+            model.errorMessage = error.localizedDescription
+        }
+    }
 }
 
 struct ProjectSidebar: View {
@@ -538,10 +618,13 @@ struct ProjectDetailScreen: View {
     let scenes: [StoryScene]
     let characters: [CharacterProfile]
     let shots: [Shot]
+    let audioTracks: [AudioTrack]
     let jobs: [Job]
     @Binding var shotPromptDraft: String
     @Binding var shotModelTierDraft: String
     @Binding var selectedCharacterLockId: String
+    @Binding var audioTrackTitleDraft: String
+    @Binding var timelineThemeMode: TimelineThemeMode
     let quotedShotCost: ShotQuote?
     @Binding var newCharacterName: String
     @Binding var newCharacterDescription: String
@@ -557,6 +640,10 @@ struct ProjectDetailScreen: View {
     let onCreateShot: () -> Void
     let onGenerateShot: (String) -> Void
     let onCreateJob: () -> Void
+    let onReorderShots: (IndexSet, Int) -> Void
+    let onGenerateDialogue: () -> Void
+    let onGenerateScore: () -> Void
+    let onExportFinal: () -> Void
 
     var body: some View {
         Group {
@@ -590,6 +677,16 @@ struct ProjectDetailScreen: View {
                             onQuote: onQuote,
                             onCreateShot: onCreateShot,
                             onGenerateShot: onGenerateShot
+                        )
+                        TimelinePanel(
+                            shots: shots,
+                            audioTracks: audioTracks,
+                            audioTrackTitleDraft: $audioTrackTitleDraft,
+                            themeMode: $timelineThemeMode,
+                            onMoveShot: onReorderShots,
+                            onGenerateDialogue: onGenerateDialogue,
+                            onGenerateScore: onGenerateScore,
+                            onExport: onExportFinal
                         )
                         JobsPanel(
                             jobs: jobs,
@@ -724,6 +821,15 @@ struct CharacterPanel: View {
                                 Text(character.description)
                                     .font(CinefuseTokens.Typography.caption)
                                     .foregroundStyle(CinefuseTokens.ColorRole.textSecondary)
+                                if let score = character.consistencyScore {
+                                    let pct = Int(score * 100)
+                                    let thresholdPct = Int((character.consistencyThreshold ?? 0.8) * 100)
+                                    Text("Consistency: \(pct)% (threshold \(thresholdPct)%)")
+                                        .font(CinefuseTokens.Typography.caption)
+                                        .foregroundStyle((character.consistencyPassed ?? false)
+                                            ? CinefuseTokens.ColorRole.success
+                                            : CinefuseTokens.ColorRole.warning)
+                                }
                             }
                             Spacer()
                             StatusBadge(status: character.status)
@@ -893,6 +999,236 @@ struct JobsPanel: View {
                     }
                 }
             }
+        }
+    }
+}
+
+enum TimelineThemeMode: String, CaseIterable, Identifiable {
+    case system
+    case light
+    case dark
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .system: return "System"
+        case .light: return "Light"
+        case .dark: return "Dark"
+        }
+    }
+
+    var colorScheme: ColorScheme? {
+        switch self {
+        case .system: return nil
+        case .light: return .light
+        case .dark: return .dark
+        }
+    }
+}
+
+struct TimelinePanel: View {
+    let shots: [Shot]
+    let audioTracks: [AudioTrack]
+    @Binding var audioTrackTitleDraft: String
+    @Binding var themeMode: TimelineThemeMode
+    let onMoveShot: (IndexSet, Int) -> Void
+    let onGenerateDialogue: () -> Void
+    let onGenerateScore: () -> Void
+    let onExport: () -> Void
+
+    @State private var isShowingVideoPreview = false
+    @State private var selectedVideoURL: URL?
+
+    var body: some View {
+        SectionCard(
+            title: "Timeline",
+            subtitle: "Drag shots to reorder, preview media, and generate dialogue/score lanes."
+        ) {
+            VStack(alignment: .leading, spacing: CinefuseTokens.Spacing.s) {
+                HStack(spacing: CinefuseTokens.Spacing.s) {
+                    Picker("Theme", selection: $themeMode) {
+                        ForEach(TimelineThemeMode.allCases) { mode in
+                            Text(mode.label).tag(mode)
+                        }
+                    }
+                    .pickerStyle(.menu)
+                    .frame(width: 140)
+                    TextField("Audio title", text: $audioTrackTitleDraft)
+                        .textFieldStyle(.roundedBorder)
+                    Button("Generate Dialogue", action: onGenerateDialogue)
+                        .buttonStyle(SecondaryActionButtonStyle())
+                    Button("Generate Score", action: onGenerateScore)
+                        .buttonStyle(SecondaryActionButtonStyle())
+                    Spacer()
+                    Button("Export Combined", action: onExport)
+                        .buttonStyle(PrimaryActionButtonStyle())
+                }
+
+                if shots.isEmpty {
+                    EmptyStateCard(
+                        title: "Timeline is empty",
+                        message: "Create clips in the shots panel, then drag them into narrative order."
+                    )
+                } else {
+                    HStack {
+                        Text("Drag to reorder shots")
+                            .font(CinefuseTokens.Typography.caption)
+                            .foregroundStyle(CinefuseTokens.ColorRole.textSecondary)
+                    }
+                    List {
+                        ForEach(shots) { shot in
+                            VStack(alignment: .leading, spacing: CinefuseTokens.Spacing.xs) {
+                                HStack {
+                                    Text(shot.prompt.isEmpty ? "Untitled shot" : shot.prompt)
+                                        .font(CinefuseTokens.Typography.body)
+                                    Spacer()
+                                    StatusBadge(status: shot.status)
+                                }
+                                MediaPreviewRow(
+                                    shot: shot,
+                                    onPreview: { url in
+                                        selectedVideoURL = url
+                                        isShowingVideoPreview = true
+                                    }
+                                )
+                            }
+                            .padding(.vertical, CinefuseTokens.Spacing.xxs)
+                        }
+                        .onMove(perform: onMoveShot)
+                    }
+                    .frame(minHeight: 220, maxHeight: 340)
+                }
+
+                AudioLaneView(audioTracks: audioTracks)
+            }
+        }
+        .sheet(isPresented: $isShowingVideoPreview) {
+            if let selectedVideoURL {
+                VideoPreviewSheet(videoURL: selectedVideoURL)
+            }
+        }
+    }
+}
+
+struct MediaPreviewRow: View {
+    let shot: Shot
+    let onPreview: (URL) -> Void
+
+    var body: some View {
+        HStack(spacing: CinefuseTokens.Spacing.s) {
+            if let thumb = shot.thumbnailUrl, let thumbURL = URL(string: thumb) {
+                AsyncImage(url: thumbURL) { phase in
+                    switch phase {
+                    case .success(let image):
+                        image.resizable().scaledToFill()
+                    default:
+                        RoundedRectangle(cornerRadius: CinefuseTokens.Radius.small)
+                            .fill(CinefuseTokens.ColorRole.surfaceSecondary)
+                            .overlay(Image(systemName: "film"))
+                    }
+                }
+                .frame(width: 88, height: 50)
+                .clipped()
+                .clipShape(RoundedRectangle(cornerRadius: CinefuseTokens.Radius.small))
+            } else {
+                RoundedRectangle(cornerRadius: CinefuseTokens.Radius.small)
+                    .fill(CinefuseTokens.ColorRole.surfaceSecondary)
+                    .frame(width: 88, height: 50)
+                    .overlay(Image(systemName: "film"))
+            }
+            VStack(alignment: .leading, spacing: CinefuseTokens.Spacing.xxs) {
+                Text("Duration: \(shot.durationSec ?? 0)s")
+                    .font(CinefuseTokens.Typography.caption)
+                    .foregroundStyle(CinefuseTokens.ColorRole.textSecondary)
+                if let clipUrl = shot.clipUrl, let url = URL(string: clipUrl) {
+                    Button("Play Clip") { onPreview(url) }
+                        .buttonStyle(SecondaryActionButtonStyle())
+                }
+            }
+            Spacer()
+        }
+    }
+}
+
+struct AudioLaneView: View {
+    let audioTracks: [AudioTrack]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: CinefuseTokens.Spacing.xs) {
+            Text("Audio Lanes")
+                .font(CinefuseTokens.Typography.cardTitle)
+            if audioTracks.isEmpty {
+                Text("No audio tracks generated yet.")
+                    .font(CinefuseTokens.Typography.caption)
+                    .foregroundStyle(CinefuseTokens.ColorRole.textSecondary)
+            } else {
+                ForEach(audioTracks) { track in
+                    HStack(spacing: CinefuseTokens.Spacing.s) {
+                        if let waveform = track.waveformUrl, let waveformURL = URL(string: waveform) {
+                            AsyncImage(url: waveformURL) { phase in
+                                switch phase {
+                                case .success(let image):
+                                    image.resizable().scaledToFill()
+                                default:
+                                    RoundedRectangle(cornerRadius: CinefuseTokens.Radius.small)
+                                        .fill(CinefuseTokens.ColorRole.surfacePrimary)
+                                        .overlay(Image(systemName: "waveform"))
+                                }
+                            }
+                            .frame(width: 74, height: 40)
+                            .clipped()
+                            .clipShape(RoundedRectangle(cornerRadius: CinefuseTokens.Radius.small))
+                        }
+                        VStack(alignment: .leading, spacing: CinefuseTokens.Spacing.xxs) {
+                            Text("\(track.kind.capitalized): \(track.title)")
+                                .font(CinefuseTokens.Typography.label)
+                            Text("Lane \(track.laneIndex + 1) • \(track.durationMs)ms")
+                                .font(CinefuseTokens.Typography.caption)
+                                .foregroundStyle(CinefuseTokens.ColorRole.textSecondary)
+                        }
+                        Spacer()
+                        if let sourceUrl = track.sourceUrl, let url = URL(string: sourceUrl) {
+                            Link("Play", destination: url)
+                                .font(CinefuseTokens.Typography.caption)
+                        }
+                        StatusBadge(status: track.status)
+                    }
+                    .padding(CinefuseTokens.Spacing.xs)
+                    .background(
+                        RoundedRectangle(cornerRadius: CinefuseTokens.Radius.small)
+                            .fill(CinefuseTokens.ColorRole.surfaceSecondary)
+                    )
+                }
+            }
+        }
+    }
+}
+
+struct VideoPreviewSheet: View {
+    let videoURL: URL
+    @State private var player: AVPlayer?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: CinefuseTokens.Spacing.s) {
+            Text("Clip Preview")
+                .font(CinefuseTokens.Typography.sectionTitle)
+            if let player {
+                VideoPlayer(player: player)
+                    .frame(minHeight: 260)
+                    .clipShape(RoundedRectangle(cornerRadius: CinefuseTokens.Radius.medium))
+            } else {
+                ProgressView("Loading video...")
+            }
+            Text(videoURL.absoluteString)
+                .font(CinefuseTokens.Typography.caption)
+                .foregroundStyle(CinefuseTokens.ColorRole.textSecondary)
+        }
+        .padding(CinefuseTokens.Spacing.l)
+        .task {
+            let player = AVPlayer(url: videoURL)
+            self.player = player
+            player.play()
         }
     }
 }

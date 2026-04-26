@@ -367,6 +367,8 @@ test("api contract: character create/train and shot lock", async () => {
   assert.equal(trainCharacter.status, 200);
   const trainedBody = await trainCharacter.json();
   assert.equal(trainedBody.sparksCost, 500);
+  assert.equal(trainedBody.character.consistencyPassed, true);
+  assert.equal(typeof trainedBody.character.consistencyScore, "number");
 
   const balance = await fetch(`${baseUrl}/api/v1/cinefuse/sparks/balance`, { headers });
   assert.equal(balance.status, 200);
@@ -391,6 +393,149 @@ test("api contract: character create/train and shot lock", async () => {
   assert.equal(createShot.status, 201);
   const shotBody = await createShot.json();
   assert.deepEqual(shotBody.shot.characterLocks, [characterId]);
+
+  await new Promise((resolve, reject) => {
+    server.close((error) => {
+      if (error) {
+        reject(error);
+        return;
+      }
+      resolve();
+    });
+  });
+});
+
+test("api contract: timeline reorder and audio track persistence", async () => {
+  const headers = authHeaders("usr_contract_timeline");
+  await clearProjects();
+  const server = createHttpServer();
+
+  await new Promise((resolve) => server.listen(0, resolve));
+  const address = server.address();
+  const port = typeof address === "object" && address ? address.port : 0;
+  const baseUrl = `http://127.0.0.1:${port}`;
+
+  const createProject = await fetch(`${baseUrl}/api/v1/cinefuse/projects`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ title: "Timeline Project" })
+  });
+  assert.equal(createProject.status, 201);
+  const projectId = (await createProject.json()).project.id;
+
+  const shotAResponse = await fetch(`${baseUrl}/api/v1/cinefuse/projects/${projectId}/shots`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ prompt: "Shot A", modelTier: "budget" })
+  });
+  const shotA = (await shotAResponse.json()).shot;
+  const shotBResponse = await fetch(`${baseUrl}/api/v1/cinefuse/projects/${projectId}/shots`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ prompt: "Shot B", modelTier: "budget" })
+  });
+  const shotB = (await shotBResponse.json()).shot;
+
+  const reorderResponse = await fetch(`${baseUrl}/api/v1/cinefuse/projects/${projectId}/timeline/reorder`, {
+    method: "PUT",
+    headers,
+    body: JSON.stringify({ shotIds: [shotB.id, shotA.id] })
+  });
+  assert.equal(reorderResponse.status, 200);
+
+  const timelineResponse = await fetch(`${baseUrl}/api/v1/cinefuse/projects/${projectId}/timeline`, { headers });
+  assert.equal(timelineResponse.status, 200);
+  const timelineBody = await timelineResponse.json();
+  assert.equal(timelineBody.shots[0].id, shotB.id);
+  assert.equal(timelineBody.shots[1].id, shotA.id);
+
+  const createAudioTrack = await fetch(`${baseUrl}/api/v1/cinefuse/projects/${projectId}/audio-tracks`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({
+      shotId: shotB.id,
+      kind: "dialogue",
+      title: "Captain line read",
+      sourceUrl: "https://pubfuse.local/cinefuse/audio/dialogue.wav",
+      laneIndex: 0,
+      startMs: 0,
+      durationMs: 4200,
+      status: "ready"
+    })
+  });
+  assert.equal(createAudioTrack.status, 201);
+
+  const audioTracksResponse = await fetch(`${baseUrl}/api/v1/cinefuse/projects/${projectId}/audio-tracks`, { headers });
+  assert.equal(audioTracksResponse.status, 200);
+  const tracksBody = await audioTracksResponse.json();
+  assert.equal(tracksBody.audioTracks.length, 1);
+  assert.equal(tracksBody.audioTracks[0].kind, "dialogue");
+
+  await new Promise((resolve, reject) => {
+    server.close((error) => {
+      if (error) {
+        reject(error);
+        return;
+      }
+      resolve();
+    });
+  });
+});
+
+test("api contract: audio generation and final export flow", async () => {
+  const headers = authHeaders("usr_contract_export");
+  await clearProjects();
+  const server = createHttpServer();
+
+  await new Promise((resolve) => server.listen(0, resolve));
+  const address = server.address();
+  const port = typeof address === "object" && address ? address.port : 0;
+  const baseUrl = `http://127.0.0.1:${port}`;
+
+  const createProject = await fetch(`${baseUrl}/api/v1/cinefuse/projects`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ title: "Export Project" })
+  });
+  assert.equal(createProject.status, 201);
+  const projectId = (await createProject.json()).project.id;
+
+  const createShot = await fetch(`${baseUrl}/api/v1/cinefuse/projects/${projectId}/shots`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ prompt: "Opening frame", modelTier: "standard" })
+  });
+  assert.equal(createShot.status, 201);
+  const shotId = (await createShot.json()).shot.id;
+
+  const dialogue = await fetch(`${baseUrl}/api/v1/cinefuse/projects/${projectId}/audio/dialogue`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({
+      shotId,
+      title: "Narration track",
+      laneIndex: 0,
+      startMs: 0,
+      durationMs: 3500
+    })
+  });
+  assert.equal(dialogue.status, 200);
+  const dialogueBody = await dialogue.json();
+  assert.equal(dialogueBody.audioTrack.kind, "dialogue");
+
+  const exportResponse = await fetch(`${baseUrl}/api/v1/cinefuse/projects/${projectId}/export/final`, {
+    method: "POST",
+    headers
+  });
+  assert.equal(exportResponse.status, 200);
+  const exportBody = await exportResponse.json();
+  assert.equal(exportBody.job.kind, "export");
+  assert.match(exportBody.export.fileUrl, /^https:\/\/pubfuse\.local\/cinefuse\/exports\/.+\.mp4$/);
+
+  const jobsResponse = await fetch(`${baseUrl}/api/v1/cinefuse/projects/${projectId}/jobs`, { headers });
+  const jobsBody = await jobsResponse.json();
+  assert.equal(jobsBody.jobs.some((job) => job.kind === "audio"), true);
+  assert.equal(jobsBody.jobs.some((job) => job.kind === "export"), true);
 
   await new Promise((resolve, reject) => {
     server.close((error) => {

@@ -65,5 +65,6 @@ enum CinefuseTokens {
         static let danger = Color.red
         static let warning = Color.orange
         static let success = Color.green
+        static let shadow = Color.black.opacity(0.12)
     }
 }

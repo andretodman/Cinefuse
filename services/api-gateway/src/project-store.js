@@ -5,6 +5,7 @@ const projects = new Map();
 const scenes = new Map();
 const characters = new Map();
 const shots = new Map();
+const audioTracks = new Map();
 const jobs = new Map();
 
 let pool;
@@ -85,7 +86,29 @@ function mapShotRow(row) {
     modelTier: row.model_tier,
     status: row.status,
     clipUrl: row.clip_url,
+    orderIndex: row.order_index ?? 0,
+    durationSec: row.duration_sec ?? null,
+    thumbnailUrl: row.thumbnail_url ?? null,
+    audioRefs: row.audio_refs ?? [],
     characterLocks: row.character_locks ?? [],
+    createdAt: row.created_at,
+    updatedAt: row.updated_at
+  };
+}
+
+function mapAudioTrackRow(row) {
+  return {
+    id: row.id,
+    projectId: row.project_id,
+    shotId: row.shot_id ?? null,
+    kind: row.kind,
+    title: row.title,
+    sourceUrl: row.source_url ?? null,
+    waveformUrl: row.waveform_url ?? null,
+    laneIndex: row.lane_index ?? 0,
+    startMs: row.start_ms ?? 0,
+    durationMs: row.duration_ms ?? 0,
+    status: row.status ?? "draft",
     createdAt: row.created_at,
     updatedAt: row.updated_at
   };
@@ -127,6 +150,9 @@ function mapCharacterRow(row) {
     description: row.description,
     status: row.status,
     previewUrl: row.preview_url,
+    consistencyScore: row.consistency_score ?? null,
+    consistencyThreshold: row.consistency_threshold ?? null,
+    consistencyPassed: row.consistency_passed ?? false,
     createdAt: row.created_at,
     updatedAt: row.updated_at
   };
@@ -292,6 +318,9 @@ export async function saveCharacter(input) {
     description: input.description ?? existing?.description ?? "",
     status: input.status ?? existing?.status ?? "draft",
     previewUrl: input.previewUrl ?? existing?.previewUrl ?? null,
+    consistencyScore: input.consistencyScore ?? existing?.consistencyScore ?? null,
+    consistencyThreshold: input.consistencyThreshold ?? existing?.consistencyThreshold ?? null,
+    consistencyPassed: input.consistencyPassed ?? existing?.consistencyPassed ?? false,
     createdAt: existing?.createdAt ?? input.createdAt ?? now,
     updatedAt: now
   };
@@ -299,8 +328,8 @@ export async function saveCharacter(input) {
   if (db) {
     await db.query(
       `INSERT INTO cinefuse_characters
-        (id, project_id, name, description, status, preview_url, created_at, updated_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+        (id, project_id, name, description, status, preview_url, consistency_score, consistency_threshold, consistency_passed, created_at, updated_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
        ON CONFLICT (id)
        DO UPDATE SET
         project_id = EXCLUDED.project_id,
@@ -308,6 +337,9 @@ export async function saveCharacter(input) {
         description = EXCLUDED.description,
         status = EXCLUDED.status,
         preview_url = EXCLUDED.preview_url,
+        consistency_score = EXCLUDED.consistency_score,
+        consistency_threshold = EXCLUDED.consistency_threshold,
+        consistency_passed = EXCLUDED.consistency_passed,
         updated_at = EXCLUDED.updated_at`,
       [
         character.id,
@@ -316,6 +348,9 @@ export async function saveCharacter(input) {
         character.description,
         character.status,
         character.previewUrl,
+        character.consistencyScore,
+        character.consistencyThreshold,
+        character.consistencyPassed,
         character.createdAt,
         character.updatedAt
       ]
@@ -373,13 +408,15 @@ export async function saveScene(input) {
 export async function listShots(projectId) {
   const db = getPool();
   if (!db) {
-    return Array.from(shots.values()).filter((shot) => shot.projectId === projectId);
+    return Array.from(shots.values())
+      .filter((shot) => shot.projectId === projectId)
+      .sort((a, b) => (a.orderIndex ?? 0) - (b.orderIndex ?? 0));
   }
   const { rows } = await db.query(
     `SELECT *
      FROM cinefuse_shots
      WHERE project_id = $1
-     ORDER BY created_at`,
+     ORDER BY order_index, created_at`,
     [projectId]
   );
   return rows.map(mapShotRow);
@@ -395,6 +432,10 @@ export async function saveShot(input) {
     modelTier: input.modelTier ?? existing?.modelTier ?? "budget",
     status: input.status ?? existing?.status ?? "draft",
     clipUrl: input.clipUrl ?? existing?.clipUrl ?? null,
+    orderIndex: input.orderIndex ?? existing?.orderIndex ?? 0,
+    durationSec: input.durationSec ?? existing?.durationSec ?? null,
+    thumbnailUrl: input.thumbnailUrl ?? existing?.thumbnailUrl ?? null,
+    audioRefs: input.audioRefs ?? existing?.audioRefs ?? [],
     characterLocks: input.characterLocks ?? existing?.characterLocks ?? [],
     createdAt: existing?.createdAt ?? input.createdAt ?? now,
     updatedAt: now
@@ -403,8 +444,8 @@ export async function saveShot(input) {
   if (db) {
     await db.query(
       `INSERT INTO cinefuse_shots
-        (id, project_id, prompt, model_tier, status, clip_url, character_locks, created_at, updated_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb,$8,$9)
+        (id, project_id, prompt, model_tier, status, clip_url, order_index, duration_sec, thumbnail_url, audio_refs, character_locks, created_at, updated_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11::jsonb,$12,$13)
        ON CONFLICT (id)
        DO UPDATE SET
         project_id = EXCLUDED.project_id,
@@ -412,6 +453,10 @@ export async function saveShot(input) {
         model_tier = EXCLUDED.model_tier,
         status = EXCLUDED.status,
         clip_url = EXCLUDED.clip_url,
+        order_index = EXCLUDED.order_index,
+        duration_sec = EXCLUDED.duration_sec,
+        thumbnail_url = EXCLUDED.thumbnail_url,
+        audio_refs = EXCLUDED.audio_refs,
         character_locks = EXCLUDED.character_locks,
         updated_at = EXCLUDED.updated_at`,
       [
@@ -421,6 +466,10 @@ export async function saveShot(input) {
         shot.modelTier,
         shot.status,
         shot.clipUrl,
+        shot.orderIndex,
+        shot.durationSec,
+        shot.thumbnailUrl,
+        JSON.stringify(shot.audioRefs ?? []),
         JSON.stringify(shot.characterLocks ?? []),
         shot.createdAt,
         shot.updatedAt
@@ -430,6 +479,82 @@ export async function saveShot(input) {
   }
   shots.set(shot.id, shot);
   return shot;
+}
+
+export async function listAudioTracks(projectId) {
+  const db = getPool();
+  if (!db) {
+    return Array.from(audioTracks.values())
+      .filter((track) => track.projectId === projectId)
+      .sort((a, b) => (a.laneIndex - b.laneIndex) || (a.startMs - b.startMs));
+  }
+  const { rows } = await db.query(
+    `SELECT *
+     FROM cinefuse_audio_tracks
+     WHERE project_id = $1
+     ORDER BY lane_index, start_ms, created_at`,
+    [projectId]
+  );
+  return rows.map(mapAudioTrackRow);
+}
+
+export async function saveAudioTrack(input) {
+  const existing = audioTracks.get(input.id);
+  const now = new Date().toISOString();
+  const track = {
+    id: input.id,
+    projectId: input.projectId,
+    shotId: input.shotId ?? existing?.shotId ?? null,
+    kind: input.kind ?? existing?.kind ?? "score",
+    title: input.title ?? existing?.title ?? "Untitled Track",
+    sourceUrl: input.sourceUrl ?? existing?.sourceUrl ?? null,
+    waveformUrl: input.waveformUrl ?? existing?.waveformUrl ?? null,
+    laneIndex: input.laneIndex ?? existing?.laneIndex ?? 0,
+    startMs: input.startMs ?? existing?.startMs ?? 0,
+    durationMs: input.durationMs ?? existing?.durationMs ?? 0,
+    status: input.status ?? existing?.status ?? "draft",
+    createdAt: existing?.createdAt ?? input.createdAt ?? now,
+    updatedAt: now
+  };
+  const db = getPool();
+  if (db) {
+    await db.query(
+      `INSERT INTO cinefuse_audio_tracks
+        (id, project_id, shot_id, kind, title, source_url, waveform_url, lane_index, start_ms, duration_ms, status, created_at, updated_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+       ON CONFLICT (id)
+       DO UPDATE SET
+        project_id = EXCLUDED.project_id,
+        shot_id = EXCLUDED.shot_id,
+        kind = EXCLUDED.kind,
+        title = EXCLUDED.title,
+        source_url = EXCLUDED.source_url,
+        waveform_url = EXCLUDED.waveform_url,
+        lane_index = EXCLUDED.lane_index,
+        start_ms = EXCLUDED.start_ms,
+        duration_ms = EXCLUDED.duration_ms,
+        status = EXCLUDED.status,
+        updated_at = EXCLUDED.updated_at`,
+      [
+        track.id,
+        track.projectId,
+        track.shotId,
+        track.kind,
+        track.title,
+        track.sourceUrl,
+        track.waveformUrl,
+        track.laneIndex,
+        track.startMs,
+        track.durationMs,
+        track.status,
+        track.createdAt,
+        track.updatedAt
+      ]
+    );
+    return track;
+  }
+  audioTracks.set(track.id, track);
+  return track;
 }
 
 export async function getShot(shotId, projectId) {
@@ -546,7 +671,7 @@ export async function clearProjects() {
   const db = getPool();
   if (db) {
     await db.query(
-      "TRUNCATE TABLE cinefuse_jobs, cinefuse_shots, cinefuse_characters, cinefuse_scenes, cinefuse_projects RESTART IDENTITY CASCADE"
+      "TRUNCATE TABLE cinefuse_jobs, cinefuse_audio_tracks, cinefuse_shots, cinefuse_characters, cinefuse_scenes, cinefuse_projects RESTART IDENTITY CASCADE"
     );
     return;
   }
@@ -554,5 +679,6 @@ export async function clearProjects() {
   scenes.clear();
   characters.clear();
   shots.clear();
+  audioTracks.clear();
   jobs.clear();
 }

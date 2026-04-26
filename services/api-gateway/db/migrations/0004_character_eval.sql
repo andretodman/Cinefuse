@@ -1,0 +1,4 @@
+ALTER TABLE cinefuse_characters
+  ADD COLUMN IF NOT EXISTS consistency_score DOUBLE PRECISION,
+  ADD COLUMN IF NOT EXISTS consistency_threshold DOUBLE PRECISION,
+  ADD COLUMN IF NOT EXISTS consistency_passed BOOLEAN NOT NULL DEFAULT false;

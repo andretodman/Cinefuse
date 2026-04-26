@@ -1,3 +1,5 @@
+import { randomUUID } from "node:crypto";
+
 const TOOLS = [
   "encode_final",
   "upload_to_pubfuse",
@@ -13,11 +15,24 @@ export function createServer() {
     listTools() {
       return TOOLS;
     },
-    async invoke(tool, input) {
+    async invoke(tool, input = {}) {
       if (!TOOLS.includes(tool)) {
         throw new Error(`Unknown tool: ${tool}`);
       }
-      return { ok: true, server: "export", tool, input: input ?? null };
+      const id = randomUUID();
+      return {
+        ok: true,
+        server: "export",
+        tool,
+        export: {
+          id,
+          status: "ready",
+          fileUrl: `https://pubfuse.local/cinefuse/exports/${id}.mp4`,
+          archiveUrl: `https://pubfuse.local/cinefuse/exports/${id}.zip`,
+          costToUsCents: Number(input.costToUsCents ?? 19),
+          sparksCost: Number(input.sparksCost ?? 40)
+        }
+      };
     }
   };
 }

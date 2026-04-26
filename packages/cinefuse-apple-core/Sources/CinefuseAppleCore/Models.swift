@@ -26,6 +26,10 @@ public struct Shot: Codable, Identifiable {
     public let modelTier: String
     public let status: String
     public let clipUrl: String?
+    public let orderIndex: Int?
+    public let durationSec: Int?
+    public let thumbnailUrl: String?
+    public let audioRefs: [String]?
     public let characterLocks: [String]?
 }
 
@@ -66,6 +70,9 @@ public struct CharacterProfile: Codable, Identifiable {
     public let description: String
     public let status: String
     public let previewUrl: String?
+    public let consistencyScore: Double?
+    public let consistencyThreshold: Double?
+    public let consistencyPassed: Bool?
 }
 
 public struct ListCharactersResponse: Codable {
@@ -74,6 +81,34 @@ public struct ListCharactersResponse: Codable {
 
 public struct CreateCharacterResponse: Codable {
     public let character: CharacterProfile
+}
+
+public struct AudioTrack: Codable, Identifiable {
+    public let id: String
+    public let projectId: String
+    public let shotId: String?
+    public let kind: String
+    public let title: String
+    public let sourceUrl: String?
+    public let waveformUrl: String?
+    public let laneIndex: Int
+    public let startMs: Int
+    public let durationMs: Int
+    public let status: String
+}
+
+public struct ListAudioTracksResponse: Codable {
+    public let audioTracks: [AudioTrack]
+}
+
+public struct CreateAudioTrackResponse: Codable {
+    public let audioTrack: AudioTrack
+}
+
+public struct TimelineResponse: Codable {
+    public let projectId: String
+    public let shots: [Shot]
+    public let audioTracks: [AudioTrack]
 }
 
 public struct ShotQuote: Codable {

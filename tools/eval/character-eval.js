@@ -56,6 +56,9 @@ async function main() {
     `- Character ID: ${character.character.id}`,
     `- Training status: ${trained.character.status}`,
     `- Training sparks cost: ${trained.sparksCost}`,
+    `- Consistency score: ${trained.character.consistencyScore ?? "n/a"}`,
+    `- Consistency threshold: ${trained.character.consistencyThreshold ?? "n/a"}`,
+    `- Consistency passed: ${trained.character.consistencyPassed ?? false}`,
     `- Shot lock count: ${(shot.shot.characterLocks ?? []).length}`,
     `- Shot status: ${shot.shot.status}`,
     ""

@@ -71,11 +71,12 @@ struct SectionCard<Content: View>: View {
         .padding(CinefuseTokens.Spacing.m)
         .background(
             RoundedRectangle(cornerRadius: CinefuseTokens.Radius.large)
-                .fill(CinefuseTokens.ColorRole.surfacePrimary)
+                .fill(CinefuseTokens.ColorRole.surfacePrimary.opacity(0.92))
                 .overlay(
                     RoundedRectangle(cornerRadius: CinefuseTokens.Radius.large)
                         .stroke(CinefuseTokens.ColorRole.borderSubtle, lineWidth: 1)
                 )
+                .shadow(color: CinefuseTokens.ColorRole.shadow, radius: 10, x: 0, y: 6)
         )
     }
 }
@@ -134,5 +135,64 @@ struct ErrorBanner: View {
             RoundedRectangle(cornerRadius: CinefuseTokens.Radius.medium)
                 .fill(CinefuseTokens.ColorRole.danger.opacity(0.08))
         )
+    }
+}
+
+struct PubfuseLogoBadge: View {
+    var body: some View {
+        HStack(spacing: CinefuseTokens.Spacing.xs) {
+            PubfuseLogoImage()
+                .frame(width: 26, height: 26)
+                .clipShape(RoundedRectangle(cornerRadius: CinefuseTokens.Radius.small))
+            Text("Pubfuse")
+                .font(CinefuseTokens.Typography.label)
+                .foregroundStyle(CinefuseTokens.ColorRole.textSecondary)
+        }
+        .padding(.horizontal, CinefuseTokens.Spacing.xs)
+        .padding(.vertical, CinefuseTokens.Spacing.xxs)
+        .background(
+            Capsule()
+                .fill(CinefuseTokens.ColorRole.surfaceSecondary)
+                .overlay(
+                    Capsule()
+                        .stroke(CinefuseTokens.ColorRole.borderSubtle, lineWidth: 1)
+                )
+        )
+    }
+}
+
+private struct PubfuseLogoImage: View {
+    private let candidates = [
+        "/Users/atodman/Documents/GitHub/PubfuseRewrite/PubfuseRestApi/web/public/images/pubfuse_v1.3.png",
+        "/Users/atodman/Documents/GitHub/PubfuseRewrite/PubfuseRestApi/web/public/images/pubfuse_v1.1_128x128.png"
+    ]
+
+    var body: some View {
+        Group {
+#if canImport(UIKit)
+            if let image = candidates.compactMap({ UIImage(contentsOfFile: $0) }).first {
+                Image(uiImage: image).resizable().scaledToFit()
+            } else {
+                Image(systemName: "bolt.fill")
+                    .resizable()
+                    .scaledToFit()
+                    .foregroundStyle(CinefuseTokens.ColorRole.accent)
+            }
+#elseif canImport(AppKit)
+            if let image = candidates.compactMap({ NSImage(contentsOfFile: $0) }).first {
+                Image(nsImage: image).resizable().scaledToFit()
+            } else {
+                Image(systemName: "bolt.fill")
+                    .resizable()
+                    .scaledToFit()
+                    .foregroundStyle(CinefuseTokens.ColorRole.accent)
+            }
+#else
+            Image(systemName: "bolt.fill")
+                .resizable()
+                .scaledToFit()
+                .foregroundStyle(CinefuseTokens.ColorRole.accent)
+#endif
+        }
     }
 }

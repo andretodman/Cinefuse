@@ -45,6 +45,167 @@ public struct APIClient {
         return try JSONDecoder().decode(ListShotsResponse.self, from: data).shots
     }
 
+    public func listTimeline(token: String, projectId: String) async throws -> TimelineResponse {
+        var request = URLRequest(url: buildURL(path: "\(Self.cinefusePrefix)/projects/\(projectId)/timeline"))
+        request.httpMethod = "GET"
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        let (data, response) = try await URLSession.shared.data(for: request)
+        try validate(response: response, data: data)
+        return try JSONDecoder().decode(TimelineResponse.self, from: data)
+    }
+
+    public func reorderTimelineShots(token: String, projectId: String, shotIds: [String]) async throws -> [Shot] {
+        var request = URLRequest(url: buildURL(path: "\(Self.cinefusePrefix)/projects/\(projectId)/timeline/reorder"))
+        request.httpMethod = "PUT"
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONEncoder().encode(["shotIds": shotIds])
+        let (data, response) = try await URLSession.shared.data(for: request)
+        try validate(response: response, data: data)
+        return try JSONDecoder().decode(ListShotsResponse.self, from: data).shots
+    }
+
+    public func listAudioTracks(token: String, projectId: String) async throws -> [AudioTrack] {
+        var request = URLRequest(url: buildURL(path: "\(Self.cinefusePrefix)/projects/\(projectId)/audio-tracks"))
+        request.httpMethod = "GET"
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        let (data, response) = try await URLSession.shared.data(for: request)
+        try validate(response: response, data: data)
+        return try JSONDecoder().decode(ListAudioTracksResponse.self, from: data).audioTracks
+    }
+
+    public func createAudioTrack(
+        token: String,
+        projectId: String,
+        kind: String,
+        title: String,
+        shotId: String? = nil,
+        laneIndex: Int = 0,
+        startMs: Int = 0,
+        durationMs: Int = 0
+    ) async throws -> AudioTrack {
+        var request = URLRequest(url: buildURL(path: "\(Self.cinefusePrefix)/projects/\(projectId)/audio-tracks"))
+        request.httpMethod = "POST"
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONEncoder().encode([
+            "kind": AnyEncodable(kind),
+            "title": AnyEncodable(title),
+            "shotId": AnyEncodable(shotId),
+            "laneIndex": AnyEncodable(laneIndex),
+            "startMs": AnyEncodable(startMs),
+            "durationMs": AnyEncodable(durationMs)
+        ] as [String: AnyEncodable])
+        let (data, response) = try await URLSession.shared.data(for: request)
+        try validate(response: response, data: data)
+        return try JSONDecoder().decode(CreateAudioTrackResponse.self, from: data).audioTrack
+    }
+
+    public func generateDialogue(
+        token: String,
+        projectId: String,
+        shotId: String?,
+        title: String,
+        laneIndex: Int,
+        startMs: Int,
+        durationMs: Int
+    ) async throws -> AudioTrack {
+        var request = URLRequest(url: buildURL(path: "\(Self.cinefusePrefix)/projects/\(projectId)/audio/dialogue"))
+        request.httpMethod = "POST"
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONEncoder().encode([
+            "shotId": AnyEncodable(shotId),
+            "title": AnyEncodable(title),
+            "laneIndex": AnyEncodable(laneIndex),
+            "startMs": AnyEncodable(startMs),
+            "durationMs": AnyEncodable(durationMs)
+        ] as [String: AnyEncodable])
+        let (data, response) = try await URLSession.shared.data(for: request)
+        try validate(response: response, data: data)
+        return try JSONDecoder().decode(CreateAudioTrackResponse.self, from: data).audioTrack
+    }
+
+    public func generateScore(
+        token: String,
+        projectId: String,
+        title: String,
+        laneIndex: Int,
+        startMs: Int,
+        durationMs: Int
+    ) async throws -> AudioTrack {
+        var request = URLRequest(url: buildURL(path: "\(Self.cinefusePrefix)/projects/\(projectId)/audio/score"))
+        request.httpMethod = "POST"
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONEncoder().encode([
+            "title": AnyEncodable(title),
+            "laneIndex": AnyEncodable(laneIndex),
+            "startMs": AnyEncodable(startMs),
+            "durationMs": AnyEncodable(durationMs)
+        ] as [String: AnyEncodable])
+        let (data, response) = try await URLSession.shared.data(for: request)
+        try validate(response: response, data: data)
+        return try JSONDecoder().decode(CreateAudioTrackResponse.self, from: data).audioTrack
+    }
+
+    public func generateSFX(
+        token: String,
+        projectId: String,
+        title: String,
+        laneIndex: Int,
+        startMs: Int,
+        durationMs: Int
+    ) async throws -> AudioTrack {
+        var request = URLRequest(url: buildURL(path: "\(Self.cinefusePrefix)/projects/\(projectId)/audio/sfx"))
+        request.httpMethod = "POST"
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONEncoder().encode([
+            "title": AnyEncodable(title),
+            "laneIndex": AnyEncodable(laneIndex),
+            "startMs": AnyEncodable(startMs),
+            "durationMs": AnyEncodable(durationMs)
+        ] as [String: AnyEncodable])
+        let (data, response) = try await URLSession.shared.data(for: request)
+        try validate(response: response, data: data)
+        return try JSONDecoder().decode(CreateAudioTrackResponse.self, from: data).audioTrack
+    }
+
+    public func lipsyncAudio(
+        token: String,
+        projectId: String,
+        shotId: String?,
+        title: String,
+        laneIndex: Int,
+        startMs: Int,
+        durationMs: Int
+    ) async throws -> AudioTrack {
+        var request = URLRequest(url: buildURL(path: "\(Self.cinefusePrefix)/projects/\(projectId)/audio/lipsync"))
+        request.httpMethod = "POST"
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONEncoder().encode([
+            "shotId": AnyEncodable(shotId),
+            "title": AnyEncodable(title),
+            "laneIndex": AnyEncodable(laneIndex),
+            "startMs": AnyEncodable(startMs),
+            "durationMs": AnyEncodable(durationMs)
+        ] as [String: AnyEncodable])
+        let (data, response) = try await URLSession.shared.data(for: request)
+        try validate(response: response, data: data)
+        return try JSONDecoder().decode(CreateAudioTrackResponse.self, from: data).audioTrack
+    }
+
+    public func exportFinal(token: String, projectId: String) async throws -> Job {
+        var request = URLRequest(url: buildURL(path: "\(Self.cinefusePrefix)/projects/\(projectId)/export/final"))
+        request.httpMethod = "POST"
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        let (data, response) = try await URLSession.shared.data(for: request)
+        try validate(response: response, data: data)
+        return try JSONDecoder().decode(CreateJobResponse.self, from: data).job
+    }
+
     public func listScenes(token: String, projectId: String) async throws -> [StoryScene] {
         var request = URLRequest(url: buildURL(path: "\(Self.cinefusePrefix)/projects/\(projectId)/scenes"))
         request.httpMethod = "GET"
