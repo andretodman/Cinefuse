@@ -208,3 +208,37 @@ public final class AppModel {
         isAuthenticated = !stored.isEmpty
     }
 }
+
+@Observable
+public final class EditorSettingsModel {
+    private static let showTooltipsKey = "cinefuse.editor.showTooltips"
+    private static let restoreLastOpenWorkspaceKey = "cinefuse.editor.restoreLastOpenWorkspace"
+    private let userDefaults: UserDefaults
+
+    public var showTooltips: Bool {
+        didSet {
+            userDefaults.set(showTooltips, forKey: Self.showTooltipsKey)
+        }
+    }
+    public var restoreLastOpenWorkspace: Bool {
+        didSet {
+            userDefaults.set(restoreLastOpenWorkspace, forKey: Self.restoreLastOpenWorkspaceKey)
+        }
+    }
+
+    public init(userDefaults: UserDefaults = .standard) {
+        self.userDefaults = userDefaults
+        if userDefaults.object(forKey: Self.showTooltipsKey) == nil {
+            self.showTooltips = true
+            userDefaults.set(true, forKey: Self.showTooltipsKey)
+        } else {
+            self.showTooltips = userDefaults.bool(forKey: Self.showTooltipsKey)
+        }
+        if userDefaults.object(forKey: Self.restoreLastOpenWorkspaceKey) == nil {
+            self.restoreLastOpenWorkspace = true
+            userDefaults.set(true, forKey: Self.restoreLastOpenWorkspaceKey)
+        } else {
+            self.restoreLastOpenWorkspace = userDefaults.bool(forKey: Self.restoreLastOpenWorkspaceKey)
+        }
+    }
+}

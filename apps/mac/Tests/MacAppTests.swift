@@ -30,6 +30,25 @@ final class MacAppTests: XCTestCase {
         XCTAssertFalse(empty.isAuthenticated)
         XCTAssertEqual(empty.userId, "")
     }
+
+    func testEditorSettingsTooltipsDefaultAndPersistence() {
+        let suiteName = "cinefuse.tests.settings.\(UUID().uuidString)"
+        guard let defaults = UserDefaults(suiteName: suiteName) else {
+            XCTFail("Could not create UserDefaults suite")
+            return
+        }
+        defaults.removePersistentDomain(forName: suiteName)
+
+        let first = EditorSettingsModel(userDefaults: defaults)
+        XCTAssertEqual(first.showTooltips, true)
+        XCTAssertEqual(first.restoreLastOpenWorkspace, true)
+
+        first.showTooltips = false
+        first.restoreLastOpenWorkspace = false
+        let second = EditorSettingsModel(userDefaults: defaults)
+        XCTAssertEqual(second.showTooltips, false)
+        XCTAssertEqual(second.restoreLastOpenWorkspace, false)
+    }
 }
 
 final class MacAppContractTests: XCTestCase {

@@ -4,9 +4,11 @@ struct PrimaryActionButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .font(CinefuseTokens.Typography.label)
+            .lineLimit(1)
             .padding(.horizontal, CinefuseTokens.Spacing.m)
             .padding(.vertical, CinefuseTokens.Spacing.xs)
-            .foregroundStyle(.white)
+            .frame(minWidth: CinefuseTokens.Control.minButtonWidth, minHeight: CinefuseTokens.Control.minButtonHeight)
+            .foregroundStyle(CinefuseTokens.ColorRole.labelOnAccent)
             .background(
                 RoundedRectangle(cornerRadius: CinefuseTokens.Radius.medium)
                     .fill(CinefuseTokens.ColorRole.accent.opacity(configuration.isPressed ? 0.75 : 1))
@@ -18,8 +20,10 @@ struct SecondaryActionButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .font(CinefuseTokens.Typography.label)
+            .lineLimit(1)
             .padding(.horizontal, CinefuseTokens.Spacing.m)
             .padding(.vertical, CinefuseTokens.Spacing.xs)
+            .frame(minWidth: CinefuseTokens.Control.minButtonWidth, minHeight: CinefuseTokens.Control.minButtonHeight)
             .foregroundStyle(CinefuseTokens.ColorRole.textPrimary)
             .background(
                 RoundedRectangle(cornerRadius: CinefuseTokens.Radius.medium)
@@ -36,8 +40,10 @@ struct DestructiveActionButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .font(CinefuseTokens.Typography.label)
+            .lineLimit(1)
             .padding(.horizontal, CinefuseTokens.Spacing.m)
             .padding(.vertical, CinefuseTokens.Spacing.xs)
+            .frame(minWidth: CinefuseTokens.Control.minButtonWidth, minHeight: CinefuseTokens.Control.minButtonHeight)
             .foregroundStyle(CinefuseTokens.ColorRole.danger)
             .background(
                 RoundedRectangle(cornerRadius: CinefuseTokens.Radius.medium)
@@ -76,7 +82,7 @@ struct SectionCard<Content: View>: View {
                     RoundedRectangle(cornerRadius: CinefuseTokens.Radius.large)
                         .stroke(CinefuseTokens.ColorRole.borderSubtle, lineWidth: 1)
                 )
-                .shadow(color: CinefuseTokens.ColorRole.shadow, radius: 10, x: 0, y: 6)
+                .shadow(color: CinefuseTokens.ColorRole.shadow, radius: 8, x: 0, y: 4)
         )
     }
 }
@@ -93,7 +99,7 @@ struct StatusBadge: View {
             .padding(.vertical, CinefuseTokens.Spacing.xxs)
             .background(
                 Capsule()
-                    .fill(style.tint.opacity(0.15))
+                    .fill(style.tint.opacity(0.2))
             )
     }
 }
@@ -141,7 +147,42 @@ struct ErrorBanner: View {
 struct PubfuseLogoBadge: View {
     var body: some View {
         PubfuseLogoImage()
-            .frame(width: 92, height: 24)
+            .frame(width: CinefuseTokens.Control.logoWidth, height: CinefuseTokens.Control.logoHeight)
+    }
+}
+
+struct IconCommandButton: View {
+    let systemName: String
+    let label: String
+    let action: () -> Void
+    var isDestructive = false
+    var tooltipEnabled = true
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: systemName)
+                .font(.system(size: CinefuseTokens.Control.iconSymbolSize, weight: .semibold))
+                .frame(width: CinefuseTokens.Control.minIconButtonSize, height: CinefuseTokens.Control.minIconButtonSize)
+                .foregroundStyle(isDestructive ? CinefuseTokens.ColorRole.danger : CinefuseTokens.ColorRole.textPrimary)
+                .background(
+                    RoundedRectangle(cornerRadius: CinefuseTokens.Radius.small)
+                        .fill(CinefuseTokens.ColorRole.surfaceSecondary)
+                )
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(label)
+        .tooltip(label, enabled: tooltipEnabled)
+    }
+}
+
+extension View {
+    @ViewBuilder
+    func tooltip(_ value: String, enabled: Bool) -> some View {
+        if enabled {
+            self.help(value)
+        } else {
+            self
+        }
     }
 }
 
