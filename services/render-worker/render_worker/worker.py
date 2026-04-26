@@ -27,6 +27,7 @@ class RenderWorker:
         self.redis_queue = os.getenv("CINEFUSE_RENDER_QUEUE_KEY", "cinefuse:render_jobs")
         self.gateway_url = os.getenv("CINEFUSE_API_BASE_URL", "http://localhost:4000")
         self.worker_token = os.getenv("CINEFUSE_WORKER_TOKEN", "cinefuse-dev-worker-token")
+        self.redis_client: Redis | None = None
 
     def enqueue(self, job: RenderJob) -> None:
         self.jobs.put(job)
@@ -53,18 +54,24 @@ class RenderWorker:
         )
 
     def run_once_redis(self) -> bool:
-        redis_client = Redis.from_url(self.redis_url, decode_responses=True)
-        result = redis_client.blpop(self.redis_queue, timeout=1)
-        if not result:
-            return False
+        try:
+            if self.redis_client is None:
+                self.redis_client = Redis.from_url(self.redis_url, decode_responses=True)
+            result = self.redis_client.blpop(self.redis_queue, timeout=1)
+            if not result:
+                return False
 
-        _, payload = result
-        task = json.loads(payload)
-        with httpx.Client(timeout=60.0) as client:
-            response = client.post(
-                f"{self.gateway_url}/api/v1/internal/render/process",
-                headers={"x-cinefuse-worker-token": self.worker_token},
-                json=task,
-            )
-            response.raise_for_status()
-        return True
+            _, payload = result
+            task = json.loads(payload)
+            with httpx.Client(timeout=60.0) as client:
+                response = client.post(
+                    f"{self.gateway_url}/api/v1/internal/render/process",
+                    headers={"x-cinefuse-worker-token": self.worker_token},
+                    json=task,
+                )
+                response.raise_for_status()
+            return True
+        except Exception as error:  # noqa: BLE001
+            print(f"[render-worker] redis task handling failed: {error}")
+            self.redis_client = None
+            return False

@@ -40,14 +40,18 @@ struct LoginScreen: View {
                 .textFieldStyle(.roundedBorder)
 
             Button("Continue") {
-                model.userId = draftUserId.trimmingCharacters(in: .whitespacesAndNewlines)
-                model.isAuthenticated = !model.userId.isEmpty
+                model.signIn(userId: draftUserId)
             }
             .buttonStyle(PrimaryActionButtonStyle())
         }
         .padding(CinefuseTokens.Spacing.xl)
         .frame(maxWidth: 520)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+        .onAppear {
+            if !model.userId.isEmpty {
+                draftUserId = model.userId
+            }
+        }
     }
 }
 
@@ -177,6 +181,11 @@ struct ProjectWorkspaceScreen: View {
             .keyboardShortcut("n", modifiers: [.command])
             Text("Sparks: \(model.balance)")
                 .font(CinefuseTokens.Typography.label)
+            Button("Sign Out") {
+                closeProject()
+                model.signOut()
+            }
+            .buttonStyle(SecondaryActionButtonStyle())
         }
     }
 

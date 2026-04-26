@@ -213,7 +213,7 @@ export function createHttpServer() {
       await mcpHost.invoke("billing", "credit", {
         userId: task.userId,
         amount: task.quote.sparksCost,
-        idempotencyKey: `shot-generate-refund:${task.shotId}`,
+        idempotencyKey: `shot-generate-refund:${task.jobId}`,
         relatedResourceType: "shot",
         relatedResourceId: task.shotId
       });
@@ -916,11 +916,14 @@ export function createHttpServer() {
         characterLocks: shot.characterLocks ?? [],
         userId: auth.userId
       });
+      const payload = await readBody(request);
+      const jobId = randomUUID();
+      const generationIdempotencyKey = payload.idempotencyKey ?? `shot-generate:${shotId}:${jobId}`;
 
       await mcpHost.invoke("billing", "debit", {
         userId: auth.userId,
         amount: quote.sparksCost,
-        idempotencyKey: `shot-generate:${shotId}`,
+        idempotencyKey: generationIdempotencyKey,
         relatedResourceType: "shot",
         relatedResourceId: shotId
       });
@@ -929,7 +932,6 @@ export function createHttpServer() {
         ...shot,
         status: "queued"
       });
-      const jobId = randomUUID();
       const job = await saveJob({
         id: jobId,
         projectId,
@@ -960,7 +962,8 @@ export function createHttpServer() {
         shotId,
         projectId,
         userId: auth.userId,
-        quote
+        quote,
+        debitIdempotencyKey: generationIdempotencyKey
       });
 
       return json(response, 200, {
@@ -970,7 +973,8 @@ export function createHttpServer() {
           sparksCost: quote.sparksCost,
           modelTier: quote.modelTier,
           modelId: quote.modelId,
-          estimatedDurationSec: quote.estimatedDurationSec
+          estimatedDurationSec: quote.estimatedDurationSec,
+          idempotencyKey: generationIdempotencyKey
         }
       });
     }

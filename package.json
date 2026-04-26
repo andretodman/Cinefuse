@@ -20,6 +20,7 @@
     "eval:character": "pnpm --filter @cinefuse/eval eval:character",
     "eval:audio": "pnpm --filter @cinefuse/eval eval:audio",
     "eval:export": "pnpm --filter @cinefuse/eval eval:export",
+    "eval:script": "pnpm --filter @cinefuse/eval eval:script",
     "clean": "turbo run clean && rm -rf node_modules .turbo"
   },
   "devDependencies": {

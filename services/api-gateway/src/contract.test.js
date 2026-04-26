@@ -105,6 +105,11 @@ test("api contract: create/list projects and get spark balance", async () => {
     jobsBody.jobs.some((job) => job.kind === "clip" && (job.status === "queued" || job.status === "running" || job.status === "done")),
     true
   );
+  const generatedClipJob = jobsBody.jobs.find((job) => job.kind === "clip" && job.shotId === shotId);
+  assert.ok(generatedClipJob);
+  if (generatedClipJob.status === "done") {
+    assert.equal(generatedClipJob.costToUsCents > 0, true);
+  }
 
   const balanceResponse = await fetch(`${baseUrl}/api/v1/cinefuse/sparks/balance`, { headers });
   assert.equal(balanceResponse.status, 200);
@@ -156,6 +161,48 @@ test("api contract: /v1/projects alias maps to canonical route with deprecation 
   assert.equal(listResponse.status, 200);
   const listBody = await listResponse.json();
   assert.equal(listBody.projects.length, 1);
+
+  await new Promise((resolve, reject) => {
+    server.close((error) => {
+      if (error) {
+        reject(error);
+        return;
+      }
+      resolve();
+    });
+  });
+});
+
+test("api contract: ownership is scoped to authenticated user id", async () => {
+  await clearProjects();
+  const server = createHttpServer();
+  await new Promise((resolve) => server.listen(0, resolve));
+  const address = server.address();
+  const port = typeof address === "object" && address ? address.port : 0;
+  const baseUrl = `http://127.0.0.1:${port}`;
+  const ownerAHeaders = authHeaders("owner_a");
+  const ownerBHeaders = authHeaders("owner_b");
+
+  const createResponse = await fetch(`${baseUrl}/api/v1/cinefuse/projects`, {
+    method: "POST",
+    headers: ownerAHeaders,
+    body: JSON.stringify({ title: "Owner A Project" })
+  });
+  assert.equal(createResponse.status, 201);
+
+  const listA = await fetch(`${baseUrl}/api/v1/cinefuse/projects`, { headers: ownerAHeaders });
+  const bodyA = await listA.json();
+  assert.equal(bodyA.projects.length, 1);
+  assert.equal(bodyA.projects[0].ownerUserId, "owner_a");
+
+  const listB = await fetch(`${baseUrl}/api/v1/cinefuse/projects`, { headers: ownerBHeaders });
+  const bodyB = await listB.json();
+  assert.equal(bodyB.projects.length, 0);
+
+  const malformedAuth = await fetch(`${baseUrl}/api/v1/cinefuse/projects`, {
+    headers: { authorization: "Bearer user:bad id", "content-type": "application/json" }
+  });
+  assert.equal(malformedAuth.status, 401);
 
   await new Promise((resolve, reject) => {
     server.close((error) => {
@@ -319,6 +366,19 @@ test("api contract: storyboard generation and scene revision", async () => {
   assert.equal(listScenes.status, 200);
   const scenesBody = await listScenes.json();
   assert.equal(scenesBody.scenes.length >= 8, true);
+  const sceneCountAfterFirstGeneration = scenesBody.scenes.length;
+
+  const regenerate = await fetch(`${baseUrl}/api/v1/cinefuse/projects/${projectId}/storyboard/generate`, {
+    method: "POST",
+    headers
+  });
+  assert.equal(regenerate.status, 200);
+  const regenerateBody = await regenerate.json();
+  assert.equal(regenerateBody.scenes[0].id, generatedBody.scenes[0].id);
+
+  const listScenesAfterRegenerate = await fetch(`${baseUrl}/api/v1/cinefuse/projects/${projectId}/scenes`, { headers });
+  const scenesAfterRegenerate = await listScenesAfterRegenerate.json();
+  assert.equal(scenesAfterRegenerate.scenes.length, sceneCountAfterFirstGeneration);
 
   await new Promise((resolve, reject) => {
     server.close((error) => {
@@ -536,6 +596,71 @@ test("api contract: audio generation and final export flow", async () => {
   const jobsBody = await jobsResponse.json();
   assert.equal(jobsBody.jobs.some((job) => job.kind === "audio"), true);
   assert.equal(jobsBody.jobs.some((job) => job.kind === "export"), true);
+
+  await new Promise((resolve, reject) => {
+    server.close((error) => {
+      if (error) {
+        reject(error);
+        return;
+      }
+      resolve();
+    });
+  });
+});
+
+test("api contract: clip generation debit is idempotent with caller key", async () => {
+  const headers = authHeaders("usr_contract_clip_idempotent");
+  await clearProjects();
+  const server = createHttpServer();
+
+  await new Promise((resolve) => server.listen(0, resolve));
+  const address = server.address();
+  const port = typeof address === "object" && address ? address.port : 0;
+  const baseUrl = `http://127.0.0.1:${port}`;
+
+  const createProject = await fetch(`${baseUrl}/api/v1/cinefuse/projects`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ title: "Idempotent Clip Project" })
+  });
+  const projectId = (await createProject.json()).project.id;
+  const createShot = await fetch(`${baseUrl}/api/v1/cinefuse/projects/${projectId}/shots`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ prompt: "Idempotent generation shot", modelTier: "standard" })
+  });
+  const shotId = (await createShot.json()).shot.id;
+  const requestKey = `shot-request:${shotId}`;
+
+  const firstGenerate = await fetch(`${baseUrl}/api/v1/cinefuse/projects/${projectId}/shots/${shotId}/generate`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ idempotencyKey: requestKey })
+  });
+  assert.equal(firstGenerate.status, 200);
+
+  let retries = 30;
+  while (retries > 0) {
+    const listedShots = await fetch(`${baseUrl}/api/v1/cinefuse/projects/${projectId}/shots`, { headers });
+    const shot = (await listedShots.json()).shots.find((entry) => entry.id === shotId);
+    if (shot?.status === "ready" || shot?.status === "failed") {
+      break;
+    }
+    retries -= 1;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+
+  const secondGenerate = await fetch(`${baseUrl}/api/v1/cinefuse/projects/${projectId}/shots/${shotId}/generate`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ idempotencyKey: requestKey })
+  });
+  assert.equal(secondGenerate.status, 200);
+
+  const balanceResponse = await fetch(`${baseUrl}/api/v1/cinefuse/sparks/balance`, { headers });
+  const balanceBody = await balanceResponse.json();
+  // Project create = 0 debit, generation quote for standard = 70, repeated request with same idempotency key should not double-charge.
+  assert.equal(balanceBody.balance, 99930);
 
   await new Promise((resolve, reject) => {
     server.close((error) => {

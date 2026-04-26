@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { createHash } from "node:crypto";
 
 const TOOLS = [
   "generate_beat_sheet",
@@ -28,7 +29,20 @@ function generateSceneTitle(index, tone) {
 }
 
 function createPrompt(sceneTitle, sequence) {
-  return `${sceneTitle} shot ${sequence + 1} with cinematic framing and clear subject action`;
+  return `${sceneTitle} shot ${sequence + 1}: cinematic framing, clear subject action, concrete camera movement`;
+}
+
+function stableId(parts) {
+  const hash = createHash("sha256").update(parts.join("|")).digest("hex").slice(0, 16);
+  return `scn_${hash}`;
+}
+
+function sanitizeText(value, fallback) {
+  if (typeof value !== "string") {
+    return fallback;
+  }
+  const normalized = value.trim().replace(/\s+/g, " ");
+  return normalized.length > 0 ? normalized : fallback;
 }
 
 export function createServer() {
@@ -43,16 +57,17 @@ export function createServer() {
       }
 
       if (tool === "generate_beat_sheet") {
-        const tone = input?.tone ?? "drama";
-        const logline = input?.logline ?? "Untitled story";
+        const tone = sanitizeText(input?.tone, "drama").toLowerCase();
+        const logline = sanitizeText(input?.logline, "Untitled story");
         const sceneCount = inferSceneCount(input?.targetDurationMinutes);
         const scenes = Array.from({ length: sceneCount }).map((_, index) => {
           const title = generateSceneTitle(index, tone);
+          const description = `${title}. Story beat derived from: ${logline}`;
           return {
-            id: randomUUID(),
+            id: stableId([logline, tone, String(sceneCount), String(index)]),
             orderIndex: index,
             title,
-            description: `${title}. Story beat derived from: ${logline}`,
+            description,
             mood: tone
           };
         });
@@ -70,10 +85,13 @@ export function createServer() {
       }
 
       if (tool === "generate_shot_prompts") {
-        const sceneTitle = input?.sceneTitle ?? "Scene";
-        const prompts = Array.from({ length: 3 }).map((_, index) => ({
-          id: randomUUID(),
-          prompt: createPrompt(sceneTitle, index)
+        const sceneTitle = sanitizeText(input?.sceneTitle, "Scene");
+        const shotCount = clamp(Number(input?.shotCount ?? 3), 3, 6);
+        const prompts = Array.from({ length: shotCount }).map((_, index) => ({
+          id: stableId([sceneTitle, "prompt", String(index)]),
+          prompt: createPrompt(sceneTitle, index),
+          camera: index % 2 === 0 ? "wide" : "close",
+          movement: index % 2 === 0 ? "dolly-in" : "pan-left"
         }));
         return {
           ok: true,
@@ -84,16 +102,19 @@ export function createServer() {
       }
 
       if (tool === "revise_scene") {
+        const title = sanitizeText(input?.title, "Revised Scene");
+        const revision = sanitizeText(input?.revision ?? input?.description, "No revision provided");
+        const mood = sanitizeText(input?.mood, "drama").toLowerCase();
         return {
           ok: true,
           server: "script",
           tool,
           scene: {
-            id: input?.sceneId ?? randomUUID(),
-            orderIndex: input?.orderIndex ?? 0,
-            title: input?.title ?? "Revised Scene",
-            description: input?.revision ?? input?.description ?? "",
-            mood: input?.mood ?? "drama"
+            id: input?.sceneId ?? stableId([title, revision, mood]),
+            orderIndex: clamp(Number(input?.orderIndex ?? 0), 0, 99),
+            title,
+            description: revision,
+            mood
           }
         };
       }

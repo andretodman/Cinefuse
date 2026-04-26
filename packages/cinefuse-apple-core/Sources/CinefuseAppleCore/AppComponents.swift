@@ -140,24 +140,8 @@ struct ErrorBanner: View {
 
 struct PubfuseLogoBadge: View {
     var body: some View {
-        HStack(spacing: CinefuseTokens.Spacing.xs) {
-            PubfuseLogoImage()
-                .frame(width: 26, height: 26)
-                .clipShape(RoundedRectangle(cornerRadius: CinefuseTokens.Radius.small))
-            Text("Pubfuse")
-                .font(CinefuseTokens.Typography.label)
-                .foregroundStyle(CinefuseTokens.ColorRole.textSecondary)
-        }
-        .padding(.horizontal, CinefuseTokens.Spacing.xs)
-        .padding(.vertical, CinefuseTokens.Spacing.xxs)
-        .background(
-            Capsule()
-                .fill(CinefuseTokens.ColorRole.surfaceSecondary)
-                .overlay(
-                    Capsule()
-                        .stroke(CinefuseTokens.ColorRole.borderSubtle, lineWidth: 1)
-                )
-        )
+        PubfuseLogoImage()
+            .frame(width: 92, height: 24)
     }
 }
 

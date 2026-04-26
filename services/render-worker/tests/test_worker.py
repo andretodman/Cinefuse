@@ -16,3 +16,9 @@ def test_run_once_processes():
     worker = RenderWorker()
     worker.enqueue(RenderJob(id="2", kind="clip", payload={}))
     assert worker.run_once() is True
+
+
+def test_run_once_redis_handles_connection_failure():
+    worker = RenderWorker()
+    worker.redis_url = "redis://127.0.0.1:1/0"
+    assert worker.run_once_redis() is False

@@ -8,6 +8,28 @@ final class MacAppTests: XCTestCase {
         model.userId = "usr_1"
         XCTAssertEqual(model.bearerToken, "user:usr_1")
     }
+
+    func testSessionPersistenceAndRestore() {
+        let suiteName = "cinefuse.tests.session.\(UUID().uuidString)"
+        guard let defaults = UserDefaults(suiteName: suiteName) else {
+            XCTFail("Could not create UserDefaults suite")
+            return
+        }
+        defaults.removePersistentDomain(forName: suiteName)
+
+        let first = AppModel(userDefaults: defaults)
+        first.signIn(userId: "usr_saved_1")
+        XCTAssertTrue(first.isAuthenticated)
+
+        let restored = AppModel(userDefaults: defaults)
+        XCTAssertEqual(restored.userId, "usr_saved_1")
+        XCTAssertTrue(restored.isAuthenticated)
+
+        restored.signOut()
+        let empty = AppModel(userDefaults: defaults)
+        XCTAssertFalse(empty.isAuthenticated)
+        XCTAssertEqual(empty.userId, "")
+    }
 }
 
 final class MacAppContractTests: XCTestCase {

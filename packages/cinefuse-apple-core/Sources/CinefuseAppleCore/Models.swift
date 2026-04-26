@@ -161,6 +161,9 @@ public struct ProjectEvent: Codable {
 
 @Observable
 public final class AppModel {
+    private static let storedUserIdKey = "cinefuse.auth.userId"
+    private let userDefaults: UserDefaults
+
     public var userId: String = ""
     public var isAuthenticated = false
     public var projects: [Project] = []
@@ -172,5 +175,36 @@ public final class AppModel {
         "user:\(userId)"
     }
 
-    public init() {}
+    public init(userDefaults: UserDefaults = .standard) {
+        self.userDefaults = userDefaults
+        restoreSession()
+    }
+
+    public func signIn(userId: String) {
+        let normalized = userId.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.userId = normalized
+        self.isAuthenticated = !normalized.isEmpty
+        if isAuthenticated {
+            userDefaults.set(normalized, forKey: Self.storedUserIdKey)
+        } else {
+            userDefaults.removeObject(forKey: Self.storedUserIdKey)
+        }
+    }
+
+    public func signOut() {
+        userId = ""
+        isAuthenticated = false
+        projects = []
+        balance = 0
+        isLoading = false
+        errorMessage = nil
+        userDefaults.removeObject(forKey: Self.storedUserIdKey)
+    }
+
+    public func restoreSession() {
+        let stored = (userDefaults.string(forKey: Self.storedUserIdKey) ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        userId = stored
+        isAuthenticated = !stored.isEmpty
+    }
 }

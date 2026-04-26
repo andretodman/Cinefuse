@@ -7,6 +7,7 @@
     "eval:clip": "node clip-eval.js",
     "eval:character": "node character-eval.js",
     "eval:audio": "node audio-eval.js",
-    "eval:export": "node export-eval.js"
+    "eval:export": "node export-eval.js",
+    "eval:script": "node script-eval.js"
   }
 }

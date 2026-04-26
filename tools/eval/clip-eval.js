@@ -47,13 +47,24 @@ async function main() {
       "POST",
       `/api/v1/cinefuse/projects/${projectId}/shots/${shot.shot.id}/generate`
     );
+    let finalShot = generate.shot;
+    let attempts = 0;
+    while (attempts < 30 && finalShot.status !== "ready" && finalShot.status !== "failed") {
+      attempts += 1;
+      await new Promise((resolve) => setTimeout(resolve, 80));
+      const listedShots = await request("GET", `/api/v1/cinefuse/projects/${projectId}/shots`);
+      finalShot = listedShots.shots.find((entry) => entry.id === shot.shot.id) ?? finalShot;
+    }
+    const jobs = await request("GET", `/api/v1/cinefuse/projects/${projectId}/jobs`);
+    const clipJob = jobs.jobs.find((entry) => entry.shotId === shot.shot.id && entry.kind === "clip");
     rows.push({
       id: item.id,
       modelTier: item.modelTier,
       sparksCost: quote.quote.sparksCost,
       estimatedDurationSec: quote.quote.estimatedDurationSec,
-      shotStatus: generate.shot.status,
-      jobStatus: generate.job.status
+      shotStatus: finalShot.status,
+      jobStatus: clipJob?.status ?? generate.job.status,
+      costToUsCents: clipJob?.costToUsCents ?? 0
     });
   }
 
@@ -76,9 +87,9 @@ async function main() {
     "",
     "## Results",
     "",
-    "| ID | Tier | Sparks | Duration(s) | Shot status | Job status |",
-    "| --- | --- | ---: | ---: | --- | --- |",
-    ...rows.map((row) => `| ${row.id} | ${row.modelTier} | ${row.sparksCost} | ${row.estimatedDurationSec ?? "-"} | ${row.shotStatus} | ${row.jobStatus} |`)
+    "| ID | Tier | Sparks | Duration(s) | Shot status | Job status | Cost to us (cents) |",
+    "| --- | --- | ---: | ---: | --- | --- | ---: |",
+    ...rows.map((row) => `| ${row.id} | ${row.modelTier} | ${row.sparksCost} | ${row.estimatedDurationSec ?? "-"} | ${row.shotStatus} | ${row.jobStatus} | ${row.costToUsCents} |`)
   ].join("\n");
 
   const outputDir = path.join(__dirname, "output");

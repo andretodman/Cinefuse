@@ -14,6 +14,15 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function shouldRetryStatus(status) {
+  return status === 429 || status === 500 || status === 502 || status === 503 || status === 504;
+}
+
+function fallbackClipUrl(input) {
+  const identifier = input?.shotId ?? "clip";
+  return `https://pubfuse.local/cinefuse/clips/${identifier}.mp4`;
+}
+
 async function generateViaProvider({ input, config, modelTier }) {
   const providerUrl = process.env.CINEFUSE_CLIP_PROVIDER_URL;
   if (!providerUrl) {
@@ -23,56 +32,69 @@ async function generateViaProvider({ input, config, modelTier }) {
       estimatedDurationSec: config.estimatedDurationSec,
       costToUsCents: config.costToUsCents,
       status: "ready",
-      clipUrl: `https://pubfuse.local/cinefuse/clips/${input?.shotId ?? "clip"}.mp4`
+      clipUrl: fallbackClipUrl(input)
     };
   }
 
   const maxAttempts = 4;
   let attempt = 0;
   let delayMs = 500;
+  let lastFailure = "unknown clip provider failure";
   while (attempt < maxAttempts) {
     attempt += 1;
-    const response = await fetch(providerUrl, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        authorization: process.env.CINEFUSE_CLIP_PROVIDER_TOKEN
-          ? `Bearer ${process.env.CINEFUSE_CLIP_PROVIDER_TOKEN}`
-          : ""
-      },
-      body: JSON.stringify({
-        prompt: input?.prompt ?? "",
-        modelTier,
-        modelId: config.modelId,
-        shotId: input?.shotId ?? null,
-        projectId: input?.projectId ?? null,
-        userId: input?.userId ?? null
-      })
-    });
+    try {
+      const response = await fetch(providerUrl, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          authorization: process.env.CINEFUSE_CLIP_PROVIDER_TOKEN
+            ? `Bearer ${process.env.CINEFUSE_CLIP_PROVIDER_TOKEN}`
+            : ""
+        },
+        body: JSON.stringify({
+          prompt: input?.prompt ?? "",
+          modelTier,
+          modelId: config.modelId,
+          shotId: input?.shotId ?? null,
+          projectId: input?.projectId ?? null,
+          userId: input?.userId ?? null
+        }),
+        signal: AbortSignal.timeout(20_000)
+      });
 
-    if (response.ok) {
-      const payload = await response.json();
-      return {
-        modelId: payload.modelId ?? config.modelId,
-        sparksCost: payload.sparksCost ?? config.sparks,
-        estimatedDurationSec: payload.estimatedDurationSec ?? config.estimatedDurationSec,
-        costToUsCents: payload.costToUsCents ?? config.costToUsCents,
-        status: payload.status ?? "ready",
-        clipUrl: payload.clipUrl
-      };
+      if (response.ok) {
+        const payload = await response.json();
+        return {
+          modelId: payload.modelId ?? config.modelId,
+          sparksCost: payload.sparksCost ?? config.sparks,
+          estimatedDurationSec: payload.estimatedDurationSec ?? config.estimatedDurationSec,
+          costToUsCents: payload.costToUsCents ?? config.costToUsCents,
+          status: payload.status ?? "ready",
+          clipUrl: payload.clipUrl ?? fallbackClipUrl(input)
+        };
+      }
+
+      const detail = await response.text();
+      lastFailure = `clip provider error (${response.status}): ${detail}`;
+      if (shouldRetryStatus(response.status) && attempt < maxAttempts) {
+        await sleep(delayMs);
+        delayMs *= 2;
+        continue;
+      }
+      throw new Error(lastFailure);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "unknown provider network failure";
+      lastFailure = message;
+      if (attempt < maxAttempts) {
+        await sleep(delayMs);
+        delayMs *= 2;
+        continue;
+      }
+      break;
     }
-
-    if (response.status === 429 && attempt < maxAttempts) {
-      await sleep(delayMs);
-      delayMs *= 2;
-      continue;
-    }
-
-    const detail = await response.text();
-    throw new Error(`clip provider error (${response.status}): ${detail}`);
   }
 
-  throw new Error("clip provider rate-limited after retries");
+  throw new Error(`clip generation failed after ${maxAttempts} attempts: ${lastFailure}`);
 }
 
 export function createServer() {
