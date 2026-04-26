@@ -12,5 +12,8 @@
     "test": "node --test src/index.test.js",
     "contract-test": "node --test src/contract.test.js",
     "clean": "node -e \"console.log('mcp-billing clean ok')\""
+  },
+  "dependencies": {
+    "pg": "^8.20.0"
   }
 }

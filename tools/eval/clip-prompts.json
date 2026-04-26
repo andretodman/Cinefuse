@@ -1,0 +1,12 @@
+[
+  { "id": "prompt-001", "prompt": "Wide establishing shot of a lighthouse in a storm at dusk", "modelTier": "standard" },
+  { "id": "prompt-002", "prompt": "Close-up dialogue shot of a nervous captain in moonlight", "modelTier": "standard" },
+  { "id": "prompt-003", "prompt": "Slow dolly through a neon alley after rain", "modelTier": "budget" },
+  { "id": "prompt-004", "prompt": "Aerial reveal of a frozen city at sunrise", "modelTier": "premium" },
+  { "id": "prompt-005", "prompt": "Tracking shot through a crowded market with handheld energy", "modelTier": "standard" },
+  { "id": "prompt-006", "prompt": "Intimate two-shot in candlelit cabin, shallow depth of field", "modelTier": "budget" },
+  { "id": "prompt-007", "prompt": "High-speed chase through mountain tunnel with sparks", "modelTier": "premium" },
+  { "id": "prompt-008", "prompt": "Quiet static composition of abandoned theater seats", "modelTier": "budget" },
+  { "id": "prompt-009", "prompt": "Hero entrance with dramatic backlight and drifting fog", "modelTier": "standard" },
+  { "id": "prompt-010", "prompt": "Overhead shot of map table and hands plotting a route", "modelTier": "budget" }
+]

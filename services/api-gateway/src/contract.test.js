@@ -3,13 +3,16 @@ import assert from "node:assert/strict";
 import { createHttpServer } from "./http-server.js";
 import { clearProjects } from "./project-store.js";
 
-const headers = {
-  authorization: "Bearer user:usr_contract",
-  "content-type": "application/json"
-};
+function authHeaders(userId) {
+  return {
+    authorization: `Bearer user:${userId}`,
+    "content-type": "application/json"
+  };
+}
 
 test("api contract: create/list projects and get spark balance", async () => {
-  clearProjects();
+  const headers = authHeaders("usr_contract_projects");
+  await clearProjects();
   const server = createHttpServer();
 
   await new Promise((resolve) => server.listen(0, resolve));
@@ -106,7 +109,7 @@ test("api contract: create/list projects and get spark balance", async () => {
   const balanceResponse = await fetch(`${baseUrl}/api/v1/cinefuse/sparks/balance`, { headers });
   assert.equal(balanceResponse.status, 200);
   const balanceBody = await balanceResponse.json();
-  assert.equal(balanceBody.balance, 100000);
+  assert.equal(balanceBody.balance, 99930);
 
   const deleteResponse = await fetch(`${baseUrl}/api/v1/cinefuse/projects/${projectId}`, {
     method: "DELETE",
@@ -131,7 +134,8 @@ test("api contract: create/list projects and get spark balance", async () => {
 });
 
 test("api contract: /v1/projects alias maps to canonical route with deprecation headers", async () => {
-  clearProjects();
+  const headers = authHeaders("usr_contract_alias");
+  await clearProjects();
   const server = createHttpServer();
 
   await new Promise((resolve) => server.listen(0, resolve));
@@ -165,6 +169,7 @@ test("api contract: /v1/projects alias maps to canonical route with deprecation 
 });
 
 test("api contract: spark canonical debit/credit and legacy balance alias", async () => {
+  const headers = authHeaders("usr_contract_sparks");
   const server = createHttpServer();
 
   await new Promise((resolve) => server.listen(0, resolve));
@@ -187,7 +192,7 @@ test("api contract: spark canonical debit/credit and legacy balance alias", asyn
   assert.equal(debitBody.ok, true);
   assert.equal(debitBody.transaction.kind, "debit");
   assert.equal(debitBody.transaction.amount, 70);
-  assert.equal(debitBody.balance, 100000);
+  assert.equal(debitBody.balance, 99930);
 
   const creditResponse = await fetch(`${baseUrl}/api/v1/cinefuse/sparks/credit`, {
     method: "POST",
@@ -226,7 +231,8 @@ test("api contract: spark canonical debit/credit and legacy balance alias", asyn
 });
 
 test("api contract: project events stream is available", async () => {
-  clearProjects();
+  const headers = authHeaders("usr_contract_events");
+  await clearProjects();
   const server = createHttpServer();
 
   await new Promise((resolve) => server.listen(0, resolve));
@@ -256,6 +262,128 @@ test("api contract: project events stream is available", async () => {
   const firstText = new TextDecoder().decode(firstChunk.value);
   assert.match(firstText, /"type":"connected"/);
   await reader.cancel();
+
+  await new Promise((resolve, reject) => {
+    server.close((error) => {
+      if (error) {
+        reject(error);
+        return;
+      }
+      resolve();
+    });
+  });
+});
+
+test("api contract: storyboard generation and scene revision", async () => {
+  const headers = authHeaders("usr_contract_storyboard");
+  await clearProjects();
+  const server = createHttpServer();
+
+  await new Promise((resolve) => server.listen(0, resolve));
+  const address = server.address();
+  const port = typeof address === "object" && address ? address.port : 0;
+  const baseUrl = `http://127.0.0.1:${port}`;
+
+  const createProject = await fetch(`${baseUrl}/api/v1/cinefuse/projects`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ title: "Storyboard Project", logline: "A diver searches for a missing beacon." })
+  });
+  assert.equal(createProject.status, 201);
+  const projectId = (await createProject.json()).project.id;
+
+  const generate = await fetch(`${baseUrl}/api/v1/cinefuse/projects/${projectId}/storyboard/generate`, {
+    method: "POST",
+    headers
+  });
+  assert.equal(generate.status, 200);
+  const generatedBody = await generate.json();
+  assert.equal(Array.isArray(generatedBody.scenes), true);
+  assert.equal(generatedBody.scenes.length >= 8, true);
+
+  const sceneId = generatedBody.scenes[0].id;
+  const revise = await fetch(`${baseUrl}/api/v1/cinefuse/projects/${projectId}/scenes/${sceneId}`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({
+      title: "Revised Opening",
+      revision: "The diver prepares gear in silence before sunrise.",
+      orderIndex: 0
+    })
+  });
+  assert.equal(revise.status, 200);
+  const revisedBody = await revise.json();
+  assert.equal(revisedBody.scene.title, "Revised Opening");
+
+  const listScenes = await fetch(`${baseUrl}/api/v1/cinefuse/projects/${projectId}/scenes`, { headers });
+  assert.equal(listScenes.status, 200);
+  const scenesBody = await listScenes.json();
+  assert.equal(scenesBody.scenes.length >= 8, true);
+
+  await new Promise((resolve, reject) => {
+    server.close((error) => {
+      if (error) {
+        reject(error);
+        return;
+      }
+      resolve();
+    });
+  });
+});
+
+test("api contract: character create/train and shot lock", async () => {
+  const headers = authHeaders("usr_contract_character");
+  await clearProjects();
+  const server = createHttpServer();
+
+  await new Promise((resolve) => server.listen(0, resolve));
+  const address = server.address();
+  const port = typeof address === "object" && address ? address.port : 0;
+  const baseUrl = `http://127.0.0.1:${port}`;
+
+  const createProject = await fetch(`${baseUrl}/api/v1/cinefuse/projects`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ title: "Character Project" })
+  });
+  assert.equal(createProject.status, 201);
+  const projectId = (await createProject.json()).project.id;
+
+  const createCharacter = await fetch(`${baseUrl}/api/v1/cinefuse/projects/${projectId}/characters`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ name: "Captain Mara", description: "Lead diver" })
+  });
+  assert.equal(createCharacter.status, 201);
+  const characterId = (await createCharacter.json()).character.id;
+
+  const trainCharacter = await fetch(
+    `${baseUrl}/api/v1/cinefuse/projects/${projectId}/characters/${characterId}/train`,
+    {
+      method: "POST",
+      headers
+    }
+  );
+  assert.equal(trainCharacter.status, 200);
+
+  const listCharacters = await fetch(`${baseUrl}/api/v1/cinefuse/projects/${projectId}/characters`, { headers });
+  assert.equal(listCharacters.status, 200);
+  const charactersBody = await listCharacters.json();
+  assert.equal(charactersBody.characters.length, 1);
+  assert.equal(charactersBody.characters[0].status, "trained");
+
+  const createShot = await fetch(`${baseUrl}/api/v1/cinefuse/projects/${projectId}/shots`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({
+      prompt: "Close-up of Captain Mara checking oxygen gauge",
+      modelTier: "standard",
+      characterLocks: [characterId]
+    })
+  });
+  assert.equal(createShot.status, 201);
+  const shotBody = await createShot.json();
+  assert.deepEqual(shotBody.shot.characterLocks, [characterId]);
 
   await new Promise((resolve, reject) => {
     server.close((error) => {

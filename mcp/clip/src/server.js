@@ -10,6 +10,71 @@ function resolveTierConfig(modelTier) {
   return TIER_CONFIG[modelTier] ?? TIER_CONFIG.budget;
 }
 
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function generateViaProvider({ input, config, modelTier }) {
+  const providerUrl = process.env.CINEFUSE_CLIP_PROVIDER_URL;
+  if (!providerUrl) {
+    return {
+      modelId: config.modelId,
+      sparksCost: config.sparks,
+      estimatedDurationSec: config.estimatedDurationSec,
+      costToUsCents: config.costToUsCents,
+      status: "ready",
+      clipUrl: `https://pubfuse.local/cinefuse/clips/${input?.shotId ?? "clip"}.mp4`
+    };
+  }
+
+  const maxAttempts = 4;
+  let attempt = 0;
+  let delayMs = 500;
+  while (attempt < maxAttempts) {
+    attempt += 1;
+    const response = await fetch(providerUrl, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: process.env.CINEFUSE_CLIP_PROVIDER_TOKEN
+          ? `Bearer ${process.env.CINEFUSE_CLIP_PROVIDER_TOKEN}`
+          : ""
+      },
+      body: JSON.stringify({
+        prompt: input?.prompt ?? "",
+        modelTier,
+        modelId: config.modelId,
+        shotId: input?.shotId ?? null,
+        projectId: input?.projectId ?? null,
+        userId: input?.userId ?? null
+      })
+    });
+
+    if (response.ok) {
+      const payload = await response.json();
+      return {
+        modelId: payload.modelId ?? config.modelId,
+        sparksCost: payload.sparksCost ?? config.sparks,
+        estimatedDurationSec: payload.estimatedDurationSec ?? config.estimatedDurationSec,
+        costToUsCents: payload.costToUsCents ?? config.costToUsCents,
+        status: payload.status ?? "ready",
+        clipUrl: payload.clipUrl
+      };
+    }
+
+    if (response.status === 429 && attempt < maxAttempts) {
+      await sleep(delayMs);
+      delayMs *= 2;
+      continue;
+    }
+
+    const detail = await response.text();
+    throw new Error(`clip provider error (${response.status}): ${detail}`);
+  }
+
+  throw new Error("clip provider rate-limited after retries");
+}
+
 export function createServer() {
   return {
     name: "clip",
@@ -52,18 +117,18 @@ export function createServer() {
       if (tool === "generate_clip" || tool === "regenerate_clip") {
         const modelTier = input?.modelTier ?? "budget";
         const config = resolveTierConfig(modelTier);
-        const clipId = input?.shotId ?? "clip";
+        const generation = await generateViaProvider({ input, config, modelTier });
         return {
           ok: true,
           server: "clip",
           tool,
           modelTier,
-          modelId: config.modelId,
-          sparksCost: config.sparks,
-          estimatedDurationSec: config.estimatedDurationSec,
-          costToUsCents: config.costToUsCents,
-          status: "ready",
-          clipUrl: `https://pubfuse.local/cinefuse/clips/${clipId}.mp4`,
+          modelId: generation.modelId,
+          sparksCost: generation.sparksCost,
+          estimatedDurationSec: generation.estimatedDurationSec,
+          costToUsCents: generation.costToUsCents,
+          status: generation.status,
+          clipUrl: generation.clipUrl,
           input: input ?? null
         };
       }

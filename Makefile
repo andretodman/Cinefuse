@@ -9,6 +9,7 @@ bootstrap:
 	python3 -m venv $(VENV)
 	$(PYTHON) -m pip install --upgrade pip
 	$(PYTHON) -m pip install pytest ruff
+	$(PYTHON) -m pip install -e services/render-worker
 
 dev:
 	docker compose -f infra/docker/docker-compose.yml up -d

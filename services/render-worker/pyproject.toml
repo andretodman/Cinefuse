@@ -3,7 +3,10 @@ name = "cinefuse-render-worker"
 version = "0.0.0"
 description = "Cinefuse M0 render worker stub"
 requires-python = ">=3.12"
-dependencies = []
+dependencies = [
+  "httpx>=0.28.1",
+  "redis>=6.0.0",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

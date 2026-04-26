@@ -3,8 +3,9 @@ from render_worker.worker import RenderJob, RenderWorker
 
 def main() -> None:
     worker = RenderWorker()
-    worker.enqueue(RenderJob(id="m0-job-1", kind="clip", payload={"mode": "stub"}))
+    worker.enqueue(RenderJob(id="warmup-job", kind="clip", payload={"mode": "stub"}))
     worker.run_once()
+    worker.run_forever()
 
 
 if __name__ == "__main__":

@@ -26,6 +26,29 @@ public struct Shot: Codable, Identifiable {
     public let modelTier: String
     public let status: String
     public let clipUrl: String?
+    public let characterLocks: [String]?
+}
+
+public struct StoryScene: Codable, Identifiable {
+    public let id: String
+    public let projectId: String
+    public let orderIndex: Int
+    public let title: String
+    public let description: String
+    public let mood: String
+}
+
+public struct ListScenesResponse: Codable {
+    public let scenes: [StoryScene]
+}
+
+public struct CreateSceneResponse: Codable {
+    public let scene: StoryScene
+}
+
+public struct GenerateStoryboardResponse: Codable {
+    public let projectId: String
+    public let scenes: [StoryScene]
 }
 
 public struct ListShotsResponse: Codable {
@@ -34,6 +57,23 @@ public struct ListShotsResponse: Codable {
 
 public struct CreateShotResponse: Codable {
     public let shot: Shot
+}
+
+public struct CharacterProfile: Codable, Identifiable {
+    public let id: String
+    public let projectId: String
+    public let name: String
+    public let description: String
+    public let status: String
+    public let previewUrl: String?
+}
+
+public struct ListCharactersResponse: Codable {
+    public let characters: [CharacterProfile]
+}
+
+public struct CreateCharacterResponse: Codable {
+    public let character: CharacterProfile
 }
 
 public struct ShotQuote: Codable {

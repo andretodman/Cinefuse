@@ -57,11 +57,16 @@ struct ProjectWorkspaceScreen: View {
     @FocusState private var isCreateProjectTitleFocused: Bool
 
     @State private var selectedProjectId: String?
+    @State private var scenes: [StoryScene] = []
+    @State private var characters: [CharacterProfile] = []
     @State private var shots: [Shot] = []
     @State private var jobs: [Job] = []
     @State private var shotPromptDraft = "Establishing shot of the location"
     @State private var shotModelTierDraft = "standard"
     @State private var quotedShotCost: ShotQuote?
+    @State private var newCharacterName = ""
+    @State private var newCharacterDescription = ""
+    @State private var selectedCharacterLockId = ""
     @State private var jobKindDraft = "clip"
     @State private var isLoadingProjectDetails = false
     @State private var isRefreshingProjectDetails = false
@@ -98,14 +103,23 @@ struct ProjectWorkspaceScreen: View {
                 ProjectDetailScreen(
                     project: selectedProject,
                     isLoadingProjectDetails: isLoadingProjectDetails,
+                    scenes: scenes,
+                    characters: characters,
                     shots: shots,
                     jobs: jobs,
                     shotPromptDraft: $shotPromptDraft,
                     shotModelTierDraft: $shotModelTierDraft,
+                    selectedCharacterLockId: $selectedCharacterLockId,
                     quotedShotCost: quotedShotCost,
+                    newCharacterName: $newCharacterName,
+                    newCharacterDescription: $newCharacterDescription,
                     jobKindDraft: $jobKindDraft,
                     onCloseProject: closeProject,
                     onDeleteProject: { Task { await deleteSelectedProject() } },
+                    onCreateCharacter: { Task { await createCharacter() } },
+                    onTrainCharacter: { characterId in Task { await trainCharacter(characterId: characterId) } },
+                    onGenerateStoryboard: { Task { await generateStoryboard() } },
+                    onReviseScene: { scene, revision in Task { await reviseScene(scene: scene, revision: revision) } },
                     onQuote: { Task { await quoteShot() } },
                     onCreateShot: { Task { await createShot() } },
                     onGenerateShot: { shotId in Task { await generateShot(shotId: shotId) } },
@@ -237,6 +251,8 @@ struct ProjectWorkspaceScreen: View {
 
     private func closeProject() {
         selectedProjectId = nil
+        scenes = []
+        characters = []
         quotedShotCost = nil
         shots = []
         jobs = []
@@ -267,6 +283,8 @@ struct ProjectWorkspaceScreen: View {
 
     private func loadSelectedProjectDetails(showLoadingIndicator: Bool = false) async {
         guard let selectedProjectId else {
+            scenes = []
+            characters = []
             shots = []
             jobs = []
             return
@@ -285,8 +303,12 @@ struct ProjectWorkspaceScreen: View {
             }
         }
         do {
+            async let projectScenes = api.listScenes(token: model.bearerToken, projectId: selectedProjectId)
+            async let projectCharacters = api.listCharacters(token: model.bearerToken, projectId: selectedProjectId)
             async let projectShots = api.listShots(token: model.bearerToken, projectId: selectedProjectId)
             async let projectJobs = api.listJobs(token: model.bearerToken, projectId: selectedProjectId)
+            let latestScenes = try await projectScenes
+            let latestCharacters = try await projectCharacters
             let latestShots = try await projectShots
             let latestJobs = try await projectJobs
             var transaction = Transaction()
@@ -294,6 +316,8 @@ struct ProjectWorkspaceScreen: View {
                 transaction.animation = nil
             }
             withTransaction(transaction) {
+                scenes = latestScenes
+                characters = latestCharacters
                 shots = latestShots
                 jobs = latestJobs
             }
@@ -349,9 +373,77 @@ struct ProjectWorkspaceScreen: View {
                 token: model.bearerToken,
                 projectId: selectedProjectId,
                 prompt: shotPromptDraft,
-                modelTier: shotModelTierDraft
+                modelTier: shotModelTierDraft,
+                characterLocks: selectedCharacterLockId.isEmpty ? [] : [selectedCharacterLockId]
             )
             quotedShotCost = nil
+            await loadSelectedProjectDetails(showLoadingIndicator: false)
+        } catch {
+            model.errorMessage = error.localizedDescription
+        }
+    }
+
+    private func generateStoryboard() async {
+        guard let project = selectedProject else { return }
+        model.errorMessage = nil
+        do {
+            _ = try await api.generateStoryboard(
+                token: model.bearerToken,
+                projectId: project.id,
+                logline: project.logline,
+                targetDurationMinutes: project.targetDurationMinutes,
+                tone: project.tone
+            )
+            await loadSelectedProjectDetails(showLoadingIndicator: false)
+        } catch {
+            model.errorMessage = error.localizedDescription
+        }
+    }
+
+    private func reviseScene(scene: StoryScene, revision: String) async {
+        guard let selectedProjectId else { return }
+        model.errorMessage = nil
+        do {
+            _ = try await api.reviseScene(
+                token: model.bearerToken,
+                projectId: selectedProjectId,
+                sceneId: scene.id,
+                title: scene.title,
+                revision: revision,
+                orderIndex: scene.orderIndex,
+                mood: scene.mood
+            )
+            await loadSelectedProjectDetails(showLoadingIndicator: false)
+        } catch {
+            model.errorMessage = error.localizedDescription
+        }
+    }
+
+    private func createCharacter() async {
+        guard let selectedProjectId else { return }
+        let normalizedName = newCharacterName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalizedName.isEmpty else { return }
+        model.errorMessage = nil
+        do {
+            _ = try await api.createCharacter(
+                token: model.bearerToken,
+                projectId: selectedProjectId,
+                name: normalizedName,
+                description: newCharacterDescription
+            )
+            newCharacterName = ""
+            newCharacterDescription = ""
+            await loadSelectedProjectDetails(showLoadingIndicator: false)
+        } catch {
+            model.errorMessage = error.localizedDescription
+        }
+    }
+
+    private func trainCharacter(characterId: String) async {
+        guard let selectedProjectId else { return }
+        model.errorMessage = nil
+        do {
+            _ = try await api.trainCharacter(token: model.bearerToken, projectId: selectedProjectId, characterId: characterId)
             await loadSelectedProjectDetails(showLoadingIndicator: false)
         } catch {
             model.errorMessage = error.localizedDescription
@@ -443,15 +535,24 @@ struct ProjectSidebar: View {
 struct ProjectDetailScreen: View {
     let project: Project?
     let isLoadingProjectDetails: Bool
+    let scenes: [StoryScene]
+    let characters: [CharacterProfile]
     let shots: [Shot]
     let jobs: [Job]
     @Binding var shotPromptDraft: String
     @Binding var shotModelTierDraft: String
+    @Binding var selectedCharacterLockId: String
     let quotedShotCost: ShotQuote?
+    @Binding var newCharacterName: String
+    @Binding var newCharacterDescription: String
     @Binding var jobKindDraft: String
 
     let onCloseProject: () -> Void
     let onDeleteProject: () -> Void
+    let onCreateCharacter: () -> Void
+    let onTrainCharacter: (String) -> Void
+    let onGenerateStoryboard: () -> Void
+    let onReviseScene: (StoryScene, String) -> Void
     let onQuote: () -> Void
     let onCreateShot: () -> Void
     let onGenerateShot: (String) -> Void
@@ -467,10 +568,24 @@ struct ProjectDetailScreen: View {
                             ProgressView("Refreshing shot and job status...")
                                 .font(CinefuseTokens.Typography.caption)
                         }
+                        StoryboardPanel(
+                            scenes: scenes,
+                            onGenerateStoryboard: onGenerateStoryboard,
+                            onReviseScene: onReviseScene
+                        )
+                        CharacterPanel(
+                            characters: characters,
+                            newCharacterName: $newCharacterName,
+                            newCharacterDescription: $newCharacterDescription,
+                            onCreateCharacter: onCreateCharacter,
+                            onTrainCharacter: onTrainCharacter
+                        )
                         ShotsPanel(
                             shots: shots,
+                            characterOptions: characters,
                             shotPromptDraft: $shotPromptDraft,
                             shotModelTierDraft: $shotModelTierDraft,
+                            selectedCharacterLockId: $selectedCharacterLockId,
                             quotedShotCost: quotedShotCost,
                             onQuote: onQuote,
                             onCreateShot: onCreateShot,
@@ -512,10 +627,131 @@ struct ProjectDetailScreen: View {
     }
 }
 
+struct StoryboardPanel: View {
+    let scenes: [StoryScene]
+    let onGenerateStoryboard: () -> Void
+    let onReviseScene: (StoryScene, String) -> Void
+
+    @State private var revisionDraftBySceneId: [String: String] = [:]
+
+    var body: some View {
+        SectionCard(
+            title: "Storyboard",
+            subtitle: "Generate and revise scene beats before creating detailed shots."
+        ) {
+            VStack(alignment: .leading, spacing: CinefuseTokens.Spacing.s) {
+                Button("Generate Beat Sheet") {
+                    onGenerateStoryboard()
+                }
+                .buttonStyle(PrimaryActionButtonStyle())
+
+                if scenes.isEmpty {
+                    EmptyStateCard(
+                        title: "No scenes generated",
+                        message: "Generate a beat sheet to create the storyboard for this project."
+                    )
+                } else {
+                    ForEach(scenes) { scene in
+                        VStack(alignment: .leading, spacing: CinefuseTokens.Spacing.xs) {
+                            Text("Scene \(scene.orderIndex + 1): \(scene.title)")
+                                .font(CinefuseTokens.Typography.cardTitle)
+                            Text(scene.description)
+                                .font(CinefuseTokens.Typography.caption)
+                                .foregroundStyle(CinefuseTokens.ColorRole.textSecondary)
+
+                            TextField(
+                                "Revise this scene beat",
+                                text: Binding(
+                                    get: { revisionDraftBySceneId[scene.id] ?? "" },
+                                    set: { revisionDraftBySceneId[scene.id] = $0 }
+                                )
+                            )
+                            .textFieldStyle(.roundedBorder)
+
+                            Button("Save Revision") {
+                                let revision = (revisionDraftBySceneId[scene.id] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                                guard !revision.isEmpty else { return }
+                                onReviseScene(scene, revision)
+                                revisionDraftBySceneId[scene.id] = ""
+                            }
+                            .buttonStyle(SecondaryActionButtonStyle())
+                        }
+                        .padding(CinefuseTokens.Spacing.s)
+                        .background(
+                            RoundedRectangle(cornerRadius: CinefuseTokens.Radius.medium)
+                                .fill(CinefuseTokens.ColorRole.surfaceSecondary)
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+struct CharacterPanel: View {
+    let characters: [CharacterProfile]
+    @Binding var newCharacterName: String
+    @Binding var newCharacterDescription: String
+    let onCreateCharacter: () -> Void
+    let onTrainCharacter: (String) -> Void
+
+    var body: some View {
+        SectionCard(
+            title: "Characters",
+            subtitle: "Create hero or supporting characters, then train and lock them to shots."
+        ) {
+            VStack(alignment: .leading, spacing: CinefuseTokens.Spacing.s) {
+                HStack(spacing: CinefuseTokens.Spacing.s) {
+                    TextField("Character name", text: $newCharacterName)
+                        .textFieldStyle(.roundedBorder)
+                    TextField("Description", text: $newCharacterDescription)
+                        .textFieldStyle(.roundedBorder)
+                    Button("Add Character", action: onCreateCharacter)
+                        .buttonStyle(PrimaryActionButtonStyle())
+                }
+
+                if characters.isEmpty {
+                    EmptyStateCard(
+                        title: "No characters created",
+                        message: "Add a character and train it before locking to key shots."
+                    )
+                } else {
+                    ForEach(characters) { character in
+                        HStack {
+                            VStack(alignment: .leading, spacing: CinefuseTokens.Spacing.xxs) {
+                                Text(character.name)
+                                    .font(CinefuseTokens.Typography.cardTitle)
+                                Text(character.description)
+                                    .font(CinefuseTokens.Typography.caption)
+                                    .foregroundStyle(CinefuseTokens.ColorRole.textSecondary)
+                            }
+                            Spacer()
+                            StatusBadge(status: character.status)
+                            if character.status != "trained" {
+                                Button("Train") {
+                                    onTrainCharacter(character.id)
+                                }
+                                .buttonStyle(SecondaryActionButtonStyle())
+                            }
+                        }
+                        .padding(CinefuseTokens.Spacing.s)
+                        .background(
+                            RoundedRectangle(cornerRadius: CinefuseTokens.Radius.medium)
+                                .fill(CinefuseTokens.ColorRole.surfaceSecondary)
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
 struct ShotsPanel: View {
     let shots: [Shot]
+    let characterOptions: [CharacterProfile]
     @Binding var shotPromptDraft: String
     @Binding var shotModelTierDraft: String
+    @Binding var selectedCharacterLockId: String
     let quotedShotCost: ShotQuote?
     let onQuote: () -> Void
     let onCreateShot: () -> Void
@@ -539,6 +775,14 @@ struct ShotsPanel: View {
                     }
                     .pickerStyle(.menu)
                     .frame(width: 130)
+                    Picker("Character Lock", selection: $selectedCharacterLockId) {
+                        Text("No lock").tag("")
+                        ForEach(characterOptions) { character in
+                            Text(character.name).tag(character.id)
+                        }
+                    }
+                    .pickerStyle(.menu)
+                    .frame(width: 170)
                     Button("Quote Cost", action: onQuote)
                         .buttonStyle(SecondaryActionButtonStyle())
                     Button("Create Shot", action: onCreateShot)
@@ -568,6 +812,12 @@ struct ShotsPanel: View {
                                         .font(CinefuseTokens.Typography.caption)
                                         .foregroundStyle(CinefuseTokens.ColorRole.textSecondary)
                                     StatusBadge(status: shot.status)
+                                    if let lock = shot.characterLocks?.first, !lock.isEmpty {
+                                        Text("Character lock")
+                                            .font(CinefuseTokens.Typography.caption)
+                                            .foregroundStyle(CinefuseTokens.ColorRole.textSecondary)
+                                            .help(lock)
+                                    }
                                     if let clipUrl = shot.clipUrl {
                                         Text("Output ready")
                                             .font(CinefuseTokens.Typography.caption)

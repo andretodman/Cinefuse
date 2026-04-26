@@ -1,16 +1,21 @@
 import { createServer } from "node:http";
 import { randomUUID } from "node:crypto";
+import { createClient } from "redis";
 import { parseBearerAuth } from "./auth.js";
 import { createMcpHost } from "./mcp-host.js";
 import {
   deleteProject,
   getProject,
   getShot,
+  listCharacters,
   listJobs,
   listProjects,
+  listScenes,
   listShots,
   saveJob,
   saveProject,
+  saveScene,
+  saveCharacter,
   saveShot
 } from "./project-store.js";
 
@@ -30,6 +35,9 @@ async function readBody(request) {
 function writeError(response, status, message, code) {
   return json(response, status, { error: message, code });
 }
+
+const RENDER_QUEUE_KEY = process.env.CINEFUSE_RENDER_QUEUE_KEY ?? "cinefuse:render_jobs";
+const WORKER_AUTH_TOKEN = process.env.CINEFUSE_WORKER_TOKEN ?? "cinefuse-dev-worker-token";
 
 function applyLegacyProjectsAliasHeaders(response, pathName) {
   if (pathName !== "/v1/projects") {
@@ -52,6 +60,22 @@ export function createHttpServer() {
   const renderQueue = [];
   const projectSubscribers = new Map();
   let isProcessingRenderQueue = false;
+  let redisClient;
+
+  function getRedisClient() {
+    if (redisClient) {
+      return redisClient;
+    }
+    const redisUrl = process.env.CINEFUSE_REDIS_URL ?? process.env.REDIS_URL;
+    if (!redisUrl) {
+      return null;
+    }
+    redisClient = createClient({ url: redisUrl });
+    redisClient.on("error", () => {
+      // Fall back to in-process queue if Redis is unavailable.
+    });
+    return redisClient;
+  }
 
   function publishProjectEvent(projectId, payload) {
     const subscribers = projectSubscribers.get(projectId);
@@ -77,6 +101,111 @@ export function createHttpServer() {
     }
   }
 
+  async function processRenderTask(task) {
+    const currentShot = await getShot(task.shotId, task.projectId);
+    if (!currentShot) {
+      await saveJob({
+        id: task.jobId,
+        status: "failed",
+        outputPayload: { error: "shot not found during generation" }
+      });
+      publishProjectEvent(task.projectId, {
+        type: "job_status_changed",
+        jobId: task.jobId,
+        shotId: task.shotId,
+        status: "failed"
+      });
+      return;
+    }
+
+    await saveShot({
+      ...currentShot,
+      status: "generating"
+    });
+    await saveJob({
+      id: task.jobId,
+      status: "running"
+    });
+    publishProjectEvent(task.projectId, {
+      type: "shot_status_changed",
+      shotId: task.shotId,
+      status: "generating"
+    });
+    publishProjectEvent(task.projectId, {
+      type: "job_status_changed",
+      jobId: task.jobId,
+      shotId: task.shotId,
+      status: "running"
+    });
+
+    try {
+      const generation = await mcpHost.invoke("clip", "generate_clip", {
+        shotId: task.shotId,
+        projectId: task.projectId,
+        prompt: currentShot.prompt,
+        modelTier: currentShot.modelTier,
+        userId: task.userId
+      });
+
+      await saveShot({
+        ...currentShot,
+        status: generation.status ?? "ready",
+        clipUrl: generation.clipUrl ?? null
+      });
+      await saveJob({
+        id: task.jobId,
+        status: "done",
+        outputPayload: {
+          modelId: generation.modelId ?? null,
+          clipUrl: generation.clipUrl ?? null,
+          sparksCost: task.quote.sparksCost
+        },
+        costToUsCents: generation.costToUsCents ?? 0
+      });
+      publishProjectEvent(task.projectId, {
+        type: "shot_status_changed",
+        shotId: task.shotId,
+        status: generation.status ?? "ready"
+      });
+      publishProjectEvent(task.projectId, {
+        type: "job_status_changed",
+        jobId: task.jobId,
+        shotId: task.shotId,
+        status: "done"
+      });
+    } catch (error) {
+      await saveShot({
+        ...currentShot,
+        status: "failed"
+      });
+      await saveJob({
+        id: task.jobId,
+        status: "failed",
+        outputPayload: {
+          error: error instanceof Error ? error.message : "generation failed"
+        }
+      });
+      publishProjectEvent(task.projectId, {
+        type: "shot_status_changed",
+        shotId: task.shotId,
+        status: "failed"
+      });
+      publishProjectEvent(task.projectId, {
+        type: "job_status_changed",
+        jobId: task.jobId,
+        shotId: task.shotId,
+        status: "failed"
+      });
+      await mcpHost.invoke("billing", "credit", {
+        userId: task.userId,
+        amount: task.quote.sparksCost,
+        idempotencyKey: `shot-generate-refund:${task.shotId}`,
+        relatedResourceType: "shot",
+        relatedResourceId: task.shotId
+      });
+    }
+  }
+
   async function processRenderQueue() {
     if (isProcessingRenderQueue) {
       return;
@@ -88,118 +217,45 @@ export function createHttpServer() {
         if (!task) {
           continue;
         }
-
-        const currentShot = getShot(task.shotId, task.projectId);
-        if (!currentShot) {
-          saveJob({
-            id: task.jobId,
-            status: "failed",
-            outputPayload: { error: "shot not found during generation" }
-          });
-          publishProjectEvent(task.projectId, {
-            type: "job_status_changed",
-            jobId: task.jobId,
-            shotId: task.shotId,
-            status: "failed"
-          });
-          continue;
-        }
-
-        saveShot({
-          ...currentShot,
-          status: "generating"
-        });
-        saveJob({
-          id: task.jobId,
-          status: "running"
-        });
-        publishProjectEvent(task.projectId, {
-          type: "shot_status_changed",
-          shotId: task.shotId,
-          status: "generating"
-        });
-        publishProjectEvent(task.projectId, {
-          type: "job_status_changed",
-          jobId: task.jobId,
-          shotId: task.shotId,
-          status: "running"
-        });
-
-        try {
-          const generation = await mcpHost.invoke("clip", "generate_clip", {
-            shotId: task.shotId,
-            projectId: task.projectId,
-            prompt: currentShot.prompt,
-            modelTier: currentShot.modelTier,
-            userId: task.userId
-          });
-
-          saveShot({
-            ...currentShot,
-            status: generation.status ?? "ready",
-            clipUrl: generation.clipUrl ?? null
-          });
-          saveJob({
-            id: task.jobId,
-            status: "done",
-            outputPayload: {
-              modelId: generation.modelId ?? null,
-              clipUrl: generation.clipUrl ?? null,
-              sparksCost: task.quote.sparksCost
-            },
-            costToUsCents: generation.costToUsCents ?? 0
-          });
-          publishProjectEvent(task.projectId, {
-            type: "shot_status_changed",
-            shotId: task.shotId,
-            status: generation.status ?? "ready"
-          });
-          publishProjectEvent(task.projectId, {
-            type: "job_status_changed",
-            jobId: task.jobId,
-            shotId: task.shotId,
-            status: "done"
-          });
-        } catch (error) {
-          saveShot({
-            ...currentShot,
-            status: "failed"
-          });
-          saveJob({
-            id: task.jobId,
-            status: "failed",
-            outputPayload: {
-              error: error instanceof Error ? error.message : "generation failed"
-            }
-          });
-          publishProjectEvent(task.projectId, {
-            type: "shot_status_changed",
-            shotId: task.shotId,
-            status: "failed"
-          });
-          publishProjectEvent(task.projectId, {
-            type: "job_status_changed",
-            jobId: task.jobId,
-            shotId: task.shotId,
-            status: "failed"
-          });
-          await mcpHost.invoke("billing", "credit", {
-            userId: task.userId,
-            amount: task.quote.sparksCost,
-            idempotencyKey: `shot-generate-refund:${task.shotId}`,
-            relatedResourceType: "shot",
-            relatedResourceId: task.shotId
-          });
-        }
+        await processRenderTask(task);
       }
     } finally {
       isProcessingRenderQueue = false;
     }
   }
 
+  async function enqueueRenderTask(task) {
+    const redis = getRedisClient();
+    if (redis) {
+      try {
+        if (!redis.isOpen) {
+          await redis.connect();
+        }
+        await redis.rPush(RENDER_QUEUE_KEY, JSON.stringify(task));
+        return;
+      } catch {
+        // Fall through to in-process queue if Redis enqueue fails.
+      }
+    }
+
+    renderQueue.push(task);
+    queueMicrotask(() => {
+      void processRenderQueue();
+    });
+  }
+
   return createServer(async (request, response) => {
     const method = request.method ?? "GET";
     const url = new URL(request.url ?? "/", "http://localhost");
+
+    if (method === "POST" && url.pathname === "/api/v1/internal/render/process") {
+      if (request.headers["x-cinefuse-worker-token"] !== WORKER_AUTH_TOKEN) {
+        return writeError(response, 401, "unauthorized worker", "UNAUTHORIZED_WORKER");
+      }
+      const task = await readBody(request);
+      await processRenderTask(task);
+      return json(response, 200, { ok: true });
+    }
 
     if (method === "GET" && url.pathname === "/health") {
       return json(response, 200, { ok: true, service: "api-gateway" });
@@ -221,7 +277,7 @@ export function createHttpServer() {
     const projectEventsMatch = url.pathname.match(/^\/api\/v1\/cinefuse\/projects\/([^/]+)\/events$/);
     if (projectEventsMatch && method === "GET") {
       const projectId = decodeURIComponent(projectEventsMatch[1]);
-      const project = getProject(projectId, auth.userId);
+      const project = await getProject(projectId, auth.userId);
       if (!project) {
         return writeError(response, 404, "project not found", "PROJECT_NOT_FOUND");
       }
@@ -339,7 +395,7 @@ export function createHttpServer() {
     ) {
       applyLegacyProjectsAliasHeaders(response, url.pathname);
       return json(response, 200, {
-        projects: listProjects(auth.userId)
+        projects: await listProjects(auth.userId)
       });
     }
 
@@ -349,7 +405,7 @@ export function createHttpServer() {
     ) {
       applyLegacyProjectsAliasHeaders(response, url.pathname);
       const payload = await readBody(request);
-      const project = saveProject({
+      const project = await saveProject({
         id: payload.id ?? randomUUID(),
         ownerUserId: auth.userId,
         title: payload.title ?? "Untitled project",
@@ -372,7 +428,7 @@ export function createHttpServer() {
     const projectDetailMatch = url.pathname.match(/^\/api\/v1\/cinefuse\/projects\/([^/]+)$/);
     if (projectDetailMatch && method === "GET") {
       const projectId = decodeURIComponent(projectDetailMatch[1]);
-      const project = getProject(projectId, auth.userId);
+      const project = await getProject(projectId, auth.userId);
       if (!project) {
         return writeError(response, 404, "project not found", "PROJECT_NOT_FOUND");
       }
@@ -380,18 +436,168 @@ export function createHttpServer() {
     }
     if (projectDetailMatch && method === "DELETE") {
       const projectId = decodeURIComponent(projectDetailMatch[1]);
-      const deleted = deleteProject(projectId, auth.userId);
+      const deleted = await deleteProject(projectId, auth.userId);
       if (!deleted) {
         return writeError(response, 404, "project not found", "PROJECT_NOT_FOUND");
       }
       return json(response, 200, { ok: true, deletedProjectId: projectId });
     }
 
+    const scenesMatch = url.pathname.match(/^\/api\/v1\/cinefuse\/projects\/([^/]+)\/scenes$/);
+    if (scenesMatch && method === "GET") {
+      const projectId = decodeURIComponent(scenesMatch[1]);
+      const project = await getProject(projectId, auth.userId);
+      if (!project) {
+        return writeError(response, 404, "project not found", "PROJECT_NOT_FOUND");
+      }
+      return json(response, 200, { scenes: await listScenes(projectId) });
+    }
+    if (scenesMatch && method === "POST") {
+      const projectId = decodeURIComponent(scenesMatch[1]);
+      const project = await getProject(projectId, auth.userId);
+      if (!project) {
+        return writeError(response, 404, "project not found", "PROJECT_NOT_FOUND");
+      }
+      const payload = await readBody(request);
+      const scene = await saveScene({
+        id: payload.id ?? randomUUID(),
+        projectId,
+        orderIndex: payload.orderIndex ?? 0,
+        title: payload.title ?? "Untitled Scene",
+        description: payload.description ?? "",
+        mood: payload.mood ?? project.tone
+      });
+      return json(response, 201, { scene });
+    }
+
+    const reviseSceneMatch = url.pathname.match(/^\/api\/v1\/cinefuse\/projects\/([^/]+)\/scenes\/([^/]+)$/);
+    if (reviseSceneMatch && method === "POST") {
+      const projectId = decodeURIComponent(reviseSceneMatch[1]);
+      const sceneId = decodeURIComponent(reviseSceneMatch[2]);
+      const project = await getProject(projectId, auth.userId);
+      if (!project) {
+        return writeError(response, 404, "project not found", "PROJECT_NOT_FOUND");
+      }
+      const payload = await readBody(request);
+      const revised = await mcpHost.invoke("script", "revise_scene", {
+        sceneId,
+        title: payload.title,
+        description: payload.description,
+        revision: payload.revision,
+        mood: payload.mood ?? project.tone,
+        orderIndex: payload.orderIndex ?? 0
+      });
+      const scene = await saveScene({
+        id: sceneId,
+        projectId,
+        orderIndex: revised.scene.orderIndex ?? 0,
+        title: revised.scene.title,
+        description: revised.scene.description,
+        mood: revised.scene.mood ?? project.tone
+      });
+      return json(response, 200, { scene });
+    }
+
+    const generateStoryboardMatch = url.pathname.match(
+      /^\/api\/v1\/cinefuse\/projects\/([^/]+)\/storyboard\/generate$/
+    );
+    if (generateStoryboardMatch && method === "POST") {
+      const projectId = decodeURIComponent(generateStoryboardMatch[1]);
+      const project = await getProject(projectId, auth.userId);
+      if (!project) {
+        return writeError(response, 404, "project not found", "PROJECT_NOT_FOUND");
+      }
+      const payload = await readBody(request);
+      const beatSheet = await mcpHost.invoke("script", "generate_beat_sheet", {
+        logline: payload.logline ?? project.logline,
+        targetDurationMinutes: payload.targetDurationMinutes ?? project.targetDurationMinutes,
+        tone: payload.tone ?? project.tone
+      });
+
+      const scenes = [];
+      for (const scene of beatSheet.scenes ?? []) {
+        const savedScene = await saveScene({
+          id: scene.id ?? randomUUID(),
+          projectId,
+          orderIndex: scene.orderIndex ?? 0,
+          title: scene.title ?? "Untitled Scene",
+          description: scene.description ?? "",
+          mood: scene.mood ?? project.tone
+        });
+        scenes.push(savedScene);
+      }
+
+      return json(response, 200, {
+        projectId,
+        summary: beatSheet.summary ?? null,
+        scenes
+      });
+    }
+
+    const charactersMatch = url.pathname.match(/^\/api\/v1\/cinefuse\/projects\/([^/]+)\/characters$/);
+    if (charactersMatch && method === "GET") {
+      const projectId = decodeURIComponent(charactersMatch[1]);
+      const project = await getProject(projectId, auth.userId);
+      if (!project) {
+        return writeError(response, 404, "project not found", "PROJECT_NOT_FOUND");
+      }
+      return json(response, 200, { characters: await listCharacters(projectId) });
+    }
+    if (charactersMatch && method === "POST") {
+      const projectId = decodeURIComponent(charactersMatch[1]);
+      const project = await getProject(projectId, auth.userId);
+      if (!project) {
+        return writeError(response, 404, "project not found", "PROJECT_NOT_FOUND");
+      }
+      const payload = await readBody(request);
+      const characterId = payload.id ?? randomUUID();
+      const created = await mcpHost.invoke("character", "create_character", {
+        id: characterId,
+        projectId,
+        name: payload.name ?? "Untitled Character",
+        description: payload.description ?? ""
+      });
+      const character = await saveCharacter({
+        id: characterId,
+        projectId,
+        name: created.character?.name ?? payload.name ?? "Untitled Character",
+        description: created.character?.description ?? payload.description ?? "",
+        status: created.character?.status ?? "draft",
+        previewUrl: created.character?.previewUrl ?? null
+      });
+      return json(response, 201, { character });
+    }
+
+    const trainCharacterMatch = url.pathname.match(
+      /^\/api\/v1\/cinefuse\/projects\/([^/]+)\/characters\/([^/]+)\/train$/
+    );
+    if (trainCharacterMatch && method === "POST") {
+      const projectId = decodeURIComponent(trainCharacterMatch[1]);
+      const characterId = decodeURIComponent(trainCharacterMatch[2]);
+      const project = await getProject(projectId, auth.userId);
+      if (!project) {
+        return writeError(response, 404, "project not found", "PROJECT_NOT_FOUND");
+      }
+      const trained = await mcpHost.invoke("character", "train_identity", {
+        projectId,
+        characterId
+      });
+      const character = await saveCharacter({
+        id: characterId,
+        projectId,
+        name: trained.character?.name ?? "Untitled Character",
+        description: trained.character?.description ?? "",
+        status: trained.character?.status ?? "trained",
+        previewUrl: trained.character?.previewUrl ?? null
+      });
+      return json(response, 200, { character, sparksCost: trained.sparksCost ?? 0 });
+    }
+
     const shotsMatch = url.pathname.match(/^\/api\/v1\/cinefuse\/projects\/([^/]+)\/shots$/);
     const shotQuoteMatch = url.pathname.match(/^\/api\/v1\/cinefuse\/projects\/([^/]+)\/shots\/quote$/);
     if (shotQuoteMatch && method === "POST") {
       const projectId = decodeURIComponent(shotQuoteMatch[1]);
-      const project = getProject(projectId, auth.userId);
+      const project = await getProject(projectId, auth.userId);
       if (!project) {
         return writeError(response, 404, "project not found", "PROJECT_NOT_FOUND");
       }
@@ -404,6 +610,7 @@ export function createHttpServer() {
         prompt: payload.prompt,
         modelTier,
         projectId,
+        characterLocks: payload.characterLocks ?? [],
         userId: auth.userId
       });
       return json(response, 200, {
@@ -417,26 +624,27 @@ export function createHttpServer() {
     }
     if (shotsMatch && method === "GET") {
       const projectId = decodeURIComponent(shotsMatch[1]);
-      const project = getProject(projectId, auth.userId);
+      const project = await getProject(projectId, auth.userId);
       if (!project) {
         return writeError(response, 404, "project not found", "PROJECT_NOT_FOUND");
       }
-      return json(response, 200, { shots: listShots(projectId) });
+      return json(response, 200, { shots: await listShots(projectId) });
     }
     if (shotsMatch && method === "POST") {
       const projectId = decodeURIComponent(shotsMatch[1]);
-      const project = getProject(projectId, auth.userId);
+      const project = await getProject(projectId, auth.userId);
       if (!project) {
         return writeError(response, 404, "project not found", "PROJECT_NOT_FOUND");
       }
       const payload = await readBody(request);
-      const shot = saveShot({
+      const shot = await saveShot({
         id: payload.id ?? randomUUID(),
         projectId,
         prompt: payload.prompt ?? "",
         modelTier: payload.modelTier ?? "budget",
         status: payload.status ?? "draft",
-        clipUrl: payload.clipUrl ?? null
+        clipUrl: payload.clipUrl ?? null,
+        characterLocks: payload.characterLocks ?? []
       });
       return json(response, 201, { shot });
     }
@@ -447,11 +655,11 @@ export function createHttpServer() {
     if (shotGenerateMatch && method === "POST") {
       const projectId = decodeURIComponent(shotGenerateMatch[1]);
       const shotId = decodeURIComponent(shotGenerateMatch[2]);
-      const project = getProject(projectId, auth.userId);
+      const project = await getProject(projectId, auth.userId);
       if (!project) {
         return writeError(response, 404, "project not found", "PROJECT_NOT_FOUND");
       }
-      const shot = getShot(shotId, projectId);
+      const shot = await getShot(shotId, projectId);
       if (!shot) {
         return writeError(response, 404, "shot not found", "SHOT_NOT_FOUND");
       }
@@ -464,6 +672,7 @@ export function createHttpServer() {
         projectId,
         prompt: shot.prompt,
         modelTier: shot.modelTier,
+        characterLocks: shot.characterLocks ?? [],
         userId: auth.userId
       });
 
@@ -475,12 +684,12 @@ export function createHttpServer() {
         relatedResourceId: shotId
       });
 
-      const queuedShot = saveShot({
+      const queuedShot = await saveShot({
         ...shot,
         status: "queued"
       });
       const jobId = randomUUID();
-      const job = saveJob({
+      const job = await saveJob({
         id: jobId,
         projectId,
         shotId: queuedShot.id,
@@ -505,15 +714,12 @@ export function createHttpServer() {
         shotId,
         status: "queued"
       });
-      renderQueue.push({
+      await enqueueRenderTask({
         jobId,
         shotId,
         projectId,
         userId: auth.userId,
         quote
-      });
-      queueMicrotask(() => {
-        void processRenderQueue();
       });
 
       return json(response, 200, {
@@ -531,20 +737,20 @@ export function createHttpServer() {
     const jobsMatch = url.pathname.match(/^\/api\/v1\/cinefuse\/projects\/([^/]+)\/jobs$/);
     if (jobsMatch && method === "GET") {
       const projectId = decodeURIComponent(jobsMatch[1]);
-      const project = getProject(projectId, auth.userId);
+      const project = await getProject(projectId, auth.userId);
       if (!project) {
         return writeError(response, 404, "project not found", "PROJECT_NOT_FOUND");
       }
-      return json(response, 200, { jobs: listJobs(projectId) });
+      return json(response, 200, { jobs: await listJobs(projectId) });
     }
     if (jobsMatch && method === "POST") {
       const projectId = decodeURIComponent(jobsMatch[1]);
-      const project = getProject(projectId, auth.userId);
+      const project = await getProject(projectId, auth.userId);
       if (!project) {
         return writeError(response, 404, "project not found", "PROJECT_NOT_FOUND");
       }
       const payload = await readBody(request);
-      const job = saveJob({
+      const job = await saveJob({
         id: payload.id ?? randomUUID(),
         projectId,
         shotId: payload.shotId ?? null,

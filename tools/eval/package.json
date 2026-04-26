@@ -1,0 +1,9 @@
+{
+  "name": "@cinefuse/eval",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "eval:clip": "node clip-eval.js"
+  }
+}

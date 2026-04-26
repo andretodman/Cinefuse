@@ -45,6 +45,60 @@ public struct APIClient {
         return try JSONDecoder().decode(ListShotsResponse.self, from: data).shots
     }
 
+    public func listScenes(token: String, projectId: String) async throws -> [StoryScene] {
+        var request = URLRequest(url: buildURL(path: "\(Self.cinefusePrefix)/projects/\(projectId)/scenes"))
+        request.httpMethod = "GET"
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        let (data, response) = try await URLSession.shared.data(for: request)
+        try validate(response: response, data: data)
+        return try JSONDecoder().decode(ListScenesResponse.self, from: data).scenes
+    }
+
+    public func generateStoryboard(
+        token: String,
+        projectId: String,
+        logline: String,
+        targetDurationMinutes: Int,
+        tone: String
+    ) async throws -> [StoryScene] {
+        var request = URLRequest(url: buildURL(path: "\(Self.cinefusePrefix)/projects/\(projectId)/storyboard/generate"))
+        request.httpMethod = "POST"
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONEncoder().encode([
+            "logline": AnyEncodable(logline),
+            "targetDurationMinutes": AnyEncodable(targetDurationMinutes),
+            "tone": AnyEncodable(tone)
+        ] as [String: AnyEncodable])
+        let (data, response) = try await URLSession.shared.data(for: request)
+        try validate(response: response, data: data)
+        return try JSONDecoder().decode(GenerateStoryboardResponse.self, from: data).scenes
+    }
+
+    public func reviseScene(
+        token: String,
+        projectId: String,
+        sceneId: String,
+        title: String,
+        revision: String,
+        orderIndex: Int,
+        mood: String
+    ) async throws -> StoryScene {
+        var request = URLRequest(url: buildURL(path: "\(Self.cinefusePrefix)/projects/\(projectId)/scenes/\(sceneId)"))
+        request.httpMethod = "POST"
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONEncoder().encode([
+            "title": AnyEncodable(title),
+            "revision": AnyEncodable(revision),
+            "orderIndex": AnyEncodable(orderIndex),
+            "mood": AnyEncodable(mood)
+        ] as [String: AnyEncodable])
+        let (data, response) = try await URLSession.shared.data(for: request)
+        try validate(response: response, data: data)
+        return try JSONDecoder().decode(CreateSceneResponse.self, from: data).scene
+    }
+
     public func quoteShot(token: String, projectId: String, prompt: String, modelTier: String) async throws -> ShotQuote {
         var request = URLRequest(url: buildURL(path: "\(Self.cinefusePrefix)/projects/\(projectId)/shots/quote"))
         request.httpMethod = "POST"
@@ -56,15 +110,57 @@ public struct APIClient {
         return try JSONDecoder().decode(QuoteShotResponse.self, from: data).quote
     }
 
-    public func createShot(token: String, projectId: String, prompt: String, modelTier: String) async throws -> Shot {
+    public func createShot(
+        token: String,
+        projectId: String,
+        prompt: String,
+        modelTier: String,
+        characterLocks: [String] = []
+    ) async throws -> Shot {
         var request = URLRequest(url: buildURL(path: "\(Self.cinefusePrefix)/projects/\(projectId)/shots"))
         request.httpMethod = "POST"
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = try JSONEncoder().encode(["prompt": prompt, "modelTier": modelTier])
+        request.httpBody = try JSONEncoder().encode([
+            "prompt": AnyEncodable(prompt),
+            "modelTier": AnyEncodable(modelTier),
+            "characterLocks": AnyEncodable(characterLocks)
+        ] as [String: AnyEncodable])
         let (data, response) = try await URLSession.shared.data(for: request)
         try validate(response: response, data: data)
         return try JSONDecoder().decode(CreateShotResponse.self, from: data).shot
+    }
+
+    public func listCharacters(token: String, projectId: String) async throws -> [CharacterProfile] {
+        var request = URLRequest(url: buildURL(path: "\(Self.cinefusePrefix)/projects/\(projectId)/characters"))
+        request.httpMethod = "GET"
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        let (data, response) = try await URLSession.shared.data(for: request)
+        try validate(response: response, data: data)
+        return try JSONDecoder().decode(ListCharactersResponse.self, from: data).characters
+    }
+
+    public func createCharacter(token: String, projectId: String, name: String, description: String) async throws -> CharacterProfile {
+        var request = URLRequest(url: buildURL(path: "\(Self.cinefusePrefix)/projects/\(projectId)/characters"))
+        request.httpMethod = "POST"
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONEncoder().encode([
+            "name": AnyEncodable(name),
+            "description": AnyEncodable(description)
+        ] as [String: AnyEncodable])
+        let (data, response) = try await URLSession.shared.data(for: request)
+        try validate(response: response, data: data)
+        return try JSONDecoder().decode(CreateCharacterResponse.self, from: data).character
+    }
+
+    public func trainCharacter(token: String, projectId: String, characterId: String) async throws -> CharacterProfile {
+        var request = URLRequest(url: buildURL(path: "\(Self.cinefusePrefix)/projects/\(projectId)/characters/\(characterId)/train"))
+        request.httpMethod = "POST"
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        let (data, response) = try await URLSession.shared.data(for: request)
+        try validate(response: response, data: data)
+        return try JSONDecoder().decode(CreateCharacterResponse.self, from: data).character
     }
 
     public func generateShot(token: String, projectId: String, shotId: String) async throws -> GenerateShotResponse {
@@ -206,4 +302,16 @@ public struct APIClient {
 private struct ErrorEnvelope: Codable {
     let error: String
     let code: String
+}
+
+private struct AnyEncodable: Encodable {
+    private let encodeImpl: (Encoder) throws -> Void
+
+    init<T: Encodable>(_ value: T) {
+        encodeImpl = value.encode
+    }
+
+    func encode(to encoder: Encoder) throws {
+        try encodeImpl(encoder)
+    }
 }
