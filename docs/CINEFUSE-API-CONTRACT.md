@@ -26,6 +26,8 @@ All clients and services should target these routes.
 
 - `POST /api/v1/cinefuse/projects/{projectId}/shots`
 - `GET /api/v1/cinefuse/projects/{projectId}/shots`
+- `POST /api/v1/cinefuse/projects/{projectId}/shots/quote`
+- `POST /api/v1/cinefuse/projects/{projectId}/shots/{shotId}/generate`
 
 ### Jobs
 

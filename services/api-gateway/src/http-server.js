@@ -3,7 +3,9 @@ import { randomUUID } from "node:crypto";
 import { parseBearerAuth } from "./auth.js";
 import { createMcpHost } from "./mcp-host.js";
 import {
+  deleteProject,
   getProject,
+  getShot,
   listJobs,
   listProjects,
   listShots,
@@ -186,8 +188,43 @@ export function createHttpServer() {
       }
       return json(response, 200, { project });
     }
+    if (projectDetailMatch && method === "DELETE") {
+      const projectId = decodeURIComponent(projectDetailMatch[1]);
+      const deleted = deleteProject(projectId, auth.userId);
+      if (!deleted) {
+        return writeError(response, 404, "project not found", "PROJECT_NOT_FOUND");
+      }
+      return json(response, 200, { ok: true, deletedProjectId: projectId });
+    }
 
     const shotsMatch = url.pathname.match(/^\/api\/v1\/cinefuse\/projects\/([^/]+)\/shots$/);
+    const shotQuoteMatch = url.pathname.match(/^\/api\/v1\/cinefuse\/projects\/([^/]+)\/shots\/quote$/);
+    if (shotQuoteMatch && method === "POST") {
+      const projectId = decodeURIComponent(shotQuoteMatch[1]);
+      const project = getProject(projectId, auth.userId);
+      if (!project) {
+        return writeError(response, 404, "project not found", "PROJECT_NOT_FOUND");
+      }
+      const payload = await readBody(request);
+      if (typeof payload.prompt !== "string" || payload.prompt.trim().length === 0) {
+        return writeError(response, 400, "prompt required", "PROMPT_REQUIRED");
+      }
+      const modelTier = payload.modelTier ?? "budget";
+      const quote = await mcpHost.invoke("clip", "quote_clip", {
+        prompt: payload.prompt,
+        modelTier,
+        projectId,
+        userId: auth.userId
+      });
+      return json(response, 200, {
+        quote: {
+          sparksCost: quote.sparksCost,
+          modelTier: quote.modelTier,
+          modelId: quote.modelId,
+          estimatedDurationSec: quote.estimatedDurationSec
+        }
+      });
+    }
     if (shotsMatch && method === "GET") {
       const projectId = decodeURIComponent(shotsMatch[1]);
       const project = getProject(projectId, auth.userId);
@@ -212,6 +249,81 @@ export function createHttpServer() {
         clipUrl: payload.clipUrl ?? null
       });
       return json(response, 201, { shot });
+    }
+
+    const shotGenerateMatch = url.pathname.match(
+      /^\/api\/v1\/cinefuse\/projects\/([^/]+)\/shots\/([^/]+)\/generate$/
+    );
+    if (shotGenerateMatch && method === "POST") {
+      const projectId = decodeURIComponent(shotGenerateMatch[1]);
+      const shotId = decodeURIComponent(shotGenerateMatch[2]);
+      const project = getProject(projectId, auth.userId);
+      if (!project) {
+        return writeError(response, 404, "project not found", "PROJECT_NOT_FOUND");
+      }
+      const shot = getShot(shotId, projectId);
+      if (!shot) {
+        return writeError(response, 404, "shot not found", "SHOT_NOT_FOUND");
+      }
+
+      const quote = await mcpHost.invoke("clip", "quote_clip", {
+        shotId,
+        projectId,
+        prompt: shot.prompt,
+        modelTier: shot.modelTier,
+        userId: auth.userId
+      });
+
+      await mcpHost.invoke("billing", "debit", {
+        userId: auth.userId,
+        amount: quote.sparksCost,
+        idempotencyKey: `shot-generate:${shotId}`,
+        relatedResourceType: "shot",
+        relatedResourceId: shotId
+      });
+
+      const generation = await mcpHost.invoke("clip", "generate_clip", {
+        shotId,
+        projectId,
+        prompt: shot.prompt,
+        modelTier: shot.modelTier,
+        userId: auth.userId
+      });
+
+      const updatedShot = saveShot({
+        ...shot,
+        status: generation.status ?? "ready",
+        clipUrl: generation.clipUrl ?? null
+      });
+
+      const job = saveJob({
+        id: randomUUID(),
+        projectId,
+        shotId: updatedShot.id,
+        kind: "clip",
+        status: "done",
+        inputPayload: {
+          prompt: updatedShot.prompt,
+          modelTier: updatedShot.modelTier
+        },
+        outputPayload: {
+          modelId: generation.modelId ?? null,
+          clipUrl: generation.clipUrl ?? null,
+          sparksCost: quote.sparksCost
+        },
+        costToUsCents: generation.costToUsCents ?? 0
+      });
+
+      return json(response, 200, {
+        shot: updatedShot,
+        job,
+        quote: {
+          sparksCost: quote.sparksCost,
+          modelTier: quote.modelTier,
+          modelId: quote.modelId,
+          estimatedDurationSec: quote.estimatedDurationSec
+        }
+      });
     }
 
     const jobsMatch = url.pathname.match(/^\/api\/v1\/cinefuse\/projects\/([^/]+)\/jobs$/);

@@ -36,6 +36,17 @@ struct CreateShotResponse: Codable {
     let shot: Shot
 }
 
+struct ShotQuote: Codable {
+    let sparksCost: Int
+    let modelTier: String
+    let modelId: String
+    let estimatedDurationSec: Int?
+}
+
+struct QuoteShotResponse: Codable {
+    let quote: ShotQuote
+}
+
 struct Job: Codable, Identifiable {
     let id: String
     let projectId: String
@@ -51,6 +62,12 @@ struct ListJobsResponse: Codable {
 
 struct CreateJobResponse: Codable {
     let job: Job
+}
+
+struct GenerateShotResponse: Codable {
+    let shot: Shot
+    let job: Job
+    let quote: ShotQuote
 }
 
 struct BalanceResponse: Codable {

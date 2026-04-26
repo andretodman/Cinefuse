@@ -37,6 +37,31 @@ test("api contract: create/list projects and get spark balance", async () => {
     body: JSON.stringify({ prompt: "wide lighthouse shot", modelTier: "standard" })
   });
   assert.equal(shotCreateResponse.status, 201);
+  const shotCreateBody = await shotCreateResponse.json();
+  const shotId = shotCreateBody.shot.id;
+
+  const quoteResponse = await fetch(`${baseUrl}/api/v1/cinefuse/projects/${projectId}/shots/quote`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ prompt: "wide lighthouse shot", modelTier: "standard" })
+  });
+  assert.equal(quoteResponse.status, 200);
+  const quoteBody = await quoteResponse.json();
+  assert.equal(quoteBody.quote.sparksCost, 70);
+  assert.equal(quoteBody.quote.modelTier, "standard");
+
+  const generateResponse = await fetch(
+    `${baseUrl}/api/v1/cinefuse/projects/${projectId}/shots/${shotId}/generate`,
+    {
+      method: "POST",
+      headers
+    }
+  );
+  assert.equal(generateResponse.status, 200);
+  const generateBody = await generateResponse.json();
+  assert.equal(generateBody.shot.status, "ready");
+  assert.match(generateBody.shot.clipUrl, /^https:\/\/pubfuse\.local\/cinefuse\/clips\/.+\.mp4$/);
+  assert.equal(generateBody.quote.sparksCost, 70);
 
   const shotListResponse = await fetch(`${baseUrl}/api/v1/cinefuse/projects/${projectId}/shots`, {
     headers
@@ -44,6 +69,7 @@ test("api contract: create/list projects and get spark balance", async () => {
   assert.equal(shotListResponse.status, 200);
   const shotsBody = await shotListResponse.json();
   assert.equal(shotsBody.shots.length, 1);
+  assert.equal(shotsBody.shots[0].status, "ready");
 
   const jobCreateResponse = await fetch(`${baseUrl}/api/v1/cinefuse/projects/${projectId}/jobs`, {
     method: "POST",
@@ -57,12 +83,23 @@ test("api contract: create/list projects and get spark balance", async () => {
   });
   assert.equal(jobListResponse.status, 200);
   const jobsBody = await jobListResponse.json();
-  assert.equal(jobsBody.jobs.length, 1);
+  assert.equal(jobsBody.jobs.length, 2);
 
   const balanceResponse = await fetch(`${baseUrl}/api/v1/cinefuse/sparks/balance`, { headers });
   assert.equal(balanceResponse.status, 200);
   const balanceBody = await balanceResponse.json();
   assert.equal(balanceBody.balance, 100000);
+
+  const deleteResponse = await fetch(`${baseUrl}/api/v1/cinefuse/projects/${projectId}`, {
+    method: "DELETE",
+    headers
+  });
+  assert.equal(deleteResponse.status, 200);
+
+  const listAfterDelete = await fetch(`${baseUrl}/api/v1/cinefuse/projects`, { headers });
+  assert.equal(listAfterDelete.status, 200);
+  const listAfterDeleteBody = await listAfterDelete.json();
+  assert.equal(listAfterDeleteBody.projects.length, 0);
 
   await new Promise((resolve, reject) => {
     server.close((error) => {
