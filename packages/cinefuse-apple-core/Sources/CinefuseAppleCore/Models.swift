@@ -75,6 +75,15 @@ public struct BalanceResponse: Codable {
     public let balance: Int
 }
 
+public struct ProjectEvent: Codable {
+    public let type: String
+    public let projectId: String
+    public let shotId: String?
+    public let jobId: String?
+    public let status: String?
+    public let timestamp: String
+}
+
 @Observable
 public final class AppModel {
     public var userId: String = ""

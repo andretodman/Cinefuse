@@ -1,0 +1,3 @@
+module CinefuseAppleCore {
+    header "/Users/atodman/Documents/GitHub/Cinefuse/packages/cinefuse-apple-core/.build/arm64-apple-macosx/debug/CinefuseAppleCore.build/include/CinefuseAppleCore-Swift.h"
+}

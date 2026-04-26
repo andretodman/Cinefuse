@@ -86,17 +86,18 @@ export function listJobs(projectId) {
 }
 
 export function saveJob(input) {
+  const existing = jobs.get(input.id);
   const now = new Date().toISOString();
   const job = {
     id: input.id,
-    projectId: input.projectId,
-    shotId: input.shotId ?? null,
-    kind: input.kind ?? "clip",
-    status: input.status ?? "queued",
-    inputPayload: input.inputPayload ?? {},
-    outputPayload: input.outputPayload ?? {},
-    costToUsCents: input.costToUsCents ?? 0,
-    createdAt: input.createdAt ?? now,
+    projectId: input.projectId ?? existing?.projectId,
+    shotId: input.shotId ?? existing?.shotId ?? null,
+    kind: input.kind ?? existing?.kind ?? "clip",
+    status: input.status ?? existing?.status ?? "queued",
+    inputPayload: input.inputPayload ?? existing?.inputPayload ?? {},
+    outputPayload: input.outputPayload ?? existing?.outputPayload ?? {},
+    costToUsCents: input.costToUsCents ?? existing?.costToUsCents ?? 0,
+    createdAt: existing?.createdAt ?? input.createdAt ?? now,
     updatedAt: now
   };
   jobs.set(job.id, job);

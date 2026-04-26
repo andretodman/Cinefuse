@@ -49,6 +49,153 @@ function applyLegacySparksAliasHeaders(response, pathName) {
 
 export function createHttpServer() {
   const mcpHost = createMcpHost();
+  const renderQueue = [];
+  const projectSubscribers = new Map();
+  let isProcessingRenderQueue = false;
+
+  function publishProjectEvent(projectId, payload) {
+    const subscribers = projectSubscribers.get(projectId);
+    if (!subscribers || subscribers.size === 0) {
+      return;
+    }
+    const message = `data: ${JSON.stringify({
+      ...payload,
+      projectId,
+      timestamp: new Date().toISOString()
+    })}\n\n`;
+
+    for (const response of subscribers) {
+      try {
+        response.write(message);
+      } catch {
+        subscribers.delete(response);
+      }
+    }
+
+    if (subscribers.size === 0) {
+      projectSubscribers.delete(projectId);
+    }
+  }
+
+  async function processRenderQueue() {
+    if (isProcessingRenderQueue) {
+      return;
+    }
+    isProcessingRenderQueue = true;
+    try {
+      while (renderQueue.length > 0) {
+        const task = renderQueue.shift();
+        if (!task) {
+          continue;
+        }
+
+        const currentShot = getShot(task.shotId, task.projectId);
+        if (!currentShot) {
+          saveJob({
+            id: task.jobId,
+            status: "failed",
+            outputPayload: { error: "shot not found during generation" }
+          });
+          publishProjectEvent(task.projectId, {
+            type: "job_status_changed",
+            jobId: task.jobId,
+            shotId: task.shotId,
+            status: "failed"
+          });
+          continue;
+        }
+
+        saveShot({
+          ...currentShot,
+          status: "generating"
+        });
+        saveJob({
+          id: task.jobId,
+          status: "running"
+        });
+        publishProjectEvent(task.projectId, {
+          type: "shot_status_changed",
+          shotId: task.shotId,
+          status: "generating"
+        });
+        publishProjectEvent(task.projectId, {
+          type: "job_status_changed",
+          jobId: task.jobId,
+          shotId: task.shotId,
+          status: "running"
+        });
+
+        try {
+          const generation = await mcpHost.invoke("clip", "generate_clip", {
+            shotId: task.shotId,
+            projectId: task.projectId,
+            prompt: currentShot.prompt,
+            modelTier: currentShot.modelTier,
+            userId: task.userId
+          });
+
+          saveShot({
+            ...currentShot,
+            status: generation.status ?? "ready",
+            clipUrl: generation.clipUrl ?? null
+          });
+          saveJob({
+            id: task.jobId,
+            status: "done",
+            outputPayload: {
+              modelId: generation.modelId ?? null,
+              clipUrl: generation.clipUrl ?? null,
+              sparksCost: task.quote.sparksCost
+            },
+            costToUsCents: generation.costToUsCents ?? 0
+          });
+          publishProjectEvent(task.projectId, {
+            type: "shot_status_changed",
+            shotId: task.shotId,
+            status: generation.status ?? "ready"
+          });
+          publishProjectEvent(task.projectId, {
+            type: "job_status_changed",
+            jobId: task.jobId,
+            shotId: task.shotId,
+            status: "done"
+          });
+        } catch (error) {
+          saveShot({
+            ...currentShot,
+            status: "failed"
+          });
+          saveJob({
+            id: task.jobId,
+            status: "failed",
+            outputPayload: {
+              error: error instanceof Error ? error.message : "generation failed"
+            }
+          });
+          publishProjectEvent(task.projectId, {
+            type: "shot_status_changed",
+            shotId: task.shotId,
+            status: "failed"
+          });
+          publishProjectEvent(task.projectId, {
+            type: "job_status_changed",
+            jobId: task.jobId,
+            shotId: task.shotId,
+            status: "failed"
+          });
+          await mcpHost.invoke("billing", "credit", {
+            userId: task.userId,
+            amount: task.quote.sparksCost,
+            idempotencyKey: `shot-generate-refund:${task.shotId}`,
+            relatedResourceType: "shot",
+            relatedResourceId: task.shotId
+          });
+        }
+      }
+    } finally {
+      isProcessingRenderQueue = false;
+    }
+  }
 
   return createServer(async (request, response) => {
     const method = request.method ?? "GET";
@@ -69,6 +216,49 @@ export function createHttpServer() {
     const auth = parseBearerAuth(request.headers.authorization);
     if (!auth) {
       return writeError(response, 401, "unauthorized", "UNAUTHORIZED");
+    }
+
+    const projectEventsMatch = url.pathname.match(/^\/api\/v1\/cinefuse\/projects\/([^/]+)\/events$/);
+    if (projectEventsMatch && method === "GET") {
+      const projectId = decodeURIComponent(projectEventsMatch[1]);
+      const project = getProject(projectId, auth.userId);
+      if (!project) {
+        return writeError(response, 404, "project not found", "PROJECT_NOT_FOUND");
+      }
+
+      response.writeHead(200, {
+        "content-type": "text/event-stream",
+        "cache-control": "no-cache",
+        connection: "keep-alive",
+        "x-accel-buffering": "no"
+      });
+
+      const subscribers = projectSubscribers.get(projectId) ?? new Set();
+      subscribers.add(response);
+      projectSubscribers.set(projectId, subscribers);
+
+      publishProjectEvent(projectId, { type: "connected", status: "connected" });
+
+      const keepAlive = setInterval(() => {
+        try {
+          response.write(": heartbeat\n\n");
+        } catch {
+          clearInterval(keepAlive);
+        }
+      }, 15000);
+
+      request.on("close", () => {
+        clearInterval(keepAlive);
+        const current = projectSubscribers.get(projectId);
+        if (!current) {
+          return;
+        }
+        current.delete(response);
+        if (current.size === 0) {
+          projectSubscribers.delete(projectId);
+        }
+      });
+      return;
     }
 
     if (
@@ -265,6 +455,9 @@ export function createHttpServer() {
       if (!shot) {
         return writeError(response, 404, "shot not found", "SHOT_NOT_FOUND");
       }
+      if (shot.status === "queued" || shot.status === "generating") {
+        return writeError(response, 409, "shot generation already in progress", "SHOT_ALREADY_GENERATING");
+      }
 
       const quote = await mcpHost.invoke("clip", "quote_clip", {
         shotId,
@@ -282,40 +475,49 @@ export function createHttpServer() {
         relatedResourceId: shotId
       });
 
-      const generation = await mcpHost.invoke("clip", "generate_clip", {
-        shotId,
-        projectId,
-        prompt: shot.prompt,
-        modelTier: shot.modelTier,
-        userId: auth.userId
-      });
-
-      const updatedShot = saveShot({
+      const queuedShot = saveShot({
         ...shot,
-        status: generation.status ?? "ready",
-        clipUrl: generation.clipUrl ?? null
+        status: "queued"
       });
-
+      const jobId = randomUUID();
       const job = saveJob({
-        id: randomUUID(),
+        id: jobId,
         projectId,
-        shotId: updatedShot.id,
+        shotId: queuedShot.id,
         kind: "clip",
-        status: "done",
+        status: "queued",
         inputPayload: {
-          prompt: updatedShot.prompt,
-          modelTier: updatedShot.modelTier
-        },
-        outputPayload: {
-          modelId: generation.modelId ?? null,
-          clipUrl: generation.clipUrl ?? null,
+          prompt: queuedShot.prompt,
+          modelTier: queuedShot.modelTier,
           sparksCost: quote.sparksCost
         },
-        costToUsCents: generation.costToUsCents ?? 0
+        outputPayload: {},
+        costToUsCents: 0
+      });
+      publishProjectEvent(projectId, {
+        type: "shot_status_changed",
+        shotId,
+        status: "queued"
+      });
+      publishProjectEvent(projectId, {
+        type: "job_status_changed",
+        jobId,
+        shotId,
+        status: "queued"
+      });
+      renderQueue.push({
+        jobId,
+        shotId,
+        projectId,
+        userId: auth.userId,
+        quote
+      });
+      queueMicrotask(() => {
+        void processRenderQueue();
       });
 
       return json(response, 200, {
-        shot: updatedShot,
+        shot: queuedShot,
         job,
         quote: {
           sparksCost: quote.sparksCost,

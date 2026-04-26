@@ -105,6 +105,57 @@ public struct APIClient {
         return try JSONDecoder().decode(BalanceResponse.self, from: data).balance
     }
 
+    public func streamProjectEvents(token: String, projectId: String) -> AsyncThrowingStream<ProjectEvent, Error> {
+        AsyncThrowingStream { continuation in
+            let task = Task {
+                do {
+                    var request = URLRequest(url: buildURL(path: "\(Self.cinefusePrefix)/projects/\(projectId)/events"))
+                    request.httpMethod = "GET"
+                    request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+                    request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
+
+                    let (bytes, response) = try await URLSession.shared.bytes(for: request)
+                    try validateStatus(response: response)
+
+                    var dataLines: [String] = []
+                    for try await line in bytes.lines {
+                        if Task.isCancelled {
+                            break
+                        }
+                        if line.hasPrefix("data: ") {
+                            dataLines.append(String(line.dropFirst("data: ".count)))
+                            continue
+                        }
+                        if line == "data:" {
+                            dataLines.append("")
+                            continue
+                        }
+                        if line.isEmpty {
+                            if dataLines.isEmpty {
+                                continue
+                            }
+                            let payload = dataLines.joined(separator: "\n")
+                            dataLines.removeAll(keepingCapacity: true)
+                            guard let data = payload.data(using: .utf8) else {
+                                continue
+                            }
+                            if let event = try? JSONDecoder().decode(ProjectEvent.self, from: data) {
+                                continuation.yield(event)
+                            }
+                        }
+                    }
+                    continuation.finish()
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+
+            continuation.onTermination = { _ in
+                task.cancel()
+            }
+        }
+    }
+
     private func buildURL(path: String) -> URL {
         guard var components = URLComponents(url: baseURL, resolvingAgainstBaseURL: false) else {
             return baseURL
@@ -137,6 +188,16 @@ public struct APIClient {
             } else {
                 message = String(data: data, encoding: .utf8) ?? "Unexpected error"
             }
+            throw NSError(domain: "CinefuseAPI", code: http.statusCode, userInfo: [NSLocalizedDescriptionKey: message])
+        }
+    }
+
+    private func validateStatus(response: URLResponse) throws {
+        guard let http = response as? HTTPURLResponse else {
+            throw URLError(.badServerResponse)
+        }
+        guard (200..<300).contains(http.statusCode) else {
+            let message = HTTPURLResponse.localizedString(forStatusCode: http.statusCode)
             throw NSError(domain: "CinefuseAPI", code: http.statusCode, userInfo: [NSLocalizedDescriptionKey: message])
         }
     }

@@ -59,17 +59,31 @@ test("api contract: create/list projects and get spark balance", async () => {
   );
   assert.equal(generateResponse.status, 200);
   const generateBody = await generateResponse.json();
-  assert.equal(generateBody.shot.status, "ready");
-  assert.match(generateBody.shot.clipUrl, /^https:\/\/pubfuse\.local\/cinefuse\/clips\/.+\.mp4$/);
+  assert.equal(generateBody.shot.status, "queued");
+  assert.equal(generateBody.shot.clipUrl, null);
+  assert.equal(generateBody.job.status, "queued");
   assert.equal(generateBody.quote.sparksCost, 70);
 
-  const shotListResponse = await fetch(`${baseUrl}/api/v1/cinefuse/projects/${projectId}/shots`, {
-    headers
-  });
-  assert.equal(shotListResponse.status, 200);
-  const shotsBody = await shotListResponse.json();
-  assert.equal(shotsBody.shots.length, 1);
-  assert.equal(shotsBody.shots[0].status, "ready");
+  let shotStatus = "queued";
+  let shotClipUrl = null;
+  let retries = 20;
+  while (retries > 0) {
+    const shotListResponse = await fetch(`${baseUrl}/api/v1/cinefuse/projects/${projectId}/shots`, {
+      headers
+    });
+    assert.equal(shotListResponse.status, 200);
+    const shotsBody = await shotListResponse.json();
+    assert.equal(shotsBody.shots.length, 1);
+    shotStatus = shotsBody.shots[0].status;
+    shotClipUrl = shotsBody.shots[0].clipUrl;
+    if (shotStatus === "ready") {
+      break;
+    }
+    retries -= 1;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  assert.equal(shotStatus, "ready");
+  assert.match(shotClipUrl, /^https:\/\/pubfuse\.local\/cinefuse\/clips\/.+\.mp4$/);
 
   const jobCreateResponse = await fetch(`${baseUrl}/api/v1/cinefuse/projects/${projectId}/jobs`, {
     method: "POST",
@@ -84,6 +98,10 @@ test("api contract: create/list projects and get spark balance", async () => {
   assert.equal(jobListResponse.status, 200);
   const jobsBody = await jobListResponse.json();
   assert.equal(jobsBody.jobs.length, 2);
+  assert.equal(
+    jobsBody.jobs.some((job) => job.kind === "clip" && (job.status === "queued" || job.status === "running" || job.status === "done")),
+    true
+  );
 
   const balanceResponse = await fetch(`${baseUrl}/api/v1/cinefuse/sparks/balance`, { headers });
   assert.equal(balanceResponse.status, 200);
@@ -195,6 +213,49 @@ test("api contract: spark canonical debit/credit and legacy balance alias", asyn
     legacyBalanceResponse.headers.get("x-cinefuse-canonical-route"),
     "/api/v1/cinefuse/sparks/balance"
   );
+
+  await new Promise((resolve, reject) => {
+    server.close((error) => {
+      if (error) {
+        reject(error);
+        return;
+      }
+      resolve();
+    });
+  });
+});
+
+test("api contract: project events stream is available", async () => {
+  clearProjects();
+  const server = createHttpServer();
+
+  await new Promise((resolve) => server.listen(0, resolve));
+  const address = server.address();
+  const port = typeof address === "object" && address ? address.port : 0;
+  const baseUrl = `http://127.0.0.1:${port}`;
+
+  const createResponse = await fetch(`${baseUrl}/api/v1/cinefuse/projects`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ title: "Events project" })
+  });
+  assert.equal(createResponse.status, 201);
+  const createBody = await createResponse.json();
+  const projectId = createBody.project.id;
+
+  const streamResponse = await fetch(`${baseUrl}/api/v1/cinefuse/projects/${projectId}/events`, {
+    headers
+  });
+  assert.equal(streamResponse.status, 200);
+  assert.equal(streamResponse.headers.get("content-type"), "text/event-stream");
+
+  const reader = streamResponse.body?.getReader();
+  assert.ok(reader);
+  const firstChunk = await reader.read();
+  assert.equal(firstChunk.done, false);
+  const firstText = new TextDecoder().decode(firstChunk.value);
+  assert.match(firstText, /"type":"connected"/);
+  await reader.cancel();
 
   await new Promise((resolve, reject) => {
     server.close((error) => {
