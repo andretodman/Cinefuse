@@ -29,7 +29,7 @@ enum CinefuseTokens {
         static let minCenterPreviewWidth: CGFloat = 400
         static let minSidePanelWidth: CGFloat = 260
         static let maxSidePanelWidth: CGFloat = 520
-        static let minBottomPanelHeight: CGFloat = 170
+        static let minBottomPanelHeight: CGFloat = 210
         static let minTopWorkspaceHeight: CGFloat = 320
         static let splitterThickness: CGFloat = 6
         static let splitterHitArea: CGFloat = 16

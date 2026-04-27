@@ -162,7 +162,7 @@ struct ProjectWorkspaceScreen: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: CinefuseTokens.Spacing.m) {
+        VStack(alignment: .leading, spacing: CinefuseTokens.Spacing.s) {
             header
 
             if let errorMessage = model.errorMessage {
@@ -1048,7 +1048,9 @@ struct ProjectDetailScreen: View {
                                     .frame(minWidth: 0, maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                                     .clipped()
                                 }
-                                .frame(height: CGFloat(sanitizedBottomHeight))
+                                .padding(.top, CinefuseTokens.Spacing.s)
+                                .frame(height: CGFloat(sanitizedBottomHeight), alignment: .top)
+                                .clipped()
                             }
                         }
                     }
