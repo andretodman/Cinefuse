@@ -125,11 +125,11 @@ struct ProjectWorkspaceScreen: View {
     @State private var newCharacterDescription = ""
     @State private var selectedCharacterLockId = ""
     @State private var audioTrackTitleDraft = "Dialogue pass"
-    @State private var exportResolution = "1080p"
-    @State private var exportCaptionsEnabled = false
-    @State private var transitionStyle = "crossfade"
-    @State private var exportIncludeArchive = true
-    @State private var exportPublishToPubfuse = false
+    @AppStorage("cinefuse.editor.export.resolution") private var exportResolution = "1080p"
+    @AppStorage("cinefuse.editor.export.captionsEnabled") private var exportCaptionsEnabled = false
+    @AppStorage("cinefuse.editor.export.transitionStyle") private var transitionStyle = "crossfade"
+    @AppStorage("cinefuse.editor.export.includeArchive") private var exportIncludeArchive = true
+    @AppStorage("cinefuse.editor.export.publishTarget") private var exportPublishTarget = "none"
     @AppStorage("cinefuse.editor.selectedThemeMode") private var timelineThemeModeRaw = TimelineThemeMode.system.rawValue
     @AppStorage("cinefuse.editor.lastProjectId") private var lastProjectId = ""
     @AppStorage("cinefuse.editor.showLeftPane") private var showLeftPane = true
@@ -197,7 +197,7 @@ struct ProjectWorkspaceScreen: View {
                     exportCaptionsEnabled: $exportCaptionsEnabled,
                     transitionStyle: $transitionStyle,
                     exportIncludeArchive: $exportIncludeArchive,
-                    exportPublishToPubfuse: $exportPublishToPubfuse,
+                    exportPublishTarget: $exportPublishTarget,
                     timelineThemeMode: timelineThemeModeBinding,
                     quotedShotCost: quotedShotCost,
                     newCharacterName: $newCharacterName,
@@ -953,13 +953,14 @@ struct ProjectWorkspaceScreen: View {
     private func exportFinalTimeline() async {
         guard let selectedProjectId else { return }
         do {
+            let effectivePublishTarget = exportPublishTarget == "pubfuse" ? "pubfuse" : "none"
             _ = try await api.exportFinal(
                 token: model.bearerToken,
                 projectId: selectedProjectId,
                 resolution: exportResolution,
                 captionsEnabled: exportCaptionsEnabled,
                 includeArchive: exportIncludeArchive,
-                publishToPubfuse: exportPublishToPubfuse
+                publishTarget: effectivePublishTarget
             )
             await loadSelectedProjectDetails(showLoadingIndicator: false)
         } catch {
@@ -1038,7 +1039,7 @@ struct ProjectDetailScreen: View {
     @Binding var exportCaptionsEnabled: Bool
     @Binding var transitionStyle: String
     @Binding var exportIncludeArchive: Bool
-    @Binding var exportPublishToPubfuse: Bool
+    @Binding var exportPublishTarget: String
     @Binding var timelineThemeMode: TimelineThemeMode
     let quotedShotCost: ShotQuote?
     @Binding var newCharacterName: String
@@ -1359,6 +1360,7 @@ struct ProjectDetailScreen: View {
                             .pickerStyle(.menu)
                             .frame(minWidth: 110)
                             .tooltip("Choose final output resolution", enabled: showTooltips)
+                            
                             Picker("Transitions", selection: $transitionStyle) {
                                 Text("Crossfade").tag("crossfade")
                                 Text("Dip to Black").tag("dip_to_black")
@@ -1367,31 +1369,78 @@ struct ProjectDetailScreen: View {
                             .pickerStyle(.menu)
                             .frame(minWidth: 140)
                             .tooltip("Choose timeline transition style", enabled: showTooltips)
+                        }
+                        
+                        HStack(spacing: 5) {
                             Toggle("Captions", isOn: $exportCaptionsEnabled)
                                 .toggleStyle(.switch)
-                                .tooltip("Bake captions into stitched/exported output", enabled: showTooltips)
+                                .tooltip("Bake captions into stitched/exported output", enabled: showTooltips).frame(width: 150)
+                        }.padding(CinefuseTokens.Spacing.s)
+                        
+                        HStack(spacing: 5) {
                             Toggle("Archive", isOn: $exportIncludeArchive)
                                 .toggleStyle(.switch)
-                                .tooltip("Create a restorable project archive bundle", enabled: showTooltips)
-                            Toggle("Publish", isOn: $exportPublishToPubfuse)
-                                .toggleStyle(.switch)
-                                .tooltip("Publish final movie to Pubfuse stream", enabled: showTooltips)
+                                .tooltip("Create a restorable project archive bundle", enabled: showTooltips).frame(width: 150)
+                        }.padding(CinefuseTokens.Spacing.s)
+                        
+                        HStack(spacing: CinefuseTokens.Spacing.s) {
+                            
+                            Picker("Publish", selection: $exportPublishTarget) {
+                                Text("None").tag("none")
+                                Text("Pubfuse").tag("pubfuse")
+                                Text("YouTube (soon)").tag("youtube")
+                                Text("Vimeo (soon)").tag("vimeo")
+                            }
+                            .pickerStyle(.menu)
+                            .frame(minWidth: 90)
+                            .tooltip("Choose where to publish after export", enabled: showTooltips)
                         }
-                        HStack(spacing: CinefuseTokens.Spacing.xs) {
+                        HStack(spacing: 5) {
+                            Button {
+                                // Placeholder: YouTube OAuth wiring lands in a future milestone.
+                            } label: {
+                                Label("Connect YouTube", systemImage: "play.rectangle")
+                            }
+                            .buttonStyle(SecondaryActionButtonStyle())
+                            .disabled(true)
+                            .tooltip("YouTube publish integration is coming soon", enabled: showTooltips)
+                        }
+                        HStack(spacing: 5) {
+                            
+                            Button {
+                                // Placeholder: Vimeo OAuth wiring lands in a future milestone.
+                            } label: {
+                                Label("Connect Vimeo", systemImage: "video.badge.plus")
+                            }
+                            .buttonStyle(SecondaryActionButtonStyle())
+                            .disabled(true)
+                            .tooltip("Vimeo publish integration is coming soon", enabled: showTooltips)
+//                            Spacer()
+                        }
+                        if exportPublishTarget == "youtube" || exportPublishTarget == "vimeo" {
+                            Text("Selected publish target is not live yet. Export continues without auto-publish.")
+                                .font(CinefuseTokens.Typography.caption)
+                                .foregroundStyle(CinefuseTokens.ColorRole.textSecondary)
+                        }
+                        HStack(spacing: 5) {
                             Button("Preview Stitch", action: onPreviewStitch)
                                 .tooltip("Build a lightweight stitched preview", enabled: showTooltips)
                                 .buttonStyle(SecondaryActionButtonStyle())
                             Button("Transitions", action: onApplyTransitions)
                                 .tooltip("Apply transitions between adjacent shots", enabled: showTooltips)
                                 .buttonStyle(SecondaryActionButtonStyle())
+                            
+                        }
+                        HStack(spacing: 5) {
                             Button("Color Match", action: onColorMatch)
                                 .tooltip("Reduce color mismatch across shot cuts", enabled: showTooltips)
                                 .buttonStyle(SecondaryActionButtonStyle())
-                        }
-                        HStack(spacing: CinefuseTokens.Spacing.xs) {
                             Button("Bake Captions", action: onBakeCaptions)
                                 .tooltip("Render timeline captions into video output", enabled: showTooltips)
                                 .buttonStyle(SecondaryActionButtonStyle())
+                        }
+                        HStack(spacing: 5) {
+                            
                             Button("Normalize Loudness", action: onNormalizeLoudness)
                                 .tooltip("Normalize mix output loudness for playback", enabled: showTooltips)
                                 .buttonStyle(SecondaryActionButtonStyle())
@@ -1399,7 +1448,7 @@ struct ProjectDetailScreen: View {
                                 .tooltip("Run full stitch pass before export", enabled: showTooltips)
                                 .buttonStyle(SecondaryActionButtonStyle())
                         }
-                        HStack {
+                        HStack(spacing: 5) {
                             Button {
                                 onExportFinal()
                             } label: {
@@ -1407,10 +1456,10 @@ struct ProjectDetailScreen: View {
                             }
                             .tooltip("Render and export the current timeline", enabled: showTooltips)
                                 .buttonStyle(PrimaryActionButtonStyle())
-                            Spacer()
-                        }
+                        }.padding(CinefuseTokens.Spacing.s)
                     }
-                }.padding(0)
+                }.padding(CinefuseTokens.Spacing.s)
+                    
             }
             .padding(CinefuseTokens.Spacing.s)
         }

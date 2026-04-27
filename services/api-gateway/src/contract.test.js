@@ -687,7 +687,7 @@ test("api contract: audio generation and final export flow", async () => {
       resolution: "4k",
       captionsEnabled: true,
       includeArchive: true,
-      publishToPubfuse: true
+      publishTarget: "pubfuse"
     })
   });
   assert.equal(exportResponse.status, 200);

@@ -334,7 +334,7 @@ public struct APIClient {
         resolution: String = "1080p",
         captionsEnabled: Bool = false,
         includeArchive: Bool = true,
-        publishToPubfuse: Bool = false
+        publishTarget: String = "none"
     ) async throws -> Job {
         var request = URLRequest(url: buildURL(path: "\(Self.cinefusePrefix)/projects/\(projectId)/export/final"))
         request.httpMethod = "POST"
@@ -344,7 +344,8 @@ public struct APIClient {
             "resolution": AnyEncodable(resolution),
             "captionsEnabled": AnyEncodable(captionsEnabled),
             "includeArchive": AnyEncodable(includeArchive),
-            "publishToPubfuse": AnyEncodable(publishToPubfuse)
+            "publishTarget": AnyEncodable(publishTarget),
+            "publishToPubfuse": AnyEncodable(publishTarget == "pubfuse")
         ] as [String: AnyEncodable])
         let (data, response) = try await URLSession.shared.data(for: request)
         try validate(response: response, data: data)

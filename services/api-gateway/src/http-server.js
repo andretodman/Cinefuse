@@ -835,7 +835,12 @@ export function createHttpServer() {
         ...payload
       });
       const includeArchive = payload.includeArchive === true;
-      const publishToPubfuse = payload.publishToPubfuse === true;
+      const publishTarget = typeof payload.publishTarget === "string"
+        ? payload.publishTarget
+        : payload.publishToPubfuse === true
+          ? "pubfuse"
+          : "none";
+      const publishToPubfuse = publishTarget === "pubfuse";
       const archiveResult = includeArchive
         ? await mcpHost.invoke("export", "archive_project", {
           projectId,
@@ -875,6 +880,7 @@ export function createHttpServer() {
           publishedUrl: publishResult?.export?.fileUrl ?? null,
           sparksCost,
           includeArchive,
+          publishTarget,
           publishToPubfuse
         },
         costToUsCents: Number(exported.export?.costToUsCents ?? 0)
