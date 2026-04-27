@@ -84,6 +84,8 @@ struct LoginScreen: View {
     @State private var signupUsername = ""
     @State private var signupDisplayName = ""
     @State private var forgotEmail = ""
+    @State private var resetTokenFromLink = ""
+    @State private var isResetPasswordSheetPresented = false
     @State private var isLoading = false
     @State private var errorMessage: String?
     @State private var successMessage: String?
@@ -248,6 +250,21 @@ struct LoginScreen: View {
             email = model.userEmail
             forgotEmail = model.userEmail
         }
+        .onOpenURL { url in
+            guard let token = passwordResetToken(from: url), !token.isEmpty else { return }
+            resetTokenFromLink = token
+            authMode = .forgotPassword
+            isResetPasswordSheetPresented = true
+            successMessage = "Reset link received. Choose a new password."
+            errorMessage = nil
+        }
+        .sheet(isPresented: $isResetPasswordSheetPresented) {
+            ResetPasswordSheet(
+                token: resetTokenFromLink,
+                authBaseURL: selectedAuthBaseURL,
+                cinefuseBaseURL: selectedCinefuseBaseURL
+            )
+        }
     }
 
     private func normalizedURL(_ rawURL: String) -> String? {
@@ -258,6 +275,22 @@ struct LoginScreen: View {
             return nil
         }
         return withScheme.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+    }
+
+    private func passwordResetToken(from url: URL) -> String? {
+        let path = url.path.lowercased()
+        let host = url.host?.lowercased() ?? ""
+        let matchesResetRoute = path.contains("/app/reset-password")
+            || path.hasSuffix("/reset-password")
+            || host == "reset-password"
+        guard matchesResetRoute else {
+            return nil
+        }
+        return URLComponents(url: url, resolvingAgainstBaseURL: false)?
+            .queryItems?
+            .first(where: { $0.name == "token" })?
+            .value?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     @MainActor
@@ -375,6 +408,113 @@ struct LoginScreen: View {
                 )
             await MainActor.run {
                 successMessage = "Password reset email sent. Check your inbox."
+            }
+        } catch {
+            await MainActor.run {
+                errorMessage = error.localizedDescription
+            }
+        }
+    }
+}
+
+private struct ResetPasswordSheet: View {
+    @Environment(\.dismiss) private var dismiss
+
+    let token: String
+    let authBaseURL: String
+    let cinefuseBaseURL: String
+
+    @State private var newPassword = ""
+    @State private var confirmPassword = ""
+    @State private var isSubmitting = false
+    @State private var errorMessage: String?
+    @State private var successMessage: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: CinefuseTokens.Spacing.m) {
+            Text("Reset Password")
+                .font(CinefuseTokens.Typography.screenTitle)
+
+            Text("Set a new password for your Pubfuse account.")
+                .font(CinefuseTokens.Typography.body)
+                .foregroundStyle(CinefuseTokens.ColorRole.textSecondary)
+
+            SecureField("New password", text: $newPassword)
+                .textFieldStyle(.roundedBorder)
+
+            SecureField("Confirm password", text: $confirmPassword)
+                .textFieldStyle(.roundedBorder)
+
+            if let successMessage {
+                Text(successMessage)
+                    .font(CinefuseTokens.Typography.caption)
+                    .foregroundStyle(CinefuseTokens.ColorRole.success)
+            }
+
+            if let errorMessage {
+                Text(errorMessage)
+                    .font(CinefuseTokens.Typography.caption)
+                    .foregroundStyle(CinefuseTokens.ColorRole.danger)
+            }
+
+            HStack(spacing: CinefuseTokens.Spacing.s) {
+                Button {
+                    Task { await submitResetPassword() }
+                } label: {
+                    Label("Update Password", systemImage: "key.fill")
+                }
+                .buttonStyle(PrimaryActionButtonStyle())
+                .disabled(isSubmitting || token.isEmpty || newPassword.count < 8 || newPassword != confirmPassword)
+
+                Button("Close") {
+                    dismiss()
+                }
+                .buttonStyle(SecondaryActionButtonStyle())
+            }
+        }
+        .padding(CinefuseTokens.Spacing.xl)
+        .frame(minWidth: 460)
+    }
+
+    private func submitResetPassword() async {
+        await MainActor.run {
+            isSubmitting = true
+            errorMessage = nil
+            successMessage = nil
+        }
+        defer { Task { @MainActor in isSubmitting = false } }
+
+        guard !token.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            await MainActor.run {
+                errorMessage = "Reset token is missing."
+            }
+            return
+        }
+
+        guard newPassword.count >= 8 else {
+            await MainActor.run {
+                errorMessage = "Password must be at least 8 characters."
+            }
+            return
+        }
+
+        guard newPassword == confirmPassword else {
+            await MainActor.run {
+                errorMessage = "Passwords do not match."
+            }
+            return
+        }
+
+        do {
+            try await APIClient(baseURLString: cinefuseBaseURL).resetPubfusePassword(
+                authBaseURLString: authBaseURL,
+                token: token,
+                newPassword: newPassword
+            )
+            await MainActor.run {
+                successMessage = "Password updated. You can now sign in."
+                newPassword = ""
+                confirmPassword = ""
             }
         } catch {
             await MainActor.run {

@@ -139,6 +139,24 @@ public struct APIClient {
         try validateAuth(response: response, data: data)
     }
 
+    public func resetPubfusePassword(authBaseURLString: String, token: String, newPassword: String) async throws {
+        struct ResetPasswordRequest: Encodable {
+            let token: String
+            let password: String
+        }
+
+        let authBaseURL = URL(string: authBaseURLString) ?? baseURL
+        var request = URLRequest(url: buildURL(baseURL: authBaseURL, path: "/api/reset-password"))
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONEncoder().encode(
+            ResetPasswordRequest(token: token, password: newPassword)
+        )
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+        try validateAuth(response: response, data: data)
+    }
+
     public func listProjects(token: String) async throws -> [Project] {
         var request = URLRequest(url: buildURL(path: "\(Self.cinefusePrefix)/projects"))
         request.httpMethod = "GET"
