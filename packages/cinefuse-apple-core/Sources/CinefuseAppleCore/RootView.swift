@@ -591,6 +591,20 @@ struct ProjectWorkspaceScreen: View {
     private var serverModeLabel: String {
         (APIServerMode(rawValue: apiServerModeRaw) ?? .local).label
     }
+    private var requiresPubfuseJWTForActiveServer: Bool {
+        switch APIServerMode(rawValue: apiServerModeRaw) ?? .local {
+        case .local:
+            return false
+        case .production:
+            return true
+        case .custom:
+            let normalized = (normalizedServerURL(customServerBaseURL) ?? "").lowercased()
+            if normalized.contains("localhost") || normalized.contains("127.0.0.1") {
+                return false
+            }
+            return !normalized.isEmpty
+        }
+    }
 
     private var selectedProject: Project? {
         guard let selectedProjectId else { return nil }
@@ -993,6 +1007,11 @@ struct ProjectWorkspaceScreen: View {
     private func refresh(selectProjectId: String? = nil) async {
         model.isLoading = true
         model.errorMessage = nil
+        if requiresPubfuseJWTForActiveServer && model.pubfuseAccessToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            model.isLoading = false
+            model.errorMessage = "Remote server requires a Pubfuse login token. Sign out and sign in again to reconnect."
+            return
+        }
         do {
             async let projects = api.listProjects(token: model.bearerToken)
             async let balance = api.getBalance(token: model.bearerToken)
@@ -1005,7 +1024,12 @@ struct ProjectWorkspaceScreen: View {
             }
             await loadSelectedProjectDetails(showLoadingIndicator: true)
         } catch {
-            model.errorMessage = error.localizedDescription
+            let message = error.localizedDescription
+            if requiresPubfuseJWTForActiveServer && message.lowercased().contains("invalid token") {
+                model.errorMessage = "Your Pubfuse session expired for remote mode. Sign out, then sign in again."
+            } else {
+                model.errorMessage = message
+            }
         }
         model.isLoading = false
     }

@@ -192,6 +192,14 @@ public final class AppModel {
     public var errorMessage: String?
 
     public var bearerToken: String {
+        if shouldUsePubfuseAccessTokenForSelectedServer,
+           !pubfuseAccessToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return pubfuseAccessToken
+        }
+        return legacyBearerToken
+    }
+
+    public var legacyBearerToken: String {
         "user:\(userId)"
     }
 
@@ -275,6 +283,26 @@ public final class AppModel {
         userDisplayName = storedDisplayName
         pubfuseAccessToken = storedAccessToken
         isAuthenticated = !stored.isEmpty
+    }
+
+    private var shouldUsePubfuseAccessTokenForSelectedServer: Bool {
+        let selectedServerMode = (userDefaults.string(forKey: "cinefuse.server.mode") ?? "local")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        switch selectedServerMode {
+        case "production":
+            return true
+        case "custom":
+            let customURL = (userDefaults.string(forKey: "cinefuse.server.customBaseURL") ?? "")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .lowercased()
+            if customURL.contains("localhost") || customURL.contains("127.0.0.1") {
+                return false
+            }
+            return !customURL.isEmpty
+        default:
+            return false
+        }
     }
 }
 
