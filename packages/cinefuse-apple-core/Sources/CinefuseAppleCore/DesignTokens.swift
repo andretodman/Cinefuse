@@ -26,13 +26,13 @@ enum CinefuseTokens {
         static let minButtonWidth: CGFloat = 88
         static let minIconButtonSize: CGFloat = 32
         static let iconSymbolSize: CGFloat = 13
-        static let minCenterPreviewWidth: CGFloat = 400
-        static let minSidePanelWidth: CGFloat = 260
-        static let maxSidePanelWidth: CGFloat = 520
+        static let minCenterPreviewWidth: CGFloat = 320
+        static let minSidePanelWidth: CGFloat = 340
+        static let maxSidePanelWidth: CGFloat = 640
         static let minBottomPanelHeight: CGFloat = 210
         static let minTopWorkspaceHeight: CGFloat = 320
         static let splitterThickness: CGFloat = 6
-        static let splitterHitArea: CGFloat = 16
+        static let splitterHitArea: CGFloat = 24
         static let layoutHandleReserve: CGFloat = 16
         static let timelineCardWidth: CGFloat = 220
         static let timelineCardHeight: CGFloat = 112

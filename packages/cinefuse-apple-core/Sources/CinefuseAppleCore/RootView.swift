@@ -165,7 +165,7 @@ struct ProjectWorkspaceScreen: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: CinefuseTokens.Spacing.s) {
+        VStack(alignment: .leading, spacing: CinefuseTokens.Spacing.xxs) {
             header
 
             if let errorMessage = model.errorMessage {
@@ -232,7 +232,9 @@ struct ProjectWorkspaceScreen: View {
                 Task { await loadSelectedProjectDetails(showLoadingIndicator: true) }
             }
         }
-        .padding(CinefuseTokens.Spacing.l)
+        .padding(.horizontal, CinefuseTokens.Spacing.s)
+        .padding(.bottom, CinefuseTokens.Spacing.s)
+        .padding(.top, CinefuseTokens.Spacing.xxs)
         .sheet(isPresented: $isCreateProjectSheetPresented) {
             createProjectSheet
         }
@@ -254,8 +256,7 @@ struct ProjectWorkspaceScreen: View {
     }
 
     private var header: some View {
-        HStack(alignment: .top, spacing: CinefuseTokens.Spacing.m) {
-            
+        HStack(alignment: .top, spacing: CinefuseTokens.Spacing.s) {
             PubfuseLogoBadge()
             Spacer(minLength: CinefuseTokens.Spacing.s)
             ViewThatFits(in: .horizontal) {
@@ -309,7 +310,7 @@ struct ProjectWorkspaceScreen: View {
                 }
             }
             .padding(.horizontal, CinefuseTokens.Spacing.s)
-            .padding(.vertical, CinefuseTokens.Spacing.xs)
+            .padding(.vertical, CinefuseTokens.Spacing.xxs)
             .background(
                 RoundedRectangle(cornerRadius: CinefuseTokens.Radius.large)
                     .fill(CinefuseTokens.ColorRole.surfacePrimary.opacity(0.92))
@@ -1060,8 +1061,8 @@ struct ProjectDetailScreen: View {
     let onFinalStitch: () -> Void
     let onExportFinal: () -> Void
     let showTooltips: Bool
-    @AppStorage("cinefuse.editor.leftPaneWidth") private var leftPaneWidth: Double = 360
-    @AppStorage("cinefuse.editor.rightPaneWidth") private var rightPaneWidth: Double = 360
+    @AppStorage("cinefuse.editor.leftPaneWidth") private var leftPaneWidth: Double = 460
+    @AppStorage("cinefuse.editor.rightPaneWidth") private var rightPaneWidth: Double = 460
     @AppStorage("cinefuse.editor.bottomPaneHeight") private var bottomPaneHeight: Double = 240
     @AppStorage("cinefuse.editor.showLeftPane") private var showLeftPane = true
     @AppStorage("cinefuse.editor.showRightPane") private var showRightPane = true
@@ -1074,7 +1075,7 @@ struct ProjectDetailScreen: View {
     var body: some View {
         Group {
             if let project {
-                VStack(alignment: .leading, spacing: CinefuseTokens.Spacing.s) {
+                VStack(alignment: .leading, spacing: CinefuseTokens.Spacing.xxs) {
                     header(project: project)
 
                     if isLoadingProjectDetails {
@@ -1142,7 +1143,7 @@ struct ProjectDetailScreen: View {
                                     showTooltips: showTooltips
                                 )
                                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                                .padding(.horizontal, CinefuseTokens.Spacing.s)
+//                                .padding(.horizontal, CinefuseTokens.Spacing.s)
 
                                 if showsRightPanel {
                                     VerticalPanelHandle { delta in
@@ -1176,7 +1177,7 @@ struct ProjectDetailScreen: View {
                                 HStack(alignment: .top, spacing: CinefuseTokens.Spacing.s) {
                                     SectionCard(
                                         title: "Audio Lanes",
-                                        subtitle: "Dialogue, score, and SFX tracks mapped to timeline order."
+//                                        subtitle: "Dialogue, score, and SFX tracks mapped to timeline order."
                                     ) {
                                         VStack(alignment: .leading, spacing: CinefuseTokens.Spacing.s) {
                                             ViewThatFits(in: .horizontal) {
@@ -1212,8 +1213,6 @@ struct ProjectDetailScreen: View {
                                                         Button("Generate SFX", action: onGenerateSFX)
                                                             .tooltip("Generate one-shot sound effect", enabled: showTooltips)
                                                             .buttonStyle(SecondaryActionButtonStyle())
-                                                    }
-                                                    HStack(spacing: CinefuseTokens.Spacing.s) {
                                                         Button("Mix", action: onMixAudio)
                                                             .tooltip("Create mixed audio master for timeline", enabled: showTooltips)
                                                             .buttonStyle(SecondaryActionButtonStyle())
@@ -1223,12 +1222,15 @@ struct ProjectDetailScreen: View {
                                                     }
                                                 }
                                             }
-                                            AudioLaneView(
-                                                audioTracks: audioTracks,
-                                                shotBoundaries: timelineShotBoundaries,
-                                                syncModes: $trackSyncModes,
-                                                themePalette: timelineThemeMode.palette
-                                            )
+                                            ScrollView {
+                                                AudioLaneView(
+                                                    audioTracks: audioTracks,
+                                                    shotBoundaries: timelineShotBoundaries,
+                                                    syncModes: $trackSyncModes,
+                                                    themePalette: timelineThemeMode.palette
+                                                )
+                                            }
+                                            .frame(maxHeight: .infinity, alignment: .top)
                                         }
                                     }
                                     .frame(minWidth: 0, maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -1338,7 +1340,7 @@ struct ProjectDetailScreen: View {
                 )
                 SectionCard(
                     title: "Export",
-                    subtitle: "Render the current timeline order into a combined output."
+//                    subtitle: "Render the current timeline order into a combined output."
                 ) {
                     VStack(alignment: .leading, spacing: CinefuseTokens.Spacing.s) {
                         HStack(spacing: CinefuseTokens.Spacing.s) {
@@ -1394,7 +1396,7 @@ struct ProjectDetailScreen: View {
                             Spacer()
                         }
                     }
-                }
+                }.padding(0)
             }
             .padding(CinefuseTokens.Spacing.s)
         }
@@ -1535,7 +1537,7 @@ struct ProjectDetailScreen: View {
                 }
             }
         }
-        .padding(CinefuseTokens.Spacing.s)
+        .padding(CinefuseTokens.Spacing.xs)
         .background(
             RoundedRectangle(cornerRadius: CinefuseTokens.Radius.large)
                 .fill(CinefuseTokens.ColorRole.surfacePrimary.opacity(0.92))
@@ -1579,7 +1581,7 @@ struct HorizontalTimelineTrack: View {
     var body: some View {
         SectionCard(
             title: "Timeline",
-            subtitle: "Left-to-right playback order. Select a clip to cue preview."
+//            subtitle: "Left-to-right playback order. Select a clip to cue preview."
         ) {
             if visibleShots.isEmpty {
                 EmptyStateCard(
@@ -1938,7 +1940,7 @@ struct EditorPreviewPanel: View {
     var body: some View {
         SectionCard(
             title: "Preview",
-            subtitle: "Playback queue follows timeline order."
+//            subtitle: "Playback queue follows timeline order."
         ) {
             VStack(alignment: .leading, spacing: CinefuseTokens.Spacing.s) {
                 if playableShots.isEmpty {
@@ -2091,7 +2093,7 @@ struct StoryboardPanel: View {
     var body: some View {
         SectionCard(
             title: "Storyboard",
-            subtitle: "Generate and revise scene beats before creating detailed shots."
+//            subtitle: "Generate and revise scene beats before creating detailed shots."
         ) {
             VStack(alignment: .leading, spacing: CinefuseTokens.Spacing.s) {
                 Button("Generate Beat Sheet") {
@@ -2255,7 +2257,7 @@ struct ShotsPanel: View {
     var body: some View {
         SectionCard(
             title: "Shots",
-            subtitle: "Step 1: Draft a shot. Step 2: Quote cost. Step 3: Generate clip. Step 4: Review output status."
+            subtitle: "1: Draft shot 2: Quote cost 3: Generate 4: Review"
         ) {
             VStack(alignment: .leading, spacing: CinefuseTokens.Spacing.s) {
                 ViewThatFits(in: .horizontal) {
@@ -2390,7 +2392,7 @@ struct ShotsPanel: View {
                     }
                 }
             }
-        }
+        }.padding(CinefuseTokens.Spacing.s)
     }
 }
 
@@ -2402,8 +2404,8 @@ struct JobsPanel: View {
 
     var body: some View {
         SectionCard(
-            title: "Jobs",
-            subtitle: "Track render and processing work for this project."
+            title: "Jobs - Track render",
+//            subtitle: "Track render and processing work for this project."
         ) {
             VStack(alignment: .leading, spacing: CinefuseTokens.Spacing.s) {
                 ViewThatFits(in: .horizontal) {
@@ -2449,22 +2451,27 @@ struct JobsPanel: View {
                         message: "Jobs appear when you queue rendering, audio, stitch, or export tasks."
                     )
                 } else {
-                    ForEach(jobs) { job in
-                        HStack(spacing: CinefuseTokens.Spacing.s) {
-                            Text(job.kind.capitalized)
-                                .font(CinefuseTokens.Typography.body)
-                            StatusBadge(status: job.status)
-                            Spacer()
-                            Text("Cost to us: \(job.costToUsCents)c")
-                                .font(CinefuseTokens.Typography.caption)
-                                .foregroundStyle(CinefuseTokens.ColorRole.textSecondary)
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: CinefuseTokens.Spacing.s) {
+                            ForEach(jobs) { job in
+                                HStack(spacing: CinefuseTokens.Spacing.s) {
+                                    Text(job.kind.capitalized)
+                                        .font(CinefuseTokens.Typography.body)
+                                    StatusBadge(status: job.status)
+                                    Spacer()
+                                    Text("Cost to us: \(job.costToUsCents)c")
+                                        .font(CinefuseTokens.Typography.caption)
+                                        .foregroundStyle(CinefuseTokens.ColorRole.textSecondary)
+                                }
+                                .padding(CinefuseTokens.Spacing.s)
+                                .background(
+                                    RoundedRectangle(cornerRadius: CinefuseTokens.Radius.medium)
+                                        .fill(CinefuseTokens.ColorRole.surfaceSecondary)
+                                )
+                            }
                         }
-                        .padding(CinefuseTokens.Spacing.s)
-                        .background(
-                            RoundedRectangle(cornerRadius: CinefuseTokens.Radius.medium)
-                                .fill(CinefuseTokens.ColorRole.surfaceSecondary)
-                        )
                     }
+                    .frame(maxHeight: .infinity, alignment: .top)
                 }
             }
         }
@@ -2676,8 +2683,8 @@ struct AudioLaneView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: CinefuseTokens.Spacing.xs) {
-            Text("Audio Lanes")
-                .font(CinefuseTokens.Typography.timelineHeader)
+//            Text("Audio Lanes")
+//                .font(CinefuseTokens.Typography.timelineHeader)
             if audioTracks.isEmpty {
                 Text("No audio tracks generated yet.")
                     .font(CinefuseTokens.Typography.caption)
