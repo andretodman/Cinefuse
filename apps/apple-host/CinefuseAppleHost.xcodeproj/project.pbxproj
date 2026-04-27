@@ -14,7 +14,7 @@
 /* Begin PBXFileReference section */
 		3A8C5BBF10EB35B812E34A9B /* CinefuseAppleHostApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CinefuseAppleHostApp.swift; sourceTree = "<group>"; };
 		C3C2A587EF4F6F9003652674 /* cinefuse-apple-core */ = {isa = PBXFileReference; lastKnownFileType = folder; name = "cinefuse-apple-core"; path = "../../packages/cinefuse-apple-core"; sourceTree = SOURCE_ROOT; };
-		C6FA731CCAB4DEC729A639D0 /* CinefuseAppleHost.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = CinefuseAppleHost.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		C6FA731CCAB4DEC729A639D0 /* CinefuseAppleHost.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = CinefuseAppleHost.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -92,8 +92,6 @@
 			attributes = {
 				BuildIndependentTargetsInParallel = YES;
 				LastUpgradeCheck = 1430;
-				TargetAttributes = {
-				};
 			};
 			buildConfigurationList = 62AE11CA134FC97257A54E54 /* Build configuration list for PBXProject "CinefuseAppleHost" */;
 			developmentRegion = en;
@@ -135,8 +133,10 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGNING_ALLOWED = NO;
 				CODE_SIGNING_REQUIRED = NO;
-				CODE_SIGN_IDENTITY = "iPhone Developer";
+				CODE_SIGN_IDENTITY = "Apple Development";
+				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 35SPKS99N2;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = Cinefuse;
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
@@ -148,6 +148,7 @@
 				MARKETING_VERSION = 0.1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.cinefuse.applehost;
 				PRODUCT_NAME = CinefuseAppleHost;
+				PROVISIONING_PROFILE_SPECIFIER = "";
 				SDKROOT = iphoneos;
 				SUPPORTS_MACCATALYST = YES;
 				SWIFT_VERSION = 5.9;
@@ -278,8 +279,10 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
-				CODE_SIGN_IDENTITY = "iPhone Developer";
+				CODE_SIGN_IDENTITY = "Apple Development";
+				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 35SPKS99N2;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = Cinefuse;
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
@@ -291,6 +294,7 @@
 				MARKETING_VERSION = 0.1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.cinefuse.applehost;
 				PRODUCT_NAME = CinefuseAppleHost;
+				PROVISIONING_PROFILE_SPECIFIER = "";
 				SDKROOT = iphoneos;
 				SUPPORTS_MACCATALYST = YES;
 				SWIFT_VERSION = 5.9;

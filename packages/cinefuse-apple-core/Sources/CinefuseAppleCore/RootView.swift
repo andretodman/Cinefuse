@@ -558,10 +558,13 @@ struct ProjectWorkspaceScreen: View {
     @State private var hasLiveEventsConnection = false
     @State private var editorSettings = EditorSettingsModel()
     @State private var showSettingsPanel = false
+    @State private var showOnboardingSheet = false
+    @State private var isCreatingSampleProject = false
     @State private var isCheckingServerHealth = false
     @State private var isServerReachable: Bool?
     @AppStorage("cinefuse.server.mode") private var apiServerModeRaw = APIServerMode.local.rawValue
     @AppStorage("cinefuse.server.customBaseURL") private var customServerBaseURL = ""
+    @AppStorage("cinefuse.onboarding.completed") private var onboardingCompleted = false
 
     private let inFlightStatuses: Set<String> = ["queued", "generating", "running"]
     private var localServerBaseURL: String {
@@ -696,6 +699,9 @@ struct ProjectWorkspaceScreen: View {
         .sheet(isPresented: $isCreateProjectSheetPresented) {
             createProjectSheet
         }
+        .sheet(isPresented: $showOnboardingSheet) {
+            onboardingSheet
+        }
         .task {
             if editorSettings.restoreLastOpenWorkspace, !lastProjectId.isEmpty {
                 await refresh(selectProjectId: lastProjectId)
@@ -703,6 +709,9 @@ struct ProjectWorkspaceScreen: View {
                 await refresh(selectProjectId: selectedProjectId)
             }
             await refreshServerHealth()
+            if !onboardingCompleted && model.projects.isEmpty {
+                showOnboardingSheet = true
+            }
         }
         .preferredColorScheme(timelineThemeMode.colorScheme)
         .task(id: selectedProjectId) {
@@ -842,16 +851,35 @@ struct ProjectWorkspaceScreen: View {
             .frame(minWidth: 100)
             .tooltip("Choose appearance theme", enabled: editorSettings.showTooltips)
 
-            IconCommandButton(
-                systemName: "slider.horizontal.3",
-                label: "Editor settings",
-                action: { showSettingsPanel.toggle() },
-                tooltipEnabled: editorSettings.showTooltips
-            )
-            .popover(isPresented: $showSettingsPanel, arrowEdge: .bottom) {
-                workspaceSettingsPanel
-            }
+            settingsPresentationTrigger
         }
+    }
+
+    @ViewBuilder
+    private var settingsPresentationTrigger: some View {
+#if os(iOS)
+        IconCommandButton(
+            systemName: "slider.horizontal.3",
+            label: "Editor settings",
+            action: { showSettingsPanel.toggle() },
+            tooltipEnabled: editorSettings.showTooltips
+        )
+        .sheet(isPresented: $showSettingsPanel) {
+            workspaceSettingsPanel
+                .presentationDetents([.medium, .large])
+                .presentationDragIndicator(.visible)
+        }
+#else
+        IconCommandButton(
+            systemName: "slider.horizontal.3",
+            label: "Editor settings",
+            action: { showSettingsPanel.toggle() },
+            tooltipEnabled: editorSettings.showTooltips
+        )
+        .popover(isPresented: $showSettingsPanel, arrowEdge: .bottom) {
+            workspaceSettingsPanel
+        }
+#endif
     }
 
     private var workspaceSettingsPanel: some View {
@@ -996,6 +1024,84 @@ struct ProjectWorkspaceScreen: View {
         .task {
             titleDraft = ""
             forceFieldFocusSoon()
+        }
+    }
+
+    private var onboardingSheet: some View {
+        VStack(alignment: .leading, spacing: CinefuseTokens.Spacing.m) {
+            Text("Welcome to Cinefuse")
+                .font(CinefuseTokens.Typography.screenTitle)
+
+            Text("Create your first short in three steps.")
+                .font(CinefuseTokens.Typography.body)
+                .foregroundStyle(CinefuseTokens.ColorRole.textSecondary)
+
+            VStack(alignment: .leading, spacing: CinefuseTokens.Spacing.s) {
+                Label("Generate a beat sheet in Storyboard.", systemImage: "list.bullet.rectangle.portrait")
+                Label("Draft shots and quote Spark costs.", systemImage: "film.stack")
+                Label("Render, stitch, and export when ready.", systemImage: "square.and.arrow.up")
+            }
+            .font(CinefuseTokens.Typography.body)
+            .foregroundStyle(CinefuseTokens.ColorRole.textPrimary)
+
+            HStack(spacing: CinefuseTokens.Spacing.s) {
+                Button("Skip for now") {
+                    onboardingCompleted = true
+                    showOnboardingSheet = false
+                }
+                .buttonStyle(SecondaryActionButtonStyle())
+                .disabled(isCreatingSampleProject)
+
+                Button {
+                    Task { await createSampleProjectFromTemplate() }
+                } label: {
+                    if isCreatingSampleProject {
+                        ProgressView()
+                            .frame(minWidth: 140)
+                    } else {
+                        Text("Create Sample Project")
+                            .frame(minWidth: 140)
+                    }
+                }
+                .buttonStyle(SecondaryActionButtonStyle())
+                .disabled(isCreatingSampleProject)
+
+                Button("Create First Project") {
+                    onboardingCompleted = true
+                    showOnboardingSheet = false
+                    openCreateProjectSheet()
+                }
+                .buttonStyle(PrimaryActionButtonStyle())
+                .disabled(isCreatingSampleProject)
+            }
+        }
+        .padding(CinefuseTokens.Spacing.l)
+        .frame(minWidth: 520)
+    }
+
+    private func createSampleProjectFromTemplate() async {
+        guard !isCreatingSampleProject else { return }
+        isCreatingSampleProject = true
+        defer { isCreatingSampleProject = false }
+
+        model.errorMessage = nil
+        do {
+            let project = try await api.createProject(
+                token: model.bearerToken,
+                title: "Sample: Neon Rooftop Chase"
+            )
+            _ = try await api.generateStoryboard(
+                token: model.bearerToken,
+                projectId: project.id,
+                logline: "A coder races across neon rooftops to deliver a critical patch before sunrise.",
+                targetDurationMinutes: 3,
+                tone: "Cinematic thriller with hopeful finish"
+            )
+            onboardingCompleted = true
+            showOnboardingSheet = false
+            await refresh(selectProjectId: project.id)
+        } catch {
+            model.errorMessage = error.localizedDescription
         }
     }
 
