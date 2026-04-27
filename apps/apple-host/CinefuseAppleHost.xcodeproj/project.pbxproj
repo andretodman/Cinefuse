@@ -146,7 +146,7 @@
 					"@executable_path/Frameworks",
 				);
 				MARKETING_VERSION = 0.1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.cinefuse.applehost;
+				PRODUCT_BUNDLE_IDENTIFIER = com.pubfuse.cinefuse;
 				PRODUCT_NAME = CinefuseAppleHost;
 				PROVISIONING_PROFILE_SPECIFIER = "";
 				SDKROOT = iphoneos;
@@ -292,7 +292,7 @@
 					"@executable_path/Frameworks",
 				);
 				MARKETING_VERSION = 0.1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.cinefuse.applehost;
+				PRODUCT_BUNDLE_IDENTIFIER = com.pubfuse.cinefuse;
 				PRODUCT_NAME = CinefuseAppleHost;
 				PROVISIONING_PROFILE_SPECIFIER = "";
 				SDKROOT = iphoneos;
