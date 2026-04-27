@@ -683,12 +683,19 @@ test("api contract: audio generation and final export flow", async () => {
   const exportResponse = await fetch(`${baseUrl}/api/v1/cinefuse/projects/${projectId}/export/final`, {
     method: "POST",
     headers,
-    body: JSON.stringify({ resolution: "4k", captionsEnabled: true })
+    body: JSON.stringify({
+      resolution: "4k",
+      captionsEnabled: true,
+      includeArchive: true,
+      publishToPubfuse: true
+    })
   });
   assert.equal(exportResponse.status, 200);
   const exportBody = await exportResponse.json();
   assert.equal(exportBody.job.kind, "export");
   assert.match(exportBody.export.fileUrl, /^https:\/\/pubfuse\.local\/cinefuse\/exports\/.+\.mp4$/);
+  assert.equal(exportBody.archive !== null, true);
+  assert.equal(exportBody.published !== null, true);
 
   const jobsResponse = await fetch(`${baseUrl}/api/v1/cinefuse/projects/${projectId}/jobs`, { headers });
   const jobsBody = await jobsResponse.json();

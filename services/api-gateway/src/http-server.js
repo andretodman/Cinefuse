@@ -834,6 +834,26 @@ export function createHttpServer() {
         stitchedUrl: stitched.result?.stitchedUrl ?? null,
         ...payload
       });
+      const includeArchive = payload.includeArchive === true;
+      const publishToPubfuse = payload.publishToPubfuse === true;
+      const archiveResult = includeArchive
+        ? await mcpHost.invoke("export", "archive_project", {
+          projectId,
+          fileUrl: exported.export?.fileUrl ?? null,
+          stitchedUrl: stitched.result?.stitchedUrl ?? null,
+          sparksCost: 0,
+          costToUsCents: 0
+        })
+        : null;
+      const publishResult = publishToPubfuse
+        ? await mcpHost.invoke("export", "publish_to_pubfuse_stream", {
+          projectId,
+          fileUrl: exported.export?.fileUrl ?? null,
+          stitchedUrl: stitched.result?.stitchedUrl ?? null,
+          sparksCost: 0,
+          costToUsCents: 0
+        })
+        : null;
       const sparksCost = Number(exported.export?.sparksCost ?? 40);
       await mcpHost.invoke("billing", "debit", {
         userId: auth.userId,
@@ -851,12 +871,24 @@ export function createHttpServer() {
         outputPayload: {
           stitchedUrl: stitched.result?.stitchedUrl ?? null,
           fileUrl: exported.export?.fileUrl ?? null,
-          archiveUrl: exported.export?.archiveUrl ?? null,
-          sparksCost
+          archiveUrl: archiveResult?.export?.archiveUrl ?? exported.export?.archiveUrl ?? null,
+          publishedUrl: publishResult?.export?.fileUrl ?? null,
+          sparksCost,
+          includeArchive,
+          publishToPubfuse
         },
-        costToUsCents: Number(exported.export?.costToUsCents ?? 0) + Number(stitched.result?.costToUsCents ?? 0)
+        costToUsCents: Number(exported.export?.costToUsCents ?? 0)
+          + Number(stitched.result?.costToUsCents ?? 0)
+          + Number(archiveResult?.export?.costToUsCents ?? 0)
+          + Number(publishResult?.export?.costToUsCents ?? 0)
       });
-      return json(response, 200, { export: exported.export, stitch: stitched.result, job });
+      return json(response, 200, {
+        export: exported.export,
+        stitch: stitched.result,
+        archive: archiveResult?.export ?? null,
+        published: publishResult?.export ?? null,
+        job
+      });
     }
     if (shotQuoteMatch && method === "POST") {
       const projectId = decodeURIComponent(shotQuoteMatch[1]);

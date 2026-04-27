@@ -128,6 +128,8 @@ struct ProjectWorkspaceScreen: View {
     @State private var exportResolution = "1080p"
     @State private var exportCaptionsEnabled = false
     @State private var transitionStyle = "crossfade"
+    @State private var exportIncludeArchive = true
+    @State private var exportPublishToPubfuse = false
     @AppStorage("cinefuse.editor.selectedThemeMode") private var timelineThemeModeRaw = TimelineThemeMode.system.rawValue
     @AppStorage("cinefuse.editor.lastProjectId") private var lastProjectId = ""
     @AppStorage("cinefuse.editor.showLeftPane") private var showLeftPane = true
@@ -194,6 +196,8 @@ struct ProjectWorkspaceScreen: View {
                     exportResolution: $exportResolution,
                     exportCaptionsEnabled: $exportCaptionsEnabled,
                     transitionStyle: $transitionStyle,
+                    exportIncludeArchive: $exportIncludeArchive,
+                    exportPublishToPubfuse: $exportPublishToPubfuse,
                     timelineThemeMode: timelineThemeModeBinding,
                     quotedShotCost: quotedShotCost,
                     newCharacterName: $newCharacterName,
@@ -953,7 +957,9 @@ struct ProjectWorkspaceScreen: View {
                 token: model.bearerToken,
                 projectId: selectedProjectId,
                 resolution: exportResolution,
-                captionsEnabled: exportCaptionsEnabled
+                captionsEnabled: exportCaptionsEnabled,
+                includeArchive: exportIncludeArchive,
+                publishToPubfuse: exportPublishToPubfuse
             )
             await loadSelectedProjectDetails(showLoadingIndicator: false)
         } catch {
@@ -1031,6 +1037,8 @@ struct ProjectDetailScreen: View {
     @Binding var exportResolution: String
     @Binding var exportCaptionsEnabled: Bool
     @Binding var transitionStyle: String
+    @Binding var exportIncludeArchive: Bool
+    @Binding var exportPublishToPubfuse: Bool
     @Binding var timelineThemeMode: TimelineThemeMode
     let quotedShotCost: ShotQuote?
     @Binding var newCharacterName: String
@@ -1362,6 +1370,12 @@ struct ProjectDetailScreen: View {
                             Toggle("Captions", isOn: $exportCaptionsEnabled)
                                 .toggleStyle(.switch)
                                 .tooltip("Bake captions into stitched/exported output", enabled: showTooltips)
+                            Toggle("Archive", isOn: $exportIncludeArchive)
+                                .toggleStyle(.switch)
+                                .tooltip("Create a restorable project archive bundle", enabled: showTooltips)
+                            Toggle("Publish", isOn: $exportPublishToPubfuse)
+                                .toggleStyle(.switch)
+                                .tooltip("Publish final movie to Pubfuse stream", enabled: showTooltips)
                         }
                         HStack(spacing: CinefuseTokens.Spacing.xs) {
                             Button("Preview Stitch", action: onPreviewStitch)

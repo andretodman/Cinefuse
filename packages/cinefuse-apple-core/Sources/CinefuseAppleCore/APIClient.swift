@@ -332,7 +332,9 @@ public struct APIClient {
         token: String,
         projectId: String,
         resolution: String = "1080p",
-        captionsEnabled: Bool = false
+        captionsEnabled: Bool = false,
+        includeArchive: Bool = true,
+        publishToPubfuse: Bool = false
     ) async throws -> Job {
         var request = URLRequest(url: buildURL(path: "\(Self.cinefusePrefix)/projects/\(projectId)/export/final"))
         request.httpMethod = "POST"
@@ -340,7 +342,9 @@ public struct APIClient {
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try JSONEncoder().encode([
             "resolution": AnyEncodable(resolution),
-            "captionsEnabled": AnyEncodable(captionsEnabled)
+            "captionsEnabled": AnyEncodable(captionsEnabled),
+            "includeArchive": AnyEncodable(includeArchive),
+            "publishToPubfuse": AnyEncodable(publishToPubfuse)
         ] as [String: AnyEncodable])
         let (data, response) = try await URLSession.shared.data(for: request)
         try validate(response: response, data: data)
