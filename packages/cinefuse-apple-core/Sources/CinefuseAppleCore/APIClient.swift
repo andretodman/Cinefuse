@@ -1,11 +1,142 @@
 import Foundation
 
+public struct PubfuseAuthUser: Codable {
+    public let id: String
+    public let username: String?
+    public let email: String?
+    public let displayName: String?
+    public let firstName: String?
+    public let lastName: String?
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case username
+        case email
+        case displayName
+        case firstName
+        case lastName
+    }
+
+    public var resolvedDisplayName: String {
+        if let displayName, !displayName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return displayName
+        }
+        let fullName = [firstName, lastName]
+            .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
+        if !fullName.isEmpty {
+            return fullName
+        }
+        if let username, !username.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return username
+        }
+        if let email, !email.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return email
+        }
+        return id
+    }
+}
+
+public struct PubfuseAuthResponse: Codable {
+    public let token: String
+    public let user: PubfuseAuthUser
+}
+
 public struct APIClient {
     public let baseURL: URL
     public static let cinefusePrefix = "/api/v1/cinefuse"
 
     public init(baseURLString: String = ProcessInfo.processInfo.environment["CINEFUSE_API_BASE_URL"] ?? "http://localhost:4000") {
         self.baseURL = URL(string: baseURLString)!
+    }
+
+    public func healthCheck() async -> Bool {
+        func check(path: String) async -> Bool {
+            var request = URLRequest(url: buildURL(path: path))
+            request.httpMethod = "GET"
+            do {
+                let (_, response) = try await URLSession.shared.data(for: request)
+                guard let http = response as? HTTPURLResponse else {
+                    return false
+                }
+                return (200..<300).contains(http.statusCode)
+            } catch {
+                return false
+            }
+        }
+
+        if await check(path: "\(Self.cinefusePrefix)/health") {
+            return true
+        }
+        return await check(path: "/health")
+    }
+
+    public func loginPubfuse(authBaseURLString: String, email: String, password: String) async throws -> PubfuseAuthResponse {
+        struct LoginRequest: Encodable {
+            let email: String
+            let password: String
+        }
+        let authBaseURL = URL(string: authBaseURLString) ?? baseURL
+        var request = URLRequest(url: buildURL(baseURL: authBaseURL, path: "/api/users/login"))
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONEncoder().encode(LoginRequest(email: email, password: password))
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+        try validateAuth(response: response, data: data)
+
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        return try decoder.decode(PubfuseAuthResponse.self, from: data)
+    }
+
+    public func signupPubfuse(
+        authBaseURLString: String,
+        username: String,
+        email: String,
+        password: String,
+        displayName: String
+    ) async throws -> PubfuseAuthResponse {
+        struct SignupRequest: Encodable {
+            let username: String
+            let email: String
+            let password: String
+            let displayName: String
+        }
+        let authBaseURL = URL(string: authBaseURLString) ?? baseURL
+        var request = URLRequest(url: buildURL(baseURL: authBaseURL, path: "/api/users/signup"))
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONEncoder().encode(
+            SignupRequest(
+                username: username,
+                email: email,
+                password: password,
+                displayName: displayName
+            )
+        )
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+        try validateAuth(response: response, data: data)
+
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        return try decoder.decode(PubfuseAuthResponse.self, from: data)
+    }
+
+    public func requestPubfusePasswordReset(authBaseURLString: String, email: String) async throws {
+        struct ForgotPasswordRequest: Encodable {
+            let email: String
+        }
+        let authBaseURL = URL(string: authBaseURLString) ?? baseURL
+        var request = URLRequest(url: buildURL(baseURL: authBaseURL, path: "/api/forgot-password"))
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONEncoder().encode(ForgotPasswordRequest(email: email))
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+        try validateAuth(response: response, data: data)
     }
 
     public func listProjects(token: String) async throws -> [Project] {
@@ -560,6 +691,10 @@ public struct APIClient {
     }
 
     private func buildURL(path: String) -> URL {
+        buildURL(baseURL: baseURL, path: path)
+    }
+
+    private func buildURL(baseURL: URL, path: String) -> URL {
         guard var components = URLComponents(url: baseURL, resolvingAgainstBaseURL: false) else {
             return baseURL
         }
@@ -573,6 +708,22 @@ public struct APIClient {
         }
 
         return components.url ?? baseURL
+    }
+
+    private func validateAuth(response: URLResponse, data: Data) throws {
+        guard let http = response as? HTTPURLResponse else {
+            throw URLError(.badServerResponse)
+        }
+        guard (200..<300).contains(http.statusCode) else {
+            if let message = String(data: data, encoding: .utf8), !message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                throw NSError(domain: "PubfuseAuth", code: http.statusCode, userInfo: [NSLocalizedDescriptionKey: message])
+            }
+            throw NSError(
+                domain: "PubfuseAuth",
+                code: http.statusCode,
+                userInfo: [NSLocalizedDescriptionKey: HTTPURLResponse.localizedString(forStatusCode: http.statusCode)]
+            )
+        }
     }
 
     private func validate(response: URLResponse, data: Data) throws {

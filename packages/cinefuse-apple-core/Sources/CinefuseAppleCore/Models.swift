@@ -176,9 +176,15 @@ public struct ProjectEvent: Codable {
 @Observable
 public final class AppModel {
     private static let storedUserIdKey = "cinefuse.auth.userId"
+    private static let storedUserEmailKey = "cinefuse.auth.userEmail"
+    private static let storedDisplayNameKey = "cinefuse.auth.displayName"
+    private static let storedPubfuseAccessTokenKey = "cinefuse.auth.pubfuseAccessToken"
     private let userDefaults: UserDefaults
 
     public var userId: String = ""
+    public var userEmail: String = ""
+    public var userDisplayName: String = ""
+    public var pubfuseAccessToken: String = ""
     public var isAuthenticated = false
     public var projects: [Project] = []
     public var balance: Int = 0
@@ -197,28 +203,77 @@ public final class AppModel {
     public func signIn(userId: String) {
         let normalized = userId.trimmingCharacters(in: .whitespacesAndNewlines)
         self.userId = normalized
+        self.userEmail = ""
+        self.userDisplayName = ""
+        self.pubfuseAccessToken = ""
         self.isAuthenticated = !normalized.isEmpty
         if isAuthenticated {
             userDefaults.set(normalized, forKey: Self.storedUserIdKey)
+            userDefaults.removeObject(forKey: Self.storedUserEmailKey)
+            userDefaults.removeObject(forKey: Self.storedDisplayNameKey)
+            userDefaults.removeObject(forKey: Self.storedPubfuseAccessTokenKey)
         } else {
             userDefaults.removeObject(forKey: Self.storedUserIdKey)
+            userDefaults.removeObject(forKey: Self.storedUserEmailKey)
+            userDefaults.removeObject(forKey: Self.storedDisplayNameKey)
+            userDefaults.removeObject(forKey: Self.storedPubfuseAccessTokenKey)
+        }
+    }
+
+    public func signInPubfuse(userId: String, accessToken: String, email: String?, displayName: String?) {
+        let normalizedUserId = userId.trimmingCharacters(in: .whitespacesAndNewlines)
+        let normalizedAccessToken = accessToken.trimmingCharacters(in: .whitespacesAndNewlines)
+        let normalizedEmail = (email ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let normalizedDisplayName = (displayName ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+
+        self.userId = normalizedUserId
+        self.userEmail = normalizedEmail
+        self.userDisplayName = normalizedDisplayName
+        self.pubfuseAccessToken = normalizedAccessToken
+        self.isAuthenticated = !normalizedUserId.isEmpty
+
+        if isAuthenticated {
+            userDefaults.set(normalizedUserId, forKey: Self.storedUserIdKey)
+            userDefaults.set(normalizedEmail, forKey: Self.storedUserEmailKey)
+            userDefaults.set(normalizedDisplayName, forKey: Self.storedDisplayNameKey)
+            userDefaults.set(normalizedAccessToken, forKey: Self.storedPubfuseAccessTokenKey)
+        } else {
+            userDefaults.removeObject(forKey: Self.storedUserIdKey)
+            userDefaults.removeObject(forKey: Self.storedUserEmailKey)
+            userDefaults.removeObject(forKey: Self.storedDisplayNameKey)
+            userDefaults.removeObject(forKey: Self.storedPubfuseAccessTokenKey)
         }
     }
 
     public func signOut() {
         userId = ""
+        userEmail = ""
+        userDisplayName = ""
+        pubfuseAccessToken = ""
         isAuthenticated = false
         projects = []
         balance = 0
         isLoading = false
         errorMessage = nil
         userDefaults.removeObject(forKey: Self.storedUserIdKey)
+        userDefaults.removeObject(forKey: Self.storedUserEmailKey)
+        userDefaults.removeObject(forKey: Self.storedDisplayNameKey)
+        userDefaults.removeObject(forKey: Self.storedPubfuseAccessTokenKey)
     }
 
     public func restoreSession() {
         let stored = (userDefaults.string(forKey: Self.storedUserIdKey) ?? "")
             .trimmingCharacters(in: .whitespacesAndNewlines)
+        let storedEmail = (userDefaults.string(forKey: Self.storedUserEmailKey) ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let storedDisplayName = (userDefaults.string(forKey: Self.storedDisplayNameKey) ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let storedAccessToken = (userDefaults.string(forKey: Self.storedPubfuseAccessTokenKey) ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
         userId = stored
+        userEmail = storedEmail
+        userDisplayName = storedDisplayName
+        pubfuseAccessToken = storedAccessToken
         isAuthenticated = !stored.isEmpty
     }
 }

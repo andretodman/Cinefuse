@@ -31,6 +31,32 @@ final class MacAppTests: XCTestCase {
         XCTAssertEqual(empty.userId, "")
     }
 
+    func testPubfuseSessionPersistenceAndRestore() {
+        let suiteName = "cinefuse.tests.pubfuse-session.\(UUID().uuidString)"
+        guard let defaults = UserDefaults(suiteName: suiteName) else {
+            XCTFail("Could not create UserDefaults suite")
+            return
+        }
+        defaults.removePersistentDomain(forName: suiteName)
+
+        let first = AppModel(userDefaults: defaults)
+        first.signInPubfuse(
+            userId: "usr_pubfuse_1",
+            accessToken: "jwt-token",
+            email: "creator@pubfuse.com",
+            displayName: "Creator One"
+        )
+        XCTAssertTrue(first.isAuthenticated)
+        XCTAssertEqual(first.userEmail, "creator@pubfuse.com")
+        XCTAssertEqual(first.userDisplayName, "Creator One")
+
+        let restored = AppModel(userDefaults: defaults)
+        XCTAssertEqual(restored.userId, "usr_pubfuse_1")
+        XCTAssertEqual(restored.userEmail, "creator@pubfuse.com")
+        XCTAssertEqual(restored.userDisplayName, "Creator One")
+        XCTAssertEqual(restored.pubfuseAccessToken, "jwt-token")
+    }
+
     func testEditorSettingsTooltipsDefaultAndPersistence() {
         let suiteName = "cinefuse.tests.settings.\(UUID().uuidString)"
         guard let defaults = UserDefaults(suiteName: suiteName) else {

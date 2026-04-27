@@ -74,31 +74,311 @@ struct TimelineRulerView: View {
 
 struct LoginScreen: View {
     @Environment(AppModel.self) private var model
-    @State private var draftUserId = "demo-user"
+    @AppStorage("cinefuse.server.mode") private var apiServerModeRaw = APIServerMode.local.rawValue
+    @AppStorage("cinefuse.server.customBaseURL") private var customServerBaseURL = ""
+    @AppStorage("cinefuse.auth.demoEmail") private var demoEmail = "tester@pubfuse.com"
+    @AppStorage("cinefuse.auth.demoPassword") private var demoPassword = "pubfuseguest"
+    @State private var authMode: AuthMode = .signIn
+    @State private var email = ""
+    @State private var password = ""
+    @State private var signupUsername = ""
+    @State private var signupDisplayName = ""
+    @State private var forgotEmail = ""
+    @State private var isLoading = false
+    @State private var errorMessage: String?
+    @State private var successMessage: String?
+
+    private enum AuthMode: String, CaseIterable, Identifiable {
+        case signIn
+        case signUp
+        case forgotPassword
+
+        var id: String { rawValue }
+
+        var label: String {
+            switch self {
+            case .signIn: return "Sign In"
+            case .signUp: return "Sign Up"
+            case .forgotPassword: return "Forgot Password"
+            }
+        }
+    }
+
+    private var localCinefuseBaseURL: String {
+        ProcessInfo.processInfo.environment["CINEFUSE_API_BASE_URL"] ?? "http://localhost:4000"
+    }
+
+    private var productionCinefuseBaseURL: String {
+        ProcessInfo.processInfo.environment["CINEFUSE_API_PROD_BASE_URL"] ?? "https://api.pubfuse.com"
+    }
+
+    private var selectedCinefuseBaseURL: String {
+        switch APIServerMode(rawValue: apiServerModeRaw) ?? .local {
+        case .local:
+            return localCinefuseBaseURL
+        case .production:
+            return productionCinefuseBaseURL
+        case .custom:
+            return normalizedURL(customServerBaseURL) ?? localCinefuseBaseURL
+        }
+    }
+
+    private var selectedAuthBaseURL: String {
+        let explicitAuthBase = normalizedURL(ProcessInfo.processInfo.environment["CINEFUSE_AUTH_BASE_URL"] ?? "")
+        if let explicitAuthBase {
+            return explicitAuthBase
+        }
+        switch APIServerMode(rawValue: apiServerModeRaw) ?? .local {
+        case .local:
+            return "https://www.pubfuse.com"
+        case .production:
+            return productionCinefuseBaseURL
+        case .custom:
+            return normalizedURL(customServerBaseURL) ?? "https://www.pubfuse.com"
+        }
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: CinefuseTokens.Spacing.m) {
             Text("Welcome to Cinefuse")
                 .font(CinefuseTokens.Typography.screenTitle)
 
-            Text("Sign in with your Pubfuse user ID to create projects, quote shot costs, and generate clips.")
+            Text("Sign in with your Pubfuse account. Cinefuse will use your authenticated user ID for projects, jobs, and Sparks tracking.")
                 .font(CinefuseTokens.Typography.body)
                 .foregroundStyle(CinefuseTokens.ColorRole.textSecondary)
 
-            TextField("User ID", text: $draftUserId)
-                .textFieldStyle(.roundedBorder)
-
-            Button("Continue") {
-                model.signIn(userId: draftUserId)
+            Picker("Mode", selection: $authMode) {
+                ForEach(AuthMode.allCases) { mode in
+                    Text(mode.label).tag(mode)
+                }
             }
-            .buttonStyle(PrimaryActionButtonStyle())
+            .pickerStyle(.segmented)
+
+            switch authMode {
+            case .signIn:
+                TextField("Email", text: $email)
+                    .textFieldStyle(.roundedBorder)
+
+                SecureField("Password", text: $password)
+                    .textFieldStyle(.roundedBorder)
+
+                HStack(spacing: CinefuseTokens.Spacing.s) {
+                    Button {
+                        Task { await signInWithEmail() }
+                    } label: {
+                        Label("Sign In", systemImage: "person.crop.circle.badge.checkmark")
+                    }
+                    .buttonStyle(PrimaryActionButtonStyle())
+                    .disabled(isLoading || email.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || password.isEmpty)
+
+                    Button {
+                        Task { await signInDemoUser() }
+                    } label: {
+                        Label("Demo Sign In", systemImage: "sparkles")
+                    }
+                    .buttonStyle(SecondaryActionButtonStyle())
+                    .disabled(isLoading || demoEmail.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || demoPassword.isEmpty)
+                }
+
+            case .signUp:
+                TextField("Username", text: $signupUsername)
+                    .textFieldStyle(.roundedBorder)
+
+                TextField("Display Name", text: $signupDisplayName)
+                    .textFieldStyle(.roundedBorder)
+
+                TextField("Email", text: $email)
+                    .textFieldStyle(.roundedBorder)
+
+                SecureField("Password", text: $password)
+                    .textFieldStyle(.roundedBorder)
+
+                Button {
+                    Task { await signUpWithEmail() }
+                } label: {
+                    Label("Create Account", systemImage: "person.crop.circle.badge.plus")
+                }
+                .buttonStyle(PrimaryActionButtonStyle())
+                .disabled(
+                    isLoading
+                        || signupUsername.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                        || signupDisplayName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                        || email.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                        || password.count < 6
+                )
+
+            case .forgotPassword:
+                TextField("Email", text: $forgotEmail)
+                    .textFieldStyle(.roundedBorder)
+
+                Button {
+                    Task { await requestPasswordReset() }
+                } label: {
+                    Label("Send Reset Link", systemImage: "envelope.badge")
+                }
+                .buttonStyle(PrimaryActionButtonStyle())
+                .disabled(isLoading || forgotEmail.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+
+            if let successMessage {
+                Text(successMessage)
+                    .font(CinefuseTokens.Typography.caption)
+                    .foregroundStyle(.green)
+            }
+
+            if let errorMessage {
+                Text(errorMessage)
+                    .font(CinefuseTokens.Typography.caption)
+                    .foregroundStyle(CinefuseTokens.ColorRole.danger)
+            }
+
+            VStack(alignment: .leading, spacing: CinefuseTokens.Spacing.xxs) {
+                Label("Auth server: \(selectedAuthBaseURL)", systemImage: "network")
+                    .font(CinefuseTokens.Typography.caption)
+                    .foregroundStyle(CinefuseTokens.ColorRole.textSecondary)
+                Label("Cinefuse API: \(selectedCinefuseBaseURL)", systemImage: "server.rack")
+                    .font(CinefuseTokens.Typography.caption)
+                    .foregroundStyle(CinefuseTokens.ColorRole.textSecondary)
+            }
         }
         .padding(CinefuseTokens.Spacing.xl)
         .frame(maxWidth: 520)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
         .onAppear {
-            if !model.userId.isEmpty {
-                draftUserId = model.userId
+            email = model.userEmail
+            forgotEmail = model.userEmail
+        }
+    }
+
+    private func normalizedURL(_ rawURL: String) -> String? {
+        let trimmed = rawURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        let withScheme = trimmed.contains("://") ? trimmed : "https://\(trimmed)"
+        guard let url = URL(string: withScheme), url.scheme != nil, url.host != nil else {
+            return nil
+        }
+        return withScheme.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+    }
+
+    @MainActor
+    private func clearMessages() {
+        errorMessage = nil
+        successMessage = nil
+    }
+
+    private func signInWithEmail() async {
+        await MainActor.run {
+            isLoading = true
+            clearMessages()
+        }
+        defer { Task { @MainActor in isLoading = false } }
+
+        do {
+            let auth = try await APIClient(baseURLString: selectedCinefuseBaseURL)
+                .loginPubfuse(
+                    authBaseURLString: selectedAuthBaseURL,
+                    email: email.trimmingCharacters(in: .whitespacesAndNewlines),
+                    password: password
+                )
+            await MainActor.run {
+                model.signInPubfuse(
+                    userId: auth.user.id,
+                    accessToken: auth.token,
+                    email: auth.user.email,
+                    displayName: auth.user.resolvedDisplayName
+                )
+                successMessage = "Signed in as \(auth.user.resolvedDisplayName)."
+                password = ""
+            }
+        } catch {
+            await MainActor.run {
+                errorMessage = error.localizedDescription
+            }
+        }
+    }
+
+    private func signInDemoUser() async {
+        await MainActor.run {
+            isLoading = true
+            clearMessages()
+        }
+        defer { Task { @MainActor in isLoading = false } }
+
+        do {
+            let auth = try await APIClient(baseURLString: selectedCinefuseBaseURL)
+                .loginPubfuse(
+                    authBaseURLString: selectedAuthBaseURL,
+                    email: demoEmail.trimmingCharacters(in: .whitespacesAndNewlines),
+                    password: demoPassword
+                )
+            await MainActor.run {
+                model.signInPubfuse(
+                    userId: auth.user.id,
+                    accessToken: auth.token,
+                    email: auth.user.email,
+                    displayName: auth.user.resolvedDisplayName
+                )
+                successMessage = "Signed in with demo account."
+            }
+        } catch {
+            await MainActor.run {
+                errorMessage = error.localizedDescription
+            }
+        }
+    }
+
+    private func signUpWithEmail() async {
+        await MainActor.run {
+            isLoading = true
+            clearMessages()
+        }
+        defer { Task { @MainActor in isLoading = false } }
+
+        do {
+            let auth = try await APIClient(baseURLString: selectedCinefuseBaseURL)
+                .signupPubfuse(
+                    authBaseURLString: selectedAuthBaseURL,
+                    username: signupUsername.trimmingCharacters(in: .whitespacesAndNewlines),
+                    email: email.trimmingCharacters(in: .whitespacesAndNewlines),
+                    password: password,
+                    displayName: signupDisplayName.trimmingCharacters(in: .whitespacesAndNewlines)
+                )
+            await MainActor.run {
+                model.signInPubfuse(
+                    userId: auth.user.id,
+                    accessToken: auth.token,
+                    email: auth.user.email,
+                    displayName: auth.user.resolvedDisplayName
+                )
+                successMessage = "Account created and signed in."
+                password = ""
+            }
+        } catch {
+            await MainActor.run {
+                errorMessage = error.localizedDescription
+            }
+        }
+    }
+
+    private func requestPasswordReset() async {
+        await MainActor.run {
+            isLoading = true
+            clearMessages()
+        }
+        defer { Task { @MainActor in isLoading = false } }
+
+        do {
+            try await APIClient(baseURLString: selectedCinefuseBaseURL)
+                .requestPubfusePasswordReset(
+                    authBaseURLString: selectedAuthBaseURL,
+                    email: forgotEmail.trimmingCharacters(in: .whitespacesAndNewlines)
+                )
+            await MainActor.run {
+                successMessage = "Password reset email sent. Check your inbox."
+            }
+        } catch {
+            await MainActor.run {
+                errorMessage = error.localizedDescription
             }
         }
     }
@@ -143,9 +423,34 @@ struct ProjectWorkspaceScreen: View {
     @State private var hasLiveEventsConnection = false
     @State private var editorSettings = EditorSettingsModel()
     @State private var showSettingsPanel = false
+    @State private var isCheckingServerHealth = false
+    @State private var isServerReachable: Bool?
+    @AppStorage("cinefuse.server.mode") private var apiServerModeRaw = APIServerMode.local.rawValue
+    @AppStorage("cinefuse.server.customBaseURL") private var customServerBaseURL = ""
 
-    private let api = APIClient()
     private let inFlightStatuses: Set<String> = ["queued", "generating", "running"]
+    private var localServerBaseURL: String {
+        ProcessInfo.processInfo.environment["CINEFUSE_API_BASE_URL"] ?? "http://localhost:4000"
+    }
+    private var productionServerBaseURL: String {
+        ProcessInfo.processInfo.environment["CINEFUSE_API_PROD_BASE_URL"] ?? "https://api.pubfuse.com"
+    }
+    private var activeServerBaseURL: String {
+        switch APIServerMode(rawValue: apiServerModeRaw) ?? .local {
+        case .local:
+            return localServerBaseURL
+        case .production:
+            return productionServerBaseURL
+        case .custom:
+            return normalizedServerURL(customServerBaseURL) ?? localServerBaseURL
+        }
+    }
+    private var api: APIClient {
+        APIClient(baseURLString: activeServerBaseURL)
+    }
+    private var serverModeLabel: String {
+        (APIServerMode(rawValue: apiServerModeRaw) ?? .local).label
+    }
 
     private var selectedProject: Project? {
         guard let selectedProjectId else { return nil }
@@ -248,6 +553,7 @@ struct ProjectWorkspaceScreen: View {
             } else {
                 await refresh(selectProjectId: selectedProjectId)
             }
+            await refreshServerHealth()
         }
         .preferredColorScheme(timelineThemeMode.colorScheme)
         .task(id: selectedProjectId) {
@@ -255,6 +561,16 @@ struct ProjectWorkspaceScreen: View {
         }
         .task(id: selectedProjectId) {
             await observeProjectEvents()
+        }
+        .onChange(of: apiServerModeRaw) { _, _ in
+            Task {
+                await refresh(selectProjectId: selectedProjectId)
+                await refreshServerHealth()
+            }
+        }
+        .onChange(of: customServerBaseURL) { _, _ in
+            guard (APIServerMode(rawValue: apiServerModeRaw) ?? .local) == .custom else { return }
+            Task { await refreshServerHealth() }
         }
         .tint(timelineThemeMode.palette.accent)
     }
@@ -266,6 +582,7 @@ struct ProjectWorkspaceScreen: View {
             ViewThatFits(in: .horizontal) {
                 HStack(spacing: CinefuseTokens.Spacing.s) {
                     globalWorkspaceControls
+                    serverStatusBadge
                     Label("Sparks: \(model.balance)", systemImage: "sparkles")
                         .font(CinefuseTokens.Typography.label)
                         .foregroundStyle(CinefuseTokens.ColorRole.textSecondary)
@@ -289,6 +606,7 @@ struct ProjectWorkspaceScreen: View {
                 }
                 VStack(alignment: .trailing, spacing: CinefuseTokens.Spacing.xs) {
                     globalWorkspaceControls
+                    serverStatusBadge
                     Label("Sparks: \(model.balance)", systemImage: "sparkles")
                         .font(CinefuseTokens.Typography.label)
                         .foregroundStyle(CinefuseTokens.ColorRole.textSecondary)
@@ -393,12 +711,85 @@ struct ProjectWorkspaceScreen: View {
                 .font(CinefuseTokens.Typography.cardTitle)
             Toggle("Show tooltips", isOn: $editorSettings.showTooltips)
             Toggle("Restore last open project", isOn: $editorSettings.restoreLastOpenWorkspace)
+            Divider()
+            Text("Server")
+                .font(CinefuseTokens.Typography.label)
+            Picker("API Server", selection: $apiServerModeRaw) {
+                ForEach(APIServerMode.allCases) { mode in
+                    Text(mode.label).tag(mode.rawValue)
+                }
+            }
+            .pickerStyle(.menu)
+            if (APIServerMode(rawValue: apiServerModeRaw) ?? .local) == .custom {
+                TextField("https://your-server.example.com", text: $customServerBaseURL)
+                    .textFieldStyle(.roundedBorder)
+            }
+            Text("Current API base URL: \(activeServerBaseURL)")
+                .font(CinefuseTokens.Typography.caption)
+                .foregroundStyle(CinefuseTokens.ColorRole.textSecondary)
+            serverStatusBadge
+            Button("Reconnect Server") {
+                Task {
+                    await refresh(selectProjectId: selectedProjectId)
+                    await refreshServerHealth()
+                }
+            }
+            .buttonStyle(SecondaryActionButtonStyle())
             Text("Selected theme is saved automatically.")
                 .font(CinefuseTokens.Typography.caption)
                 .foregroundStyle(CinefuseTokens.ColorRole.textSecondary)
         }
         .padding(CinefuseTokens.Spacing.m)
         .frame(width: CinefuseTokens.Control.settingsPanelWidth)
+    }
+
+    private func normalizedServerURL(_ rawURL: String) -> String? {
+        let trimmed = rawURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty,
+              let url = URL(string: trimmed),
+              let scheme = url.scheme?.lowercased(),
+              (scheme == "http" || scheme == "https"),
+              url.host != nil else {
+            return nil
+        }
+        return trimmed
+    }
+
+    private var serverStatusBadge: some View {
+        let stateText: String = {
+            if isCheckingServerHealth {
+                return "Checking"
+            }
+            if let isServerReachable {
+                return isServerReachable ? "Online" : "Offline"
+            }
+            return "Unknown"
+        }()
+        let dotColor: Color = {
+            if isCheckingServerHealth {
+                return CinefuseTokens.ColorRole.warning
+            }
+            if let isServerReachable {
+                return isServerReachable ? CinefuseTokens.ColorRole.success : CinefuseTokens.ColorRole.danger
+            }
+            return CinefuseTokens.ColorRole.textSecondary
+        }()
+
+        return HStack(spacing: CinefuseTokens.Spacing.xxs) {
+            Circle()
+                .fill(dotColor)
+                .frame(width: 8, height: 8)
+            Text("\(serverModeLabel): \(stateText)")
+                .font(CinefuseTokens.Typography.caption)
+                .foregroundStyle(CinefuseTokens.ColorRole.textSecondary)
+        }
+    }
+
+    private func refreshServerHealth() async {
+        isCheckingServerHealth = true
+        let reachable = await api.healthCheck()
+        isServerReachable = reachable
+        isCheckingServerHealth = false
     }
 
     private func applyWorkspacePreset(_ rawValue: String) {
@@ -1624,6 +2015,22 @@ enum EditorWorkspacePreset: String, CaseIterable, Identifiable {
         case .editing: return "Edit"
         case .audio: return "Audio"
         case .review: return "Review"
+        }
+    }
+}
+
+enum APIServerMode: String, CaseIterable, Identifiable {
+    case local
+    case production
+    case custom
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .local: return "Local"
+        case .production: return "Production"
+        case .custom: return "Custom URL"
         }
     }
 }
