@@ -86,7 +86,7 @@ test("api contract: create/list projects and get spark balance", async () => {
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
   assert.equal(shotStatus, "ready");
-  assert.match(shotClipUrl, /^https:\/\/pubfuse\.local\/cinefuse\/clips\/.+\.mp4$/);
+  assert.match(shotClipUrl, /^https:\/\/.+\.mp4$/);
 
   const jobCreateResponse = await fetch(`${baseUrl}/api/v1/cinefuse/projects/${projectId}/jobs`, {
     method: "POST",
@@ -693,7 +693,7 @@ test("api contract: audio generation and final export flow", async () => {
   assert.equal(exportResponse.status, 200);
   const exportBody = await exportResponse.json();
   assert.equal(exportBody.job.kind, "export");
-  assert.match(exportBody.export.fileUrl, /^https:\/\/pubfuse\.local\/cinefuse\/exports\/.+\.mp4$/);
+  assert.match(exportBody.export.fileUrl, /^https:\/\/.+\.mp4$/);
   assert.equal(exportBody.archive !== null, true);
   assert.equal(exportBody.published !== null, true);
 

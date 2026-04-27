@@ -2,6 +2,10 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { createServer } from "./server.js";
 
+process.env.CINEFUSE_ALLOW_STUB_MEDIA = "true";
+process.env.CINEFUSE_PUBFUSE_API_BASE_URL = "";
+process.env.PUBFUSE_API_BASE_URL = "";
+
 test("pubfuse contract: list_tools and invoke", async () => {
   const server = createServer();
   const tools = server.listTools();
