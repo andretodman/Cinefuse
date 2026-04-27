@@ -130,14 +130,9 @@ struct LoginScreen: View {
         if let explicitAuthBase {
             return explicitAuthBase
         }
-        switch APIServerMode(rawValue: apiServerModeRaw) ?? .local {
-        case .local:
-            return "https://www.pubfuse.com"
-        case .production:
-            return productionCinefuseBaseURL
-        case .custom:
-            return normalizedURL(customServerBaseURL) ?? "https://www.pubfuse.com"
-        }
+        // Auth is owned by Pubfuse user management; do not infer auth host from Cinefuse API mode.
+        // Use explicit override only when intentionally testing a different auth server.
+        return "https://www.pubfuse.com"
     }
 
     var body: some View {
