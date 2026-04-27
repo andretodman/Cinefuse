@@ -111,7 +111,7 @@ struct LoginScreen: View {
     }
 
     private var productionCinefuseBaseURL: String {
-        ProcessInfo.processInfo.environment["CINEFUSE_API_PROD_BASE_URL"] ?? "https://api.pubfuse.com"
+        ProcessInfo.processInfo.environment["CINEFUSE_API_PROD_BASE_URL"] ?? "https://cinefuse.pubfuse.com"
     }
 
     private var selectedCinefuseBaseURL: String {
@@ -568,7 +568,7 @@ struct ProjectWorkspaceScreen: View {
         ProcessInfo.processInfo.environment["CINEFUSE_API_BASE_URL"] ?? "http://localhost:4000"
     }
     private var productionServerBaseURL: String {
-        ProcessInfo.processInfo.environment["CINEFUSE_API_PROD_BASE_URL"] ?? "https://api.pubfuse.com"
+        ProcessInfo.processInfo.environment["CINEFUSE_API_PROD_BASE_URL"] ?? "https://cinefuse.pubfuse.com"
     }
     private var activeServerBaseURL: String {
         switch APIServerMode(rawValue: apiServerModeRaw) ?? .local {
