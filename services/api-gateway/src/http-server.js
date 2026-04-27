@@ -630,7 +630,12 @@ export function createHttpServer() {
     const sfxAudioMatch = url.pathname.match(/^\/api\/v1\/cinefuse\/projects\/([^/]+)\/audio\/sfx$/);
     const mixAudioMatch = url.pathname.match(/^\/api\/v1\/cinefuse\/projects\/([^/]+)\/audio\/mix$/);
     const lipsyncAudioMatch = url.pathname.match(/^\/api\/v1\/cinefuse\/projects\/([^/]+)\/audio\/lipsync$/);
+    const stitchPreviewMatch = url.pathname.match(/^\/api\/v1\/cinefuse\/projects\/([^/]+)\/stitch\/preview$/);
     const stitchFinalMatch = url.pathname.match(/^\/api\/v1\/cinefuse\/projects\/([^/]+)\/stitch\/final$/);
+    const stitchTransitionsMatch = url.pathname.match(/^\/api\/v1\/cinefuse\/projects\/([^/]+)\/stitch\/transitions$/);
+    const stitchColorMatchMatch = url.pathname.match(/^\/api\/v1\/cinefuse\/projects\/([^/]+)\/stitch\/color-match$/);
+    const stitchCaptionsMatch = url.pathname.match(/^\/api\/v1\/cinefuse\/projects\/([^/]+)\/stitch\/captions\/bake$/);
+    const stitchLoudnessMatch = url.pathname.match(/^\/api\/v1\/cinefuse\/projects\/([^/]+)\/stitch\/loudness\/normalize$/);
     const exportFinalMatch = url.pathname.match(/^\/api\/v1\/cinefuse\/projects\/([^/]+)\/export\/final$/);
     const shotQuoteMatch = url.pathname.match(/^\/api\/v1\/cinefuse\/projects\/([^/]+)\/shots\/quote$/);
     if (timelineMatch && method === "GET") {
@@ -762,8 +767,27 @@ export function createHttpServer() {
       });
       return json(response, 200, { audioTrack: track, job, sparksCost });
     }
-    if (stitchFinalMatch && method === "POST") {
-      const projectId = decodeURIComponent(stitchFinalMatch[1]);
+    const stitchToolByPath = stitchPreviewMatch
+      ? "preview_stitch"
+      : stitchFinalMatch
+        ? "final_stitch"
+        : stitchTransitionsMatch
+          ? "apply_transitions"
+          : stitchColorMatchMatch
+            ? "color_match"
+            : stitchCaptionsMatch
+              ? "bake_captions"
+              : stitchLoudnessMatch
+                ? "loudness_normalize"
+                : null;
+    const stitchProjectMatch = stitchPreviewMatch
+      || stitchFinalMatch
+      || stitchTransitionsMatch
+      || stitchColorMatchMatch
+      || stitchCaptionsMatch
+      || stitchLoudnessMatch;
+    if (stitchProjectMatch && method === "POST" && stitchToolByPath) {
+      const projectId = decodeURIComponent(stitchProjectMatch[1]);
       const project = await getProject(projectId, auth.userId);
       if (!project) {
         return writeError(response, 404, "project not found", "PROJECT_NOT_FOUND");
@@ -771,7 +795,7 @@ export function createHttpServer() {
       const payload = await readBody(request);
       const timelineShots = await listShots(projectId);
       const timelineAudioTracks = await listAudioTracks(projectId);
-      const stitched = await mcpHost.invoke("stitch", "final_stitch", {
+      const stitched = await mcpHost.invoke("stitch", stitchToolByPath, {
         ...payload,
         projectId,
         shots: timelineShots,
@@ -783,7 +807,10 @@ export function createHttpServer() {
         kind: "stitch",
         status: "done",
         inputPayload: payload,
-        outputPayload: stitched.result ?? {},
+        outputPayload: {
+          operation: stitchToolByPath,
+          ...(stitched.result ?? {})
+        },
         costToUsCents: Number(stitched.result?.costToUsCents ?? 0)
       });
       return json(response, 200, { stitch: stitched.result, job });

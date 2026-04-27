@@ -172,6 +172,29 @@ public struct APIClient {
         return try JSONDecoder().decode(CreateAudioTrackResponse.self, from: data).audioTrack
     }
 
+    public func mixAudio(
+        token: String,
+        projectId: String,
+        title: String,
+        laneIndex: Int,
+        startMs: Int,
+        durationMs: Int
+    ) async throws -> AudioTrack {
+        var request = URLRequest(url: buildURL(path: "\(Self.cinefusePrefix)/projects/\(projectId)/audio/mix"))
+        request.httpMethod = "POST"
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONEncoder().encode([
+            "title": AnyEncodable(title),
+            "laneIndex": AnyEncodable(laneIndex),
+            "startMs": AnyEncodable(startMs),
+            "durationMs": AnyEncodable(durationMs)
+        ] as [String: AnyEncodable])
+        let (data, response) = try await URLSession.shared.data(for: request)
+        try validate(response: response, data: data)
+        return try JSONDecoder().decode(CreateAudioTrackResponse.self, from: data).audioTrack
+    }
+
     public func lipsyncAudio(
         token: String,
         projectId: String,
@@ -197,10 +220,128 @@ public struct APIClient {
         return try JSONDecoder().decode(CreateAudioTrackResponse.self, from: data).audioTrack
     }
 
-    public func exportFinal(token: String, projectId: String) async throws -> Job {
+    public func previewStitch(
+        token: String,
+        projectId: String,
+        transitionStyle: String = "crossfade",
+        captionsEnabled: Bool = false
+    ) async throws -> StitchOperationResponse {
+        var request = URLRequest(url: buildURL(path: "\(Self.cinefusePrefix)/projects/\(projectId)/stitch/preview"))
+        request.httpMethod = "POST"
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONEncoder().encode([
+            "transitionStyle": AnyEncodable(transitionStyle),
+            "captionsEnabled": AnyEncodable(captionsEnabled)
+        ] as [String: AnyEncodable])
+        let (data, response) = try await URLSession.shared.data(for: request)
+        try validate(response: response, data: data)
+        return try JSONDecoder().decode(StitchOperationResponse.self, from: data)
+    }
+
+    public func applyTransitions(
+        token: String,
+        projectId: String,
+        transitionStyle: String = "crossfade"
+    ) async throws -> StitchOperationResponse {
+        var request = URLRequest(url: buildURL(path: "\(Self.cinefusePrefix)/projects/\(projectId)/stitch/transitions"))
+        request.httpMethod = "POST"
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONEncoder().encode([
+            "transitionStyle": AnyEncodable(transitionStyle)
+        ] as [String: AnyEncodable])
+        let (data, response) = try await URLSession.shared.data(for: request)
+        try validate(response: response, data: data)
+        return try JSONDecoder().decode(StitchOperationResponse.self, from: data)
+    }
+
+    public func colorMatchStitch(
+        token: String,
+        projectId: String,
+        colorMatchMode: String = "balanced"
+    ) async throws -> StitchOperationResponse {
+        var request = URLRequest(url: buildURL(path: "\(Self.cinefusePrefix)/projects/\(projectId)/stitch/color-match"))
+        request.httpMethod = "POST"
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONEncoder().encode([
+            "colorMatchMode": AnyEncodable(colorMatchMode)
+        ] as [String: AnyEncodable])
+        let (data, response) = try await URLSession.shared.data(for: request)
+        try validate(response: response, data: data)
+        return try JSONDecoder().decode(StitchOperationResponse.self, from: data)
+    }
+
+    public func bakeCaptions(
+        token: String,
+        projectId: String,
+        captionsEnabled: Bool = true
+    ) async throws -> StitchOperationResponse {
+        var request = URLRequest(url: buildURL(path: "\(Self.cinefusePrefix)/projects/\(projectId)/stitch/captions/bake"))
+        request.httpMethod = "POST"
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONEncoder().encode([
+            "captionsEnabled": AnyEncodable(captionsEnabled)
+        ] as [String: AnyEncodable])
+        let (data, response) = try await URLSession.shared.data(for: request)
+        try validate(response: response, data: data)
+        return try JSONDecoder().decode(StitchOperationResponse.self, from: data)
+    }
+
+    public func normalizeLoudness(
+        token: String,
+        projectId: String,
+        targetLufs: Int = -14
+    ) async throws -> StitchOperationResponse {
+        var request = URLRequest(url: buildURL(path: "\(Self.cinefusePrefix)/projects/\(projectId)/stitch/loudness/normalize"))
+        request.httpMethod = "POST"
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONEncoder().encode([
+            "targetLufs": AnyEncodable(targetLufs)
+        ] as [String: AnyEncodable])
+        let (data, response) = try await URLSession.shared.data(for: request)
+        try validate(response: response, data: data)
+        return try JSONDecoder().decode(StitchOperationResponse.self, from: data)
+    }
+
+    public func finalStitch(
+        token: String,
+        projectId: String,
+        transitionStyle: String = "crossfade",
+        captionsEnabled: Bool = false,
+        resolution: String = "1080p"
+    ) async throws -> StitchOperationResponse {
+        var request = URLRequest(url: buildURL(path: "\(Self.cinefusePrefix)/projects/\(projectId)/stitch/final"))
+        request.httpMethod = "POST"
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONEncoder().encode([
+            "transitionStyle": AnyEncodable(transitionStyle),
+            "captionsEnabled": AnyEncodable(captionsEnabled),
+            "resolution": AnyEncodable(resolution)
+        ] as [String: AnyEncodable])
+        let (data, response) = try await URLSession.shared.data(for: request)
+        try validate(response: response, data: data)
+        return try JSONDecoder().decode(StitchOperationResponse.self, from: data)
+    }
+
+    public func exportFinal(
+        token: String,
+        projectId: String,
+        resolution: String = "1080p",
+        captionsEnabled: Bool = false
+    ) async throws -> Job {
         var request = URLRequest(url: buildURL(path: "\(Self.cinefusePrefix)/projects/\(projectId)/export/final"))
         request.httpMethod = "POST"
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONEncoder().encode([
+            "resolution": AnyEncodable(resolution),
+            "captionsEnabled": AnyEncodable(captionsEnabled)
+        ] as [String: AnyEncodable])
         let (data, response) = try await URLSession.shared.data(for: request)
         try validate(response: response, data: data)
         return try JSONDecoder().decode(CreateJobResponse.self, from: data).job

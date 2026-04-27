@@ -583,9 +583,107 @@ test("api contract: audio generation and final export flow", async () => {
   const dialogueBody = await dialogue.json();
   assert.equal(dialogueBody.audioTrack.kind, "dialogue");
 
+  const sfx = await fetch(`${baseUrl}/api/v1/cinefuse/projects/${projectId}/audio/sfx`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({
+      title: "Door slam",
+      laneIndex: 2,
+      startMs: 1000,
+      durationMs: 1200
+    })
+  });
+  assert.equal(sfx.status, 200);
+  const sfxBody = await sfx.json();
+  assert.equal(sfxBody.audioTrack.kind, "sfx");
+
+  const mix = await fetch(`${baseUrl}/api/v1/cinefuse/projects/${projectId}/audio/mix`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({
+      title: "Scene 1 mix",
+      laneIndex: 3,
+      startMs: 0,
+      durationMs: 4500
+    })
+  });
+  assert.equal(mix.status, 200);
+  const mixBody = await mix.json();
+  assert.equal(mixBody.audioTrack.kind, "mix");
+
+  const lipsync = await fetch(`${baseUrl}/api/v1/cinefuse/projects/${projectId}/audio/lipsync`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({
+      shotId,
+      title: "Lip-sync pass",
+      laneIndex: 0,
+      startMs: 0,
+      durationMs: 3500
+    })
+  });
+  assert.equal(lipsync.status, 200);
+  const lipsyncBody = await lipsync.json();
+  assert.equal(lipsyncBody.audioTrack.kind, "lipsync");
+
+  const stitchPreview = await fetch(`${baseUrl}/api/v1/cinefuse/projects/${projectId}/stitch/preview`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ transitionStyle: "crossfade", captionsEnabled: true })
+  });
+  assert.equal(stitchPreview.status, 200);
+  const stitchPreviewBody = await stitchPreview.json();
+  assert.equal(stitchPreviewBody.stitch.kind, "preview_stitch");
+
+  const stitchTransitions = await fetch(`${baseUrl}/api/v1/cinefuse/projects/${projectId}/stitch/transitions`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ transitionStyle: "dip_to_black" })
+  });
+  assert.equal(stitchTransitions.status, 200);
+  const stitchTransitionsBody = await stitchTransitions.json();
+  assert.equal(stitchTransitionsBody.stitch.kind, "apply_transitions");
+
+  const stitchColor = await fetch(`${baseUrl}/api/v1/cinefuse/projects/${projectId}/stitch/color-match`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ colorMatchMode: "balanced" })
+  });
+  assert.equal(stitchColor.status, 200);
+  const stitchColorBody = await stitchColor.json();
+  assert.equal(stitchColorBody.stitch.kind, "color_match");
+
+  const stitchCaptions = await fetch(`${baseUrl}/api/v1/cinefuse/projects/${projectId}/stitch/captions/bake`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ captionsEnabled: true })
+  });
+  assert.equal(stitchCaptions.status, 200);
+  const stitchCaptionsBody = await stitchCaptions.json();
+  assert.equal(stitchCaptionsBody.stitch.kind, "bake_captions");
+
+  const stitchLoudness = await fetch(`${baseUrl}/api/v1/cinefuse/projects/${projectId}/stitch/loudness/normalize`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ targetLufs: -14 })
+  });
+  assert.equal(stitchLoudness.status, 200);
+  const stitchLoudnessBody = await stitchLoudness.json();
+  assert.equal(stitchLoudnessBody.stitch.kind, "loudness_normalize");
+
+  const stitchFinal = await fetch(`${baseUrl}/api/v1/cinefuse/projects/${projectId}/stitch/final`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ transitionStyle: "crossfade", captionsEnabled: true, resolution: "1080p" })
+  });
+  assert.equal(stitchFinal.status, 200);
+  const stitchFinalBody = await stitchFinal.json();
+  assert.equal(stitchFinalBody.stitch.kind, "final_stitch");
+
   const exportResponse = await fetch(`${baseUrl}/api/v1/cinefuse/projects/${projectId}/export/final`, {
     method: "POST",
-    headers
+    headers,
+    body: JSON.stringify({ resolution: "4k", captionsEnabled: true })
   });
   assert.equal(exportResponse.status, 200);
   const exportBody = await exportResponse.json();
@@ -594,7 +692,8 @@ test("api contract: audio generation and final export flow", async () => {
 
   const jobsResponse = await fetch(`${baseUrl}/api/v1/cinefuse/projects/${projectId}/jobs`, { headers });
   const jobsBody = await jobsResponse.json();
-  assert.equal(jobsBody.jobs.some((job) => job.kind === "audio"), true);
+  assert.equal(jobsBody.jobs.filter((job) => job.kind === "audio").length >= 4, true);
+  assert.equal(jobsBody.jobs.filter((job) => job.kind === "stitch").length >= 6, true);
   assert.equal(jobsBody.jobs.some((job) => job.kind === "export"), true);
 
   await new Promise((resolve, reject) => {

@@ -125,6 +125,9 @@ struct ProjectWorkspaceScreen: View {
     @State private var newCharacterDescription = ""
     @State private var selectedCharacterLockId = ""
     @State private var audioTrackTitleDraft = "Dialogue pass"
+    @State private var exportResolution = "1080p"
+    @State private var exportCaptionsEnabled = false
+    @State private var transitionStyle = "crossfade"
     @AppStorage("cinefuse.editor.selectedThemeMode") private var timelineThemeModeRaw = TimelineThemeMode.system.rawValue
     @AppStorage("cinefuse.editor.lastProjectId") private var lastProjectId = ""
     @AppStorage("cinefuse.editor.showLeftPane") private var showLeftPane = true
@@ -188,6 +191,9 @@ struct ProjectWorkspaceScreen: View {
                     shotModelTierDraft: $shotModelTierDraft,
                     selectedCharacterLockId: $selectedCharacterLockId,
                     audioTrackTitleDraft: $audioTrackTitleDraft,
+                    exportResolution: $exportResolution,
+                    exportCaptionsEnabled: $exportCaptionsEnabled,
+                    transitionStyle: $transitionStyle,
                     timelineThemeMode: timelineThemeModeBinding,
                     quotedShotCost: quotedShotCost,
                     newCharacterName: $newCharacterName,
@@ -206,6 +212,15 @@ struct ProjectWorkspaceScreen: View {
                     onReorderShots: { from, to in Task { await reorderShots(from: from, to: to) } },
                     onGenerateDialogue: { Task { await generateDialogueTrack() } },
                     onGenerateScore: { Task { await generateScoreTrack() } },
+                    onGenerateSFX: { Task { await generateSFXTrack() } },
+                    onMixAudio: { Task { await mixAudioTrack() } },
+                    onLipSync: { Task { await generateLipSyncTrack() } },
+                    onPreviewStitch: { Task { await previewStitchTimeline() } },
+                    onApplyTransitions: { Task { await applyTimelineTransitions() } },
+                    onColorMatch: { Task { await applyTimelineColorMatch() } },
+                    onBakeCaptions: { Task { await bakeTimelineCaptions() } },
+                    onNormalizeLoudness: { Task { await normalizeTimelineLoudness() } },
+                    onFinalStitch: { Task { await finalStitchTimeline() } },
                     onExportFinal: { Task { await exportFinalTimeline() } },
                     showTooltips: editorSettings.showTooltips
                 )
@@ -249,13 +264,15 @@ struct ProjectWorkspaceScreen: View {
                     Label("Sparks: \(model.balance)", systemImage: "sparkles")
                         .font(CinefuseTokens.Typography.label)
                         .foregroundStyle(CinefuseTokens.ColorRole.textSecondary)
-                    Button {
-                        openCreateProjectSheet()
-                    } label: {
-                        Label("New Project", systemImage: "plus.square.on.square")
+                    if selectedProject == nil {
+                        Button {
+                            openCreateProjectSheet()
+                        } label: {
+                            Label("New Project", systemImage: "plus.square.on.square")
+                        }
+                        .buttonStyle(PrimaryActionButtonStyle())
+                        .keyboardShortcut("n", modifiers: [.command])
                     }
-                    .buttonStyle(PrimaryActionButtonStyle())
-                    .keyboardShortcut("n", modifiers: [.command])
                     Button {
                         closeProject()
                         model.signOut()
@@ -271,13 +288,15 @@ struct ProjectWorkspaceScreen: View {
                         .font(CinefuseTokens.Typography.label)
                         .foregroundStyle(CinefuseTokens.ColorRole.textSecondary)
                     HStack(spacing: CinefuseTokens.Spacing.s) {
-                        Button {
-                            openCreateProjectSheet()
-                        } label: {
-                            Label("New", systemImage: "plus.square.on.square")
+                        if selectedProject == nil {
+                            Button {
+                                openCreateProjectSheet()
+                            } label: {
+                                Label("New", systemImage: "plus.square.on.square")
+                            }
+                            .buttonStyle(PrimaryActionButtonStyle())
+                            .keyboardShortcut("n", modifiers: [.command])
                         }
-                        .buttonStyle(PrimaryActionButtonStyle())
-                        .keyboardShortcut("n", modifiers: [.command])
                         Button {
                             closeProject()
                             model.signOut()
@@ -787,10 +806,154 @@ struct ProjectWorkspaceScreen: View {
         }
     }
 
+    private func generateSFXTrack() async {
+        guard let selectedProjectId else { return }
+        do {
+            _ = try await api.generateSFX(
+                token: model.bearerToken,
+                projectId: selectedProjectId,
+                title: audioTrackTitleDraft.isEmpty ? "Foley accent" : audioTrackTitleDraft,
+                laneIndex: 2,
+                startMs: 0,
+                durationMs: 2500
+            )
+            await loadSelectedProjectDetails(showLoadingIndicator: false)
+        } catch {
+            model.errorMessage = error.localizedDescription
+        }
+    }
+
+    private func mixAudioTrack() async {
+        guard let selectedProjectId else { return }
+        do {
+            _ = try await api.mixAudio(
+                token: model.bearerToken,
+                projectId: selectedProjectId,
+                title: "Scene mixdown",
+                laneIndex: 3,
+                startMs: 0,
+                durationMs: 10000
+            )
+            await loadSelectedProjectDetails(showLoadingIndicator: false)
+        } catch {
+            model.errorMessage = error.localizedDescription
+        }
+    }
+
+    private func generateLipSyncTrack() async {
+        guard let selectedProjectId else { return }
+        do {
+            _ = try await api.lipsyncAudio(
+                token: model.bearerToken,
+                projectId: selectedProjectId,
+                shotId: shots.first?.id,
+                title: "Lip-sync pass",
+                laneIndex: 0,
+                startMs: 0,
+                durationMs: 4000
+            )
+            await loadSelectedProjectDetails(showLoadingIndicator: false)
+        } catch {
+            model.errorMessage = error.localizedDescription
+        }
+    }
+
+    private func previewStitchTimeline() async {
+        guard let selectedProjectId else { return }
+        do {
+            _ = try await api.previewStitch(
+                token: model.bearerToken,
+                projectId: selectedProjectId,
+                transitionStyle: transitionStyle,
+                captionsEnabled: exportCaptionsEnabled
+            )
+            await loadSelectedProjectDetails(showLoadingIndicator: false)
+        } catch {
+            model.errorMessage = error.localizedDescription
+        }
+    }
+
+    private func applyTimelineTransitions() async {
+        guard let selectedProjectId else { return }
+        do {
+            _ = try await api.applyTransitions(
+                token: model.bearerToken,
+                projectId: selectedProjectId,
+                transitionStyle: transitionStyle
+            )
+            await loadSelectedProjectDetails(showLoadingIndicator: false)
+        } catch {
+            model.errorMessage = error.localizedDescription
+        }
+    }
+
+    private func applyTimelineColorMatch() async {
+        guard let selectedProjectId else { return }
+        do {
+            _ = try await api.colorMatchStitch(
+                token: model.bearerToken,
+                projectId: selectedProjectId,
+                colorMatchMode: "balanced"
+            )
+            await loadSelectedProjectDetails(showLoadingIndicator: false)
+        } catch {
+            model.errorMessage = error.localizedDescription
+        }
+    }
+
+    private func bakeTimelineCaptions() async {
+        guard let selectedProjectId else { return }
+        do {
+            _ = try await api.bakeCaptions(
+                token: model.bearerToken,
+                projectId: selectedProjectId,
+                captionsEnabled: exportCaptionsEnabled
+            )
+            await loadSelectedProjectDetails(showLoadingIndicator: false)
+        } catch {
+            model.errorMessage = error.localizedDescription
+        }
+    }
+
+    private func normalizeTimelineLoudness() async {
+        guard let selectedProjectId else { return }
+        do {
+            _ = try await api.normalizeLoudness(
+                token: model.bearerToken,
+                projectId: selectedProjectId,
+                targetLufs: -14
+            )
+            await loadSelectedProjectDetails(showLoadingIndicator: false)
+        } catch {
+            model.errorMessage = error.localizedDescription
+        }
+    }
+
+    private func finalStitchTimeline() async {
+        guard let selectedProjectId else { return }
+        do {
+            _ = try await api.finalStitch(
+                token: model.bearerToken,
+                projectId: selectedProjectId,
+                transitionStyle: transitionStyle,
+                captionsEnabled: exportCaptionsEnabled,
+                resolution: exportResolution
+            )
+            await loadSelectedProjectDetails(showLoadingIndicator: false)
+        } catch {
+            model.errorMessage = error.localizedDescription
+        }
+    }
+
     private func exportFinalTimeline() async {
         guard let selectedProjectId else { return }
         do {
-            _ = try await api.exportFinal(token: model.bearerToken, projectId: selectedProjectId)
+            _ = try await api.exportFinal(
+                token: model.bearerToken,
+                projectId: selectedProjectId,
+                resolution: exportResolution,
+                captionsEnabled: exportCaptionsEnabled
+            )
             await loadSelectedProjectDetails(showLoadingIndicator: false)
         } catch {
             model.errorMessage = error.localizedDescription
@@ -864,6 +1027,9 @@ struct ProjectDetailScreen: View {
     @Binding var shotModelTierDraft: String
     @Binding var selectedCharacterLockId: String
     @Binding var audioTrackTitleDraft: String
+    @Binding var exportResolution: String
+    @Binding var exportCaptionsEnabled: Bool
+    @Binding var transitionStyle: String
     @Binding var timelineThemeMode: TimelineThemeMode
     let quotedShotCost: ShotQuote?
     @Binding var newCharacterName: String
@@ -883,6 +1049,15 @@ struct ProjectDetailScreen: View {
     let onReorderShots: (IndexSet, Int) -> Void
     let onGenerateDialogue: () -> Void
     let onGenerateScore: () -> Void
+    let onGenerateSFX: () -> Void
+    let onMixAudio: () -> Void
+    let onLipSync: () -> Void
+    let onPreviewStitch: () -> Void
+    let onApplyTransitions: () -> Void
+    let onColorMatch: () -> Void
+    let onBakeCaptions: () -> Void
+    let onNormalizeLoudness: () -> Void
+    let onFinalStitch: () -> Void
     let onExportFinal: () -> Void
     let showTooltips: Bool
     @AppStorage("cinefuse.editor.leftPaneWidth") private var leftPaneWidth: Double = 360
@@ -1014,6 +1189,15 @@ struct ProjectDetailScreen: View {
                                                     Button("Generate Score", action: onGenerateScore)
                                                         .tooltip("Generate background music score", enabled: showTooltips)
                                                         .buttonStyle(SecondaryActionButtonStyle())
+                                                    Button("Generate SFX", action: onGenerateSFX)
+                                                        .tooltip("Generate one-shot sound effect", enabled: showTooltips)
+                                                        .buttonStyle(SecondaryActionButtonStyle())
+                                                    Button("Mix", action: onMixAudio)
+                                                        .tooltip("Create mixed audio master for timeline", enabled: showTooltips)
+                                                        .buttonStyle(SecondaryActionButtonStyle())
+                                                    Button("Lip-sync", action: onLipSync)
+                                                        .tooltip("Run lip-sync pass for selected shot", enabled: showTooltips)
+                                                        .buttonStyle(SecondaryActionButtonStyle())
                                                 }
                                                 VStack(alignment: .leading, spacing: CinefuseTokens.Spacing.s) {
                                                     TextField("Audio title", text: $audioTrackTitleDraft)
@@ -1024,6 +1208,17 @@ struct ProjectDetailScreen: View {
                                                             .buttonStyle(SecondaryActionButtonStyle())
                                                         Button("Generate Score", action: onGenerateScore)
                                                             .tooltip("Generate background music score", enabled: showTooltips)
+                                                            .buttonStyle(SecondaryActionButtonStyle())
+                                                        Button("Generate SFX", action: onGenerateSFX)
+                                                            .tooltip("Generate one-shot sound effect", enabled: showTooltips)
+                                                            .buttonStyle(SecondaryActionButtonStyle())
+                                                    }
+                                                    HStack(spacing: CinefuseTokens.Spacing.s) {
+                                                        Button("Mix", action: onMixAudio)
+                                                            .tooltip("Create mixed audio master for timeline", enabled: showTooltips)
+                                                            .buttonStyle(SecondaryActionButtonStyle())
+                                                        Button("Lip-sync", action: onLipSync)
+                                                            .tooltip("Run lip-sync pass for selected shot", enabled: showTooltips)
                                                             .buttonStyle(SecondaryActionButtonStyle())
                                                     }
                                                 }
@@ -1145,15 +1340,59 @@ struct ProjectDetailScreen: View {
                     title: "Export",
                     subtitle: "Render the current timeline order into a combined output."
                 ) {
-                    HStack {
-                        Button {
-                            onExportFinal()
-                        } label: {
-                            Label("Export Combined", systemImage: "square.and.arrow.up")
+                    VStack(alignment: .leading, spacing: CinefuseTokens.Spacing.s) {
+                        HStack(spacing: CinefuseTokens.Spacing.s) {
+                            Picker("Resolution", selection: $exportResolution) {
+                                Text("1080p").tag("1080p")
+                                Text("4K").tag("4k")
+                            }
+                            .pickerStyle(.menu)
+                            .frame(minWidth: 110)
+                            .tooltip("Choose final output resolution", enabled: showTooltips)
+                            Picker("Transitions", selection: $transitionStyle) {
+                                Text("Crossfade").tag("crossfade")
+                                Text("Dip to Black").tag("dip_to_black")
+                                Text("Hard Cut").tag("cut")
+                            }
+                            .pickerStyle(.menu)
+                            .frame(minWidth: 140)
+                            .tooltip("Choose timeline transition style", enabled: showTooltips)
+                            Toggle("Captions", isOn: $exportCaptionsEnabled)
+                                .toggleStyle(.switch)
+                                .tooltip("Bake captions into stitched/exported output", enabled: showTooltips)
                         }
-                        .tooltip("Render and export the current timeline", enabled: showTooltips)
-                            .buttonStyle(PrimaryActionButtonStyle())
-                        Spacer()
+                        HStack(spacing: CinefuseTokens.Spacing.xs) {
+                            Button("Preview Stitch", action: onPreviewStitch)
+                                .tooltip("Build a lightweight stitched preview", enabled: showTooltips)
+                                .buttonStyle(SecondaryActionButtonStyle())
+                            Button("Transitions", action: onApplyTransitions)
+                                .tooltip("Apply transitions between adjacent shots", enabled: showTooltips)
+                                .buttonStyle(SecondaryActionButtonStyle())
+                            Button("Color Match", action: onColorMatch)
+                                .tooltip("Reduce color mismatch across shot cuts", enabled: showTooltips)
+                                .buttonStyle(SecondaryActionButtonStyle())
+                        }
+                        HStack(spacing: CinefuseTokens.Spacing.xs) {
+                            Button("Bake Captions", action: onBakeCaptions)
+                                .tooltip("Render timeline captions into video output", enabled: showTooltips)
+                                .buttonStyle(SecondaryActionButtonStyle())
+                            Button("Normalize Loudness", action: onNormalizeLoudness)
+                                .tooltip("Normalize mix output loudness for playback", enabled: showTooltips)
+                                .buttonStyle(SecondaryActionButtonStyle())
+                            Button("Final Stitch", action: onFinalStitch)
+                                .tooltip("Run full stitch pass before export", enabled: showTooltips)
+                                .buttonStyle(SecondaryActionButtonStyle())
+                        }
+                        HStack {
+                            Button {
+                                onExportFinal()
+                            } label: {
+                                Label("Export Combined", systemImage: "square.and.arrow.up")
+                            }
+                            .tooltip("Render and export the current timeline", enabled: showTooltips)
+                                .buttonStyle(PrimaryActionButtonStyle())
+                            Spacer()
+                        }
                     }
                 }
             }

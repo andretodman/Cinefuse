@@ -139,6 +139,20 @@ public struct CreateJobResponse: Codable {
     public let job: Job
 }
 
+public struct StitchResult: Codable {
+    public let id: String
+    public let kind: String
+    public let status: String
+    public let stitchedUrl: String?
+    public let durationSec: Int?
+    public let costToUsCents: Int
+}
+
+public struct StitchOperationResponse: Codable {
+    public let stitch: StitchResult
+    public let job: Job
+}
+
 public struct GenerateShotResponse: Codable {
     public let shot: Shot
     public let job: Job
