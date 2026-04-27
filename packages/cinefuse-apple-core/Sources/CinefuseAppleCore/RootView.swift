@@ -884,8 +884,15 @@ struct ProjectWorkspaceScreen: View {
 
     private var workspaceSettingsPanel: some View {
         VStack(alignment: .leading, spacing: CinefuseTokens.Spacing.s) {
-            Text("Editor Settings")
-                .font(CinefuseTokens.Typography.cardTitle)
+            HStack {
+                Text("Editor Settings")
+                    .font(CinefuseTokens.Typography.cardTitle)
+                Spacer()
+                Button("Close") {
+                    showSettingsPanel = false
+                }
+                .keyboardShortcut(.cancelAction)
+            }
             Toggle("Show tooltips", isOn: $editorSettings.showTooltips)
             Toggle("Restore last open project", isOn: $editorSettings.restoreLastOpenWorkspace)
             Divider()
