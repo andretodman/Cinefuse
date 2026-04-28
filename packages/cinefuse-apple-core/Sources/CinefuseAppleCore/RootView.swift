@@ -1919,6 +1919,25 @@ struct ProjectWorkspaceScreen: View {
     private func retryShot(shotId: String) async {
         guard let selectedProjectId else { return }
         model.errorMessage = nil
+        await loadSelectedProjectDetails(showLoadingIndicator: false)
+        guard let currentShot = shots.first(where: { $0.id == shotId }) else {
+            model.errorMessage = "Shot no longer exists. Refresh and try again."
+            return
+        }
+        guard currentShot.status == "failed" else {
+            let message = "This shot is no longer failed (now \(currentShot.status)). Retry is only for failed shots. Use Generate for draft/ready, or wait if queued/generating."
+            upsertShotRequestState(shotId) { state in
+                state.stage = .failed
+                state.responseReceivedAt = Date()
+                state.lastMeaningfulTransitionAt = state.responseReceivedAt
+                state.lastKnownStatus = currentShot.status
+                state.errorMessage = message
+                state.source = "snapshot"
+            }
+            appendDebugEvent("retry shot conflict-precheck shot=\(shotId) status=\(currentShot.status)")
+            model.errorMessage = message
+            return
+        }
         upsertShotRequestState(shotId) { state in
             state.stage = .requestSent
             state.requestSentAt = state.requestSentAt ?? Date()
@@ -1952,19 +1971,34 @@ struct ProjectWorkspaceScreen: View {
             await loadSelectedProjectDetails(showLoadingIndicator: false)
         } catch {
             let nsError = error as NSError
+            let errorCode = nsError.userInfo[CinefuseAPIErrorUserInfoKey.errorCode] as? String
+            let backendStatus = nsError.userInfo[CinefuseAPIErrorUserInfoKey.currentStatus] as? String
+            let isRetryConflict = nsError.domain == "CinefuseAPI"
+                && nsError.code == 409
+                && errorCode == "SHOT_RETRY_CONFLICT"
             let isAlreadyGenerating = nsError.domain == "CinefuseAPI"
                 && nsError.code == 409
                 && nsError.localizedDescription.localizedCaseInsensitiveContains("already in progress")
+            let conflictMessage = "This shot is no longer failed (now \(backendStatus ?? "unknown")). Retry is only for failed shots. Use Generate for draft/ready, or wait if queued/generating."
             upsertShotRequestState(shotId) { state in
-                state.stage = isAlreadyGenerating ? .waiting : .failed
+                state.stage = .failed
                 state.responseReceivedAt = Date()
                 state.lastMeaningfulTransitionAt = state.responseReceivedAt
-                state.errorMessage = isAlreadyGenerating
+                state.lastKnownStatus = backendStatus ?? state.lastKnownStatus
+                state.errorMessage = isRetryConflict
+                    ? conflictMessage
+                    : isAlreadyGenerating
                     ? "Shot generation is already in progress. Wait for the current run to finish before retrying."
                     : error.localizedDescription
                 state.source = "api-response"
             }
-            model.errorMessage = isAlreadyGenerating ? nil : error.localizedDescription
+            if isRetryConflict {
+                appendDebugEvent("retry shot conflict shot=\(shotId) backendStatus=\(backendStatus ?? "unknown")")
+                await loadSelectedProjectDetails(showLoadingIndicator: false)
+                model.errorMessage = conflictMessage
+            } else {
+                model.errorMessage = isAlreadyGenerating ? nil : error.localizedDescription
+            }
         }
     }
 
@@ -3949,6 +3983,11 @@ struct ShotsPanel: View {
 
     private func diagnosticsLine(for shot: Shot) -> String? {
         guard let job = latestJob(for: shot.id) else { return nil }
+        if let requestState = shotRequestStateById[shot.id],
+           let error = requestState.errorMessage,
+           error.localizedCaseInsensitiveContains("retry is only for failed shots") {
+            return "Render diagnostics: Retry conflict - \(error)"
+        }
         let progressText = (job.progressPct ?? renderProgress(for: shot)).map { "\($0)%" } ?? "n/a"
         let statusText = job.status.capitalized
         let updatedAt = parseTimestamp(job.updatedAt)
@@ -4573,6 +4612,23 @@ private func shotArtifactStatusPresentation(
     requestState: RenderRequestState?
 ) -> ArtifactStatusPresentation {
     let requestLines = requestTimelineLines(requestState)
+    if let retryConflict = requestState?.errorMessage,
+       retryConflict.localizedCaseInsensitiveContains("retry is only for failed shots") {
+        let details = [
+            "Shot: \(shot.id)",
+            "Status: \(shot.status)",
+            "Prompt: \(shot.prompt)",
+            "Model tier: \(shot.modelTier)",
+            "Request ID: \(job?.requestId ?? "n/a")",
+            "Idempotency key: \(job?.idempotencyKey ?? "n/a")",
+            "Error: \(retryConflict)"
+        ] + requestLines
+        return ArtifactStatusPresentation(
+            level: .warning,
+            summary: "Retry skipped because backend status changed",
+            details: details.joined(separator: "\n")
+        )
+    }
     if requestState?.stage == .timedOut || requestState?.stage == .failed {
         let details = [
             "Shot: \(shot.id)",

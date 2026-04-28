@@ -1208,7 +1208,11 @@ export function createHttpServer() {
         return writeError(response, 404, "shot not found", "SHOT_NOT_FOUND");
       }
       if (shot.status !== "failed") {
-        return writeError(response, 409, "only failed shots can be retried", "SHOT_RETRY_CONFLICT");
+        return json(response, 409, {
+          error: "only failed shots can be retried",
+          code: "SHOT_RETRY_CONFLICT",
+          currentStatus: shot.status
+        });
       }
       const payload = await readBody(request);
       const result = await queueShotGeneration({

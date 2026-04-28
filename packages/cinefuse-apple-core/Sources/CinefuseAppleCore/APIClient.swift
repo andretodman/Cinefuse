@@ -1,5 +1,10 @@
 import Foundation
 
+public enum CinefuseAPIErrorUserInfoKey {
+    public static let errorCode = "cinefuse.error.code"
+    public static let currentStatus = "cinefuse.error.currentStatus"
+}
+
 public struct PubfuseAuthUser: Codable {
     public let id: String
     public let username: String?
@@ -888,16 +893,22 @@ public struct APIClient {
         guard (200..<300).contains(http.statusCode) else {
             let envelope = try? JSONDecoder().decode(ErrorEnvelope.self, from: data)
             let message: String
+            var userInfo: [String: Any] = [:]
             if let envelope {
                 if envelope.code == "NOT_FOUND" {
                     message = "Endpoint not found. Restart the API gateway so it picks up the latest routes."
                 } else {
                     message = envelope.error
                 }
+                userInfo[CinefuseAPIErrorUserInfoKey.errorCode] = envelope.code
+                if let currentStatus = envelope.currentStatus {
+                    userInfo[CinefuseAPIErrorUserInfoKey.currentStatus] = currentStatus
+                }
             } else {
                 message = String(data: data, encoding: .utf8) ?? "Unexpected error"
             }
-            throw NSError(domain: "CinefuseAPI", code: http.statusCode, userInfo: [NSLocalizedDescriptionKey: message])
+            userInfo[NSLocalizedDescriptionKey] = message
+            throw NSError(domain: "CinefuseAPI", code: http.statusCode, userInfo: userInfo)
         }
     }
 
@@ -915,6 +926,7 @@ public struct APIClient {
 private struct ErrorEnvelope: Codable {
     let error: String
     let code: String
+    let currentStatus: String?
 }
 
 private struct AnyEncodable: Encodable {
