@@ -2839,7 +2839,20 @@ struct ProjectDetailScreen: View {
                                 .padding(.top, CinefuseTokens.Spacing.s)
                                 .frame(maxHeight: .infinity, alignment: .top)
                             } else {
-                                HStack(spacing: 0) {
+                                if shouldUseEmbeddedPopoutPreview {
+                                    EditorPreviewPanel(
+                                        shots: sortedShots,
+                                        selectedShotId: $selectedTimelineShotId,
+                                        playbackRequestToken: previewPlaybackRequestToken,
+                                        showTooltips: showTooltips,
+                                        isCollapsed: .constant(false),
+                                        isPoppedOut: true,
+                                        onTogglePopout: { isPreviewPoppedOut = false }
+                                    )
+                                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                                    .transition(.opacity.combined(with: .move(edge: .top)))
+                                } else {
+                                    HStack(spacing: 0) {
                                     if showsLeftPanel {
                                         sidePaneContainer {
                                             if swapSidePanes {
@@ -2899,6 +2912,7 @@ struct ProjectDetailScreen: View {
                                 }
                                 .frame(height: CGFloat(topWorkspaceHeight))
                                 .clipped()
+                                }
 
                                 if showsBottomRegion {
                                     HorizontalPanelHandle { delta in
@@ -3008,6 +3022,7 @@ struct ProjectDetailScreen: View {
             windowController.update(rootView: previewPopoutRootView())
             windowController.showWindow(nil)
             windowController.window?.makeKeyAndOrderFront(nil)
+            windowController.window?.orderFrontRegardless()
             return
         }
         let controller = PreviewPopoutWindowController(
@@ -3020,6 +3035,10 @@ struct ProjectDetailScreen: View {
         previewPopoutWindowController = controller
         controller.showWindow(nil)
         controller.window?.makeKeyAndOrderFront(nil)
+        controller.window?.orderFrontRegardless()
+        if let keyWindow = NSApp.keyWindow, let popoutWindow = controller.window {
+            keyWindow.addChildWindow(popoutWindow, ordered: .above)
+        }
     }
 
     private func dismissPreviewPopoutWindow() {
@@ -3031,6 +3050,18 @@ struct ProjectDetailScreen: View {
         previewPopoutWindowController?.update(rootView: previewPopoutRootView())
     }
 #endif
+
+    private var shouldUseEmbeddedPopoutPreview: Bool {
+        guard isPreviewPoppedOut else { return false }
+#if canImport(AppKit) && !targetEnvironment(macCatalyst)
+        guard let window = previewPopoutWindowController?.window else {
+            return true
+        }
+        return !window.isVisible
+#else
+        return true
+#endif
+    }
 
     private var timelineShotBoundaries: [TimelineShotBoundary] {
         var cursorMs = 0
@@ -4226,6 +4257,8 @@ private final class PreviewPopoutWindowController: NSWindowController, NSWindowD
         window.title = "Preview"
         window.minSize = NSSize(width: 760, height: 440)
         window.isReleasedWhenClosed = false
+        window.level = .floating
+        window.collectionBehavior.insert(.fullScreenAuxiliary)
         window.contentView = NSHostingView(rootView: AnyView(rootView))
         super.init(window: window)
         window.delegate = self
