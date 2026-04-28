@@ -6,6 +6,9 @@ import AVKit
 #if canImport(AppKit) && !targetEnvironment(macCatalyst)
 import AppKit
 #endif
+#if canImport(UIKit)
+import UIKit
+#endif
 
 public struct CinefuseRootView: View {
     @Environment(AppModel.self) private var model
@@ -3999,6 +4002,15 @@ struct JobsPanel: View {
         )
     }
 
+    private func copyStatusText(_ value: String) {
+#if canImport(AppKit) && !targetEnvironment(macCatalyst)
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(value, forType: .string)
+#elseif canImport(UIKit)
+        UIPasteboard.general.string = value
+#endif
+    }
+
     var body: some View {
         SectionCard(
             title: "Jobs - Track render",
@@ -4059,6 +4071,11 @@ struct JobsPanel: View {
                                         Text(job.kind.capitalized)
                                             .font(CinefuseTokens.Typography.body)
                                         StatusBadge(status: job.status)
+                                            .contextMenu {
+                                                Button("Copy Status") {
+                                                    copyStatusText(job.status)
+                                                }
+                                            }
                                         let presentation = statusPresentation(for: job)
                                         GenerationStatusDot(status: presentation)
                                             .tooltip(presentation.summary, enabled: showTooltips)
@@ -4223,6 +4240,21 @@ private func artifactStatusPresentation(
     requestState: RenderRequestState?
 ) -> ArtifactStatusPresentation {
     let requestLines = requestTimelineLines(requestState)
+    if requestState?.stage == .timedOut || requestState?.stage == .failed {
+        let details = [
+            "Job: \(job.kind) / \(job.status)",
+            "Model: \(job.modelId ?? "unknown")",
+            "Prompt: \(job.promptText ?? "n/a")",
+            "Remote URL: \(job.outputUrl ?? "n/a")",
+            "Local file: \(localRecord?.localPath ?? "not available")",
+            "Error: \(requestState?.errorMessage ?? job.errorMessage ?? localRecord?.errorMessage ?? "request timed out or failed")"
+        ] + requestLines
+        return ArtifactStatusPresentation(
+            level: .error,
+            summary: "Request timed out or failed",
+            details: details.joined(separator: "\n")
+        )
+    }
     if job.status == "failed" || localRecord?.status == .downloadFailed || localRecord?.status == .writeFailed {
         let details = [
             "Job: \(job.kind) / \(job.status)",
@@ -4279,6 +4311,20 @@ private func shotArtifactStatusPresentation(
     requestState: RenderRequestState?
 ) -> ArtifactStatusPresentation {
     let requestLines = requestTimelineLines(requestState)
+    if requestState?.stage == .timedOut || requestState?.stage == .failed {
+        let details = [
+            "Shot: \(shot.id)",
+            "Status: \(shot.status)",
+            "Prompt: \(shot.prompt)",
+            "Model tier: \(shot.modelTier)",
+            "Error: \(requestState?.errorMessage ?? job?.errorMessage ?? localRecord?.errorMessage ?? "request timed out or failed")"
+        ] + requestLines
+        return ArtifactStatusPresentation(
+            level: .error,
+            summary: "Shot request timed out or failed",
+            details: details.joined(separator: "\n")
+        )
+    }
     if shot.status == "failed" {
         let details = [
             "Shot: \(shot.id)",
