@@ -1323,6 +1323,11 @@ struct ProjectWorkspaceScreen: View {
         ISO8601DateFormatter().date(from: value) ?? Date()
     }
 
+    private func parseOptionalISODate(_ value: String?) -> Date? {
+        guard let value else { return nil }
+        return ISO8601DateFormatter().date(from: value)
+    }
+
     private func upsertShotRequestState(_ shotId: String, _ update: (inout RenderRequestState) -> Void) {
         var state = shotRequestStateById[shotId] ?? RenderRequestState()
         update(&state)
@@ -1362,6 +1367,51 @@ struct ProjectWorkspaceScreen: View {
                 updated.stage = .timedOut
                 updated.errorMessage = "No update for \(Int(age))s after request."
                 jobRequestStateById[jobId] = updated
+            }
+        }
+    }
+
+    private func syncRequestStatesFromSnapshot(shots: [Shot], jobs: [Job]) {
+        for shot in shots {
+            upsertShotRequestState(shot.id) { state in
+                state.lastKnownStatus = shot.status
+                switch shot.status {
+                case "queued", "generating", "running", "processing":
+                    if state.stage != .failed && state.stage != .timedOut {
+                        state.stage = .waiting
+                    }
+                case "ready":
+                    state.stage = .received
+                case "failed":
+                    state.stage = .failed
+                    state.errorMessage = state.errorMessage ?? "Shot generation failed."
+                default:
+                    break
+                }
+            }
+        }
+
+        for job in jobs {
+            let stateDate = parseOptionalISODate(job.updatedAt)
+            upsertJobRequestState(job.id) { state in
+                state.lastKnownStatus = job.status
+                state.lastEventAt = stateDate ?? state.lastEventAt
+                if state.requestSentAt == nil {
+                    state.requestSentAt = stateDate
+                }
+                switch job.status {
+                case "queued", "running", "processing":
+                    if state.stage != .failed && state.stage != .timedOut {
+                        state.stage = .waiting
+                    }
+                case "done":
+                    state.stage = .received
+                case "failed":
+                    state.stage = .failed
+                    state.errorMessage = state.errorMessage ?? job.errorMessage ?? "Render job failed."
+                default:
+                    break
+                }
             }
         }
     }
@@ -1436,6 +1486,10 @@ struct ProjectWorkspaceScreen: View {
                 audioTracks = latestTimeline.audioTracks
                 jobs = latestJobs.filter { $0.status != "deleted" }
             }
+            syncRequestStatesFromSnapshot(
+                shots: latestTimeline.shots,
+                jobs: latestJobs.filter { $0.status != "deleted" }
+            )
             await syncGeneratedFiles(
                 projectId: selectedProjectId,
                 shots: latestTimeline.shots,
@@ -2971,10 +3025,15 @@ struct HorizontalTimelineTrack: View {
             isCollapsed: $isCollapsed
         ) {
             if visibleShots.isEmpty {
-                EmptyStateCard(
-                    title: "No clips in timeline",
-                    message: "Create or generate shots, then reorder them in this track."
-                )
+                VStack(alignment: .leading, spacing: CinefuseTokens.Spacing.s) {
+                    EmptyStateCard(
+                        title: "No clips in timeline",
+                        message: "Create or generate shots, then reorder them in this track."
+                    )
+                    if !hiddenShots.isEmpty {
+                        hiddenShotsControls
+                    }
+                }
             } else {
                 VStack(alignment: .leading, spacing: CinefuseTokens.Spacing.xs) {
                     TimelineRulerView(
@@ -3031,6 +3090,9 @@ struct HorizontalTimelineTrack: View {
                         .padding(.vertical, CinefuseTokens.Spacing.xxs)
                     }
                     .frame(height: 136)
+                    if !hiddenShots.isEmpty {
+                        hiddenShotsControls
+                    }
                 }
                 .padding(CinefuseTokens.Spacing.s)
                 .background(
@@ -3058,6 +3120,41 @@ struct HorizontalTimelineTrack: View {
 
     private var visibleShots: [Shot] {
         displayedShots.filter { !hiddenShotIds.contains($0.id) }
+    }
+
+    private var hiddenShots: [Shot] {
+        displayedShots.filter { hiddenShotIds.contains($0.id) }
+    }
+
+    private var hiddenShotsControls: some View {
+        VStack(alignment: .leading, spacing: CinefuseTokens.Spacing.xxs) {
+            HStack(spacing: CinefuseTokens.Spacing.xs) {
+                Text("Hidden clips: \(hiddenShots.count)")
+                    .font(CinefuseTokens.Typography.caption)
+                    .foregroundStyle(CinefuseTokens.ColorRole.textSecondary)
+                Button("Unhide all") {
+                    hiddenShotIds.removeAll()
+                }
+                .buttonStyle(SecondaryActionButtonStyle())
+            }
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: CinefuseTokens.Spacing.xs) {
+                    ForEach(hiddenShots) { shot in
+                        Button {
+                            toggleHidden(shot.id)
+                        } label: {
+                            Label(
+                                shot.prompt.isEmpty ? "Untitled clip" : shot.prompt,
+                                systemImage: "eye"
+                            )
+                            .lineLimit(1)
+                        }
+                        .buttonStyle(SecondaryActionButtonStyle())
+                        .tooltip("Unhide this clip", enabled: showTooltips)
+                    }
+                }
+            }
+        }
     }
 
     private var shotContentSignature: String {
