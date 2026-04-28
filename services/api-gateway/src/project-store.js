@@ -92,13 +92,7 @@ function resolvePoolConfig(connectionString) {
     query_timeout: parsePositiveInt(process.env.DATABASE_QUERY_TIMEOUT_MS, 10000),
     statement_timeout: parsePositiveInt(process.env.DATABASE_STATEMENT_TIMEOUT_MS, 10000)
   };
-  let sslMode = "";
-  try {
-    const parsed = new URL(connectionString);
-    sslMode = (parsed.searchParams.get("sslmode") ?? "").toLowerCase();
-  } catch {
-    return config;
-  }
+  const sslMode = extractSSLMode(connectionString);
 
   const sslEnabled = ["require", "verify-ca", "verify-full"].includes(sslMode)
     || (process.env.DATABASE_SSL ?? "").toLowerCase() === "true";
@@ -117,6 +111,26 @@ function resolvePoolConfig(connectionString) {
   }
   config.ssl = ssl;
   return config;
+}
+
+function extractSSLMode(connectionString) {
+  if (typeof connectionString !== "string") {
+    return "";
+  }
+  try {
+    const parsed = new URL(connectionString);
+    return (parsed.searchParams.get("sslmode") ?? "").toLowerCase();
+  } catch {
+    const match = connectionString.match(/(?:\?|&)sslmode=([^&]+)/i);
+    if (!match || !match[1]) {
+      return "";
+    }
+    try {
+      return decodeURIComponent(match[1]).toLowerCase();
+    } catch {
+      return match[1].toLowerCase();
+    }
+  }
 }
 
 function getPool() {
