@@ -862,24 +862,34 @@ struct ProjectWorkspaceScreen: View {
             IconCommandButton(
                 systemName: showLeftPane ? "sidebar.left" : "sidebar.left",
                 label: "Toggle left panel",
-                action: { showLeftPane.toggle() },
+                action: {
+                    withAnimation(CinefuseTokens.Motion.panel) {
+                        showLeftPane.toggle()
+                    }
+                },
                 tooltipEnabled: editorSettings.showTooltips
             )
             
             IconCommandButton(
                 systemName: showRightPane ? "sidebar.right" : "sidebar.right",
                 label: "Toggle right panel",
-                action: { showRightPane.toggle() },
+                action: {
+                    withAnimation(CinefuseTokens.Motion.panel) {
+                        showRightPane.toggle()
+                    }
+                },
                 tooltipEnabled: editorSettings.showTooltips
             )
             IconCommandButton(
                 systemName: showBottomPane ? "rectangle.split.3x1.fill" : "rectangle.split.3x1",
                 label: "Toggle bottom panel",
                 action: {
-                    showBottomPane.toggle()
-                    if showBottomPane && !showAudioPanel && !showJobsPanel {
-                        showAudioPanel = true
-                        showJobsPanel = true
+                    withAnimation(CinefuseTokens.Motion.panel) {
+                        showBottomPane.toggle()
+                        if showBottomPane && !showAudioPanel && !showJobsPanel {
+                            showAudioPanel = true
+                            showJobsPanel = true
+                        }
                     }
                 },
                 tooltipEnabled: editorSettings.showTooltips
@@ -888,9 +898,11 @@ struct ProjectWorkspaceScreen: View {
                 systemName: showAudioPanel ? "waveform" : "waveform.slash",
                 label: "Toggle audio lanes panel",
                 action: {
-                    showAudioPanel.toggle()
-                    if showAudioPanel {
-                        showBottomPane = true
+                    withAnimation(CinefuseTokens.Motion.panel) {
+                        showAudioPanel.toggle()
+                        if showAudioPanel {
+                            showBottomPane = true
+                        }
                     }
                 },
                 tooltipEnabled: editorSettings.showTooltips
@@ -899,9 +911,11 @@ struct ProjectWorkspaceScreen: View {
                 systemName: showJobsPanel ? "list.bullet.clipboard.fill" : "list.bullet.clipboard",
                 label: "Toggle jobs panel",
                 action: {
-                    showJobsPanel.toggle()
-                    if showJobsPanel {
-                        showBottomPane = true
+                    withAnimation(CinefuseTokens.Motion.panel) {
+                        showJobsPanel.toggle()
+                        if showJobsPanel {
+                            showBottomPane = true
+                        }
                     }
                 },
                 tooltipEnabled: editorSettings.showTooltips
@@ -909,18 +923,13 @@ struct ProjectWorkspaceScreen: View {
             IconCommandButton(
                 systemName: "arrow.left.arrow.right.square",
                 label: "Swap side panels",
-                action: { swapSidePanes.toggle() },
+                action: {
+                    withAnimation(CinefuseTokens.Motion.panel) {
+                        swapSidePanes.toggle()
+                    }
+                },
                 tooltipEnabled: editorSettings.showTooltips
             )
-
-            Picker("Theme", selection: timelineThemeModeBinding) {
-                ForEach(TimelineThemeMode.allCases) { mode in
-                    Text(mode.label).tag(mode)
-                }
-            }
-            .pickerStyle(.menu)
-            .frame(minWidth: 100)
-            .tooltip("Choose appearance theme", enabled: editorSettings.showTooltips)
 
             settingsPresentationTrigger
             IconCommandButton(
@@ -938,7 +947,11 @@ struct ProjectWorkspaceScreen: View {
         IconCommandButton(
             systemName: "slider.horizontal.3",
             label: "Editor settings",
-            action: { showSettingsPanel.toggle() },
+            action: {
+                withAnimation(CinefuseTokens.Motion.standard) {
+                    showSettingsPanel.toggle()
+                }
+            },
             tooltipEnabled: editorSettings.showTooltips
         )
         .sheet(isPresented: $showSettingsPanel) {
@@ -950,7 +963,11 @@ struct ProjectWorkspaceScreen: View {
         IconCommandButton(
             systemName: "slider.horizontal.3",
             label: "Editor settings",
-            action: { showSettingsPanel.toggle() },
+            action: {
+                withAnimation(CinefuseTokens.Motion.standard) {
+                    showSettingsPanel.toggle()
+                }
+            },
             tooltipEnabled: editorSettings.showTooltips
         )
         .popover(isPresented: $showSettingsPanel, arrowEdge: .bottom) {
@@ -960,48 +977,94 @@ struct ProjectWorkspaceScreen: View {
     }
 
     private var workspaceSettingsPanel: some View {
-        VStack(alignment: .leading, spacing: CinefuseTokens.Spacing.s) {
-            HStack {
-                Text("Editor Settings")
-                    .font(CinefuseTokens.Typography.cardTitle)
-                Spacer()
-                Button("Close") {
-                    showSettingsPanel = false
+        VStack(alignment: .leading, spacing: CinefuseTokens.Spacing.m) {
+            HStack(alignment: .top, spacing: CinefuseTokens.Spacing.s) {
+                VStack(alignment: .leading, spacing: CinefuseTokens.Spacing.xxs) {
+                    Text("Editor Settings")
+                        .font(CinefuseTokens.Typography.sectionTitle)
+                    Text("Appearance, workspace behavior, and server controls.")
+                        .font(CinefuseTokens.Typography.caption)
+                        .foregroundStyle(CinefuseTokens.ColorRole.textSecondary)
                 }
+                Spacer()
+                Button {
+                    withAnimation(CinefuseTokens.Motion.quick) {
+                        showSettingsPanel = false
+                    }
+                } label: {
+                    Label("Close", systemImage: "xmark")
+                }
+                .buttonStyle(SecondaryActionButtonStyle())
                 .keyboardShortcut(.cancelAction)
             }
-            Toggle("Show tooltips", isOn: $editorSettings.showTooltips)
-            Toggle("Restore last open project", isOn: $editorSettings.restoreLastOpenWorkspace)
-            Divider()
-            Text("Server")
-                .font(CinefuseTokens.Typography.label)
-            Picker("API Server", selection: $apiServerModeRaw) {
-                ForEach(APIServerMode.allCases) { mode in
-                    Text(mode.label).tag(mode.rawValue)
+
+            settingsSection("Appearance", subtitle: "Theme and visual presentation.") {
+                Picker("Theme", selection: timelineThemeModeBinding) {
+                    ForEach(TimelineThemeMode.allCases) { mode in
+                        Text(mode.label).tag(mode)
+                    }
                 }
+                .pickerStyle(.menu)
+                Text("Theme is saved automatically.")
+                    .font(CinefuseTokens.Typography.caption)
+                    .foregroundStyle(CinefuseTokens.ColorRole.textSecondary)
             }
-            .pickerStyle(.menu)
-            if (APIServerMode(rawValue: apiServerModeRaw) ?? .local) == .custom {
-                TextField("https://your-server.example.com", text: $customServerBaseURL)
-                    .textFieldStyle(.roundedBorder)
+
+            settingsSection("Workspace Behavior", subtitle: "Editing and restore preferences.") {
+                Toggle("Show tooltips", isOn: $editorSettings.showTooltips)
+                Toggle("Restore last open project", isOn: $editorSettings.restoreLastOpenWorkspace)
             }
-            Text("Current API base URL: \(activeServerBaseURL)")
-                .font(CinefuseTokens.Typography.caption)
-                .foregroundStyle(CinefuseTokens.ColorRole.textSecondary)
-            serverStatusBadge
-            Button("Reconnect Server") {
-                Task {
-                    await refresh(selectProjectId: selectedProjectId)
-                    await refreshServerHealth()
+
+            settingsSection("Server Connection", subtitle: "Active API endpoint and connectivity.") {
+                Picker("API Server", selection: $apiServerModeRaw) {
+                    ForEach(APIServerMode.allCases) { mode in
+                        Text(mode.label).tag(mode.rawValue)
+                    }
                 }
+                .pickerStyle(.menu)
+                if (APIServerMode(rawValue: apiServerModeRaw) ?? .local) == .custom {
+                    TextField("https://your-server.example.com", text: $customServerBaseURL)
+                        .textFieldStyle(.roundedBorder)
+                        .transition(.opacity.combined(with: .move(edge: .top)))
+                }
+                Text("Current API base URL: \(activeServerBaseURL)")
+                    .font(CinefuseTokens.Typography.caption)
+                    .foregroundStyle(CinefuseTokens.ColorRole.textSecondary)
+                serverStatusBadge
+                Button("Reconnect Server") {
+                    Task {
+                        await refresh(selectProjectId: selectedProjectId)
+                        await refreshServerHealth()
+                    }
+                }
+                .buttonStyle(SecondaryActionButtonStyle())
             }
-            .buttonStyle(SecondaryActionButtonStyle())
-            Text("Selected theme is saved automatically.")
-                .font(CinefuseTokens.Typography.caption)
-                .foregroundStyle(CinefuseTokens.ColorRole.textSecondary)
         }
         .padding(CinefuseTokens.Spacing.m)
         .frame(width: CinefuseTokens.Control.settingsPanelWidth)
+        .animation(CinefuseTokens.Motion.standard, value: apiServerModeRaw)
+    }
+
+    private func settingsSection<Content: View>(_ title: String, subtitle: String, @ViewBuilder content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: CinefuseTokens.Spacing.s) {
+            VStack(alignment: .leading, spacing: CinefuseTokens.Spacing.xxs) {
+                Text(title)
+                    .font(CinefuseTokens.Typography.label.weight(.semibold))
+                Text(subtitle)
+                    .font(CinefuseTokens.Typography.caption)
+                    .foregroundStyle(CinefuseTokens.ColorRole.textSecondary)
+            }
+            content()
+        }
+        .padding(CinefuseTokens.Spacing.s)
+        .background(
+            RoundedRectangle(cornerRadius: CinefuseTokens.Radius.medium)
+                .fill(CinefuseTokens.ColorRole.surfacePrimary.opacity(0.92))
+                .overlay(
+                    RoundedRectangle(cornerRadius: CinefuseTokens.Radius.medium)
+                        .stroke(CinefuseTokens.ColorRole.borderSubtle, lineWidth: 1)
+                )
+        )
     }
 
     private func normalizedServerURL(_ rawURL: String) -> String? {
@@ -1055,35 +1118,37 @@ struct ProjectWorkspaceScreen: View {
 
     private func applyWorkspacePreset(_ rawValue: String) {
         guard let preset = EditorWorkspacePreset(rawValue: rawValue) else { return }
-        switch preset {
-        case .editing:
-            showLeftPane = true
-            showRightPane = true
-            showBottomPane = true
-            showAudioPanel = true
-            showJobsPanel = true
-            swapSidePanes = false
-        case .audio:
-            showLeftPane = false
-            showRightPane = true
-            showBottomPane = true
-            showAudioPanel = true
-            showJobsPanel = true
-            swapSidePanes = false
-        case .review:
-            showLeftPane = true
-            showRightPane = false
-            showBottomPane = true
-            showAudioPanel = true
-            showJobsPanel = true
-            swapSidePanes = false
-        case .render:
-            showLeftPane = false
-            showRightPane = false
-            showBottomPane = true
-            showAudioPanel = true
-            showJobsPanel = true
-            swapSidePanes = false
+        withAnimation(CinefuseTokens.Motion.panel) {
+            switch preset {
+            case .editing:
+                showLeftPane = true
+                showRightPane = true
+                showBottomPane = true
+                showAudioPanel = true
+                showJobsPanel = true
+                swapSidePanes = false
+            case .audio:
+                showLeftPane = false
+                showRightPane = true
+                showBottomPane = true
+                showAudioPanel = true
+                showJobsPanel = true
+                swapSidePanes = false
+            case .review:
+                showLeftPane = true
+                showRightPane = false
+                showBottomPane = true
+                showAudioPanel = true
+                showJobsPanel = true
+                swapSidePanes = false
+            case .render:
+                showLeftPane = false
+                showRightPane = false
+                showBottomPane = true
+                showAudioPanel = true
+                showJobsPanel = true
+                swapSidePanes = false
+            }
         }
     }
 
@@ -2860,6 +2925,10 @@ struct ProjectDetailScreen: View {
                         }
                     }
                     .frame(minHeight: 380)
+                    .animation(CinefuseTokens.Motion.panel, value: isPreviewPoppedOut)
+                    .animation(CinefuseTokens.Motion.panel, value: showLeftPane)
+                    .animation(CinefuseTokens.Motion.panel, value: showRightPane)
+                    .animation(CinefuseTokens.Motion.panel, value: showBottomPane)
                 }
             } else {
                 ContentUnavailableView(
@@ -4585,6 +4654,7 @@ struct ShotsPanel: View {
                         title: "No shots drafted",
                         message: "Create your first shot above, then quote and generate."
                     )
+                    .transition(.opacity.combined(with: .scale(scale: 0.98)))
                 } else {
                     ForEach(shots) { shot in
                         let presentation = statusPresentation(for: shot)
@@ -4695,11 +4765,13 @@ struct ShotsPanel: View {
                                 onPreviewShot(shot.id)
                             }
                         }
+                        .transition(.opacity.combined(with: .move(edge: .top)))
                     }
                 }
             }
         }
         .padding(CinefuseTokens.Spacing.s)
+        .animation(CinefuseTokens.Motion.standard, value: shots.map(\.id))
         .confirmationDialog("Delete this shot?", isPresented: Binding(
             get: { pendingDeleteShotId != nil },
             set: { isPresented in
@@ -4784,9 +4856,15 @@ struct JobsPanel: View {
                         }
                         .tooltip("Queue a manual job", enabled: showTooltips)
                         .buttonStyle(PrimaryActionButtonStyle())
-                        Toggle("Show completed", isOn: $showCompletedJobs)
-                            .toggleStyle(.switch)
-                            .tooltip("Display completed jobs in the list", enabled: showTooltips)
+                        HStack(spacing: CinefuseTokens.Spacing.xs) {
+                            Text("Completed")
+                                .font(CinefuseTokens.Typography.caption)
+                                .foregroundStyle(CinefuseTokens.ColorRole.textSecondary)
+                            Toggle("", isOn: $showCompletedJobs)
+                                .labelsHidden()
+                                .toggleStyle(.switch)
+                        }
+                        .tooltip("Display completed jobs in the list", enabled: showTooltips)
                     }
                     VStack(alignment: .leading, spacing: CinefuseTokens.Spacing.s) {
                         Picker("Job type", selection: $jobKindDraft) {
@@ -4804,9 +4882,15 @@ struct JobsPanel: View {
                         }
                         .tooltip("Queue a manual job", enabled: showTooltips)
                         .buttonStyle(PrimaryActionButtonStyle())
-                        Toggle("Show completed", isOn: $showCompletedJobs)
-                            .toggleStyle(.switch)
-                            .tooltip("Display completed jobs in the list", enabled: showTooltips)
+                        HStack(spacing: CinefuseTokens.Spacing.xs) {
+                            Text("Completed")
+                                .font(CinefuseTokens.Typography.caption)
+                                .foregroundStyle(CinefuseTokens.ColorRole.textSecondary)
+                            Toggle("", isOn: $showCompletedJobs)
+                                .labelsHidden()
+                                .toggleStyle(.switch)
+                        }
+                        .tooltip("Display completed jobs in the list", enabled: showTooltips)
                     }
                 }
 
@@ -4817,6 +4901,7 @@ struct JobsPanel: View {
                             ? "Jobs appear when you queue rendering, audio, stitch, or export tasks."
                             : "Completed jobs are hidden. Enable Show completed to review history."
                     )
+                    .transition(.opacity.combined(with: .scale(scale: 0.98)))
                 } else {
                     let gridColumns = [
                         GridItem(.adaptive(minimum: 300, maximum: 420), spacing: CinefuseTokens.Spacing.s, alignment: .top)
@@ -4886,8 +4971,10 @@ struct JobsPanel: View {
                                     MediaCardBackground(imageURL: backgroundThumbnailURL)
                                 )
                                 .clipShape(RoundedRectangle(cornerRadius: CinefuseTokens.Radius.medium))
+                                .transition(.opacity.combined(with: .move(edge: .top)))
                             }
                         }
+                        .animation(CinefuseTokens.Motion.standard, value: visibleJobs.map(\.id))
                     }
                     .frame(maxHeight: .infinity, alignment: .top)
                 }

@@ -13,6 +13,8 @@ struct PrimaryActionButtonStyle: ButtonStyle {
                 RoundedRectangle(cornerRadius: CinefuseTokens.Radius.medium)
                     .fill(CinefuseTokens.ColorRole.accent.opacity(configuration.isPressed ? 0.75 : 1))
             )
+            .scaleEffect(configuration.isPressed ? 0.98 : 1)
+            .animation(CinefuseTokens.Motion.quick, value: configuration.isPressed)
     }
 }
 
@@ -33,6 +35,8 @@ struct SecondaryActionButtonStyle: ButtonStyle {
                             .stroke(CinefuseTokens.ColorRole.borderSubtle, lineWidth: 1)
                     )
             )
+            .scaleEffect(configuration.isPressed ? 0.985 : 1)
+            .animation(CinefuseTokens.Motion.quick, value: configuration.isPressed)
     }
 }
 
@@ -49,6 +53,8 @@ struct DestructiveActionButtonStyle: ButtonStyle {
                 RoundedRectangle(cornerRadius: CinefuseTokens.Radius.medium)
                     .fill(CinefuseTokens.ColorRole.danger.opacity(configuration.isPressed ? 0.2 : 0.1))
             )
+            .scaleEffect(configuration.isPressed ? 0.985 : 1)
+            .animation(CinefuseTokens.Motion.quick, value: configuration.isPressed)
     }
 }
 
@@ -78,7 +84,9 @@ struct SectionCard<Content: View>: View {
                 Spacer(minLength: CinefuseTokens.Spacing.s)
                 if let isCollapsed {
                     Button {
-                        isCollapsed.wrappedValue.toggle()
+                        withAnimation(CinefuseTokens.Motion.panel) {
+                            isCollapsed.wrappedValue.toggle()
+                        }
                     } label: {
                         Image(systemName: isCollapsed.wrappedValue ? "rectangle.expand.vertical" : "rectangle.compress.vertical")
                             .font(.system(size: CinefuseTokens.Control.iconSymbolSize, weight: .semibold))
@@ -94,6 +102,7 @@ struct SectionCard<Content: View>: View {
             }
             if !(isCollapsed?.wrappedValue ?? false) {
                 content
+                    .transition(.opacity.combined(with: .move(edge: .top)))
             }
         }
         .padding(CinefuseTokens.Spacing.m)
@@ -106,6 +115,7 @@ struct SectionCard<Content: View>: View {
                 )
                 .shadow(color: CinefuseTokens.ColorRole.shadow, radius: 8, x: 0, y: 4)
         )
+        .animation(CinefuseTokens.Motion.panel, value: isCollapsed?.wrappedValue ?? false)
     }
 }
 
@@ -179,6 +189,7 @@ struct IconCommandButton: View {
     let action: () -> Void
     var isDestructive = false
     var tooltipEnabled = true
+    @State private var isHovering = false
 
     var body: some View {
         Button(action: action) {
@@ -188,10 +199,17 @@ struct IconCommandButton: View {
                 .foregroundStyle(isDestructive ? CinefuseTokens.ColorRole.danger : CinefuseTokens.ColorRole.textPrimary)
                 .background(
                     RoundedRectangle(cornerRadius: CinefuseTokens.Radius.small)
-                        .fill(CinefuseTokens.ColorRole.surfaceSecondary)
+                        .fill(CinefuseTokens.ColorRole.surfaceSecondary.opacity(isHovering ? 0.8 : 1))
                 )
         }
         .buttonStyle(.plain)
+        .scaleEffect(isHovering ? 1.03 : 1)
+        .animation(CinefuseTokens.Motion.quick, value: isHovering)
+#if os(macOS)
+        .onHover { hovering in
+            isHovering = hovering
+        }
+#endif
         .accessibilityLabel(label)
         .tooltip(label, enabled: tooltipEnabled)
     }

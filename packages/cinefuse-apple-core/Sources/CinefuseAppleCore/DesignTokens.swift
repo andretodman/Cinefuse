@@ -42,10 +42,17 @@ enum CinefuseTokens {
         static let headerDividerHeight: CGFloat = 18
         static let logoWidth: CGFloat = 92
         static let logoHeight: CGFloat = 24
-        static let settingsPanelWidth: CGFloat = 260
+        static let settingsPanelWidth: CGFloat = 420
         static let timelineRulerHeight: CGFloat = 28
         static let timelineNotchMinor: CGFloat = 8
         static let timelineNotchMajor: CGFloat = 14
+    }
+
+    enum Motion {
+        static let quick = Animation.easeOut(duration: 0.16)
+        static let standard = Animation.easeInOut(duration: 0.24)
+        static let emphasis = Animation.spring(response: 0.34, dampingFraction: 0.84)
+        static let panel = Animation.spring(response: 0.28, dampingFraction: 0.88)
     }
 
     enum Typography {
