@@ -4050,6 +4050,7 @@ struct ShotsPanel: View {
                                     .font(CinefuseTokens.Typography.body)
                                     .lineLimit(2)
                                     .layoutPriority(1)
+                                    .textSelection(.enabled)
                                 Text(shot.modelTier.capitalized)
                                     .font(CinefuseTokens.Typography.caption)
                                     .foregroundStyle(CinefuseTokens.ColorRole.textSecondary)

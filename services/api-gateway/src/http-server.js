@@ -51,6 +51,32 @@ function deriveThumbnailUrl(clipUrl) {
   return `${clipUrl}?thumb=1`;
 }
 
+function parseFalContext(errorMessage) {
+  if (typeof errorMessage !== "string") {
+    return null;
+  }
+  const marker = "fal_context=";
+  const markerIndex = errorMessage.indexOf(marker);
+  if (markerIndex < 0) {
+    return null;
+  }
+  const raw = errorMessage.slice(markerIndex + marker.length).trim();
+  if (!raw.startsWith("{") || !raw.endsWith("}")) {
+    return null;
+  }
+  try {
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === "object" ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function coerceProviderStatusCode(value) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
 function applyLegacyProjectsAliasHeaders(response, pathName) {
   if (pathName !== "/v1/projects") {
     return;
@@ -251,6 +277,8 @@ export function createHttpServer() {
         outputPayload: {
           modelId: generation.modelId ?? null,
           requestId: generation.requestId ?? null,
+          falEndpoint: generation.falEndpoint ?? null,
+          falStatusUrl: generation.falStatusUrl ?? null,
           clipUrl: generation.clipUrl ?? null,
           sparksCost: task.quote.sparksCost,
           invokeState: "done",
@@ -278,11 +306,13 @@ export function createHttpServer() {
     } catch (error) {
       clearInterval(progressTimer);
       const message = error instanceof Error ? error.message : "generation failed";
+      const falContext = parseFalContext(message);
       console.error("[render] task failed", {
         projectId: task.projectId,
         shotId: task.shotId,
         jobId: task.jobId,
-        message
+        message,
+        falContext
       });
       await saveShot({
         ...currentShot,
@@ -292,6 +322,11 @@ export function createHttpServer() {
         id: task.jobId,
         outputPayload: {
           error: message,
+          requestId: typeof falContext?.requestId === "string" ? falContext.requestId : null,
+          falEndpoint: typeof falContext?.endpoint === "string" ? falContext.endpoint : null,
+          falStatusUrl: typeof falContext?.statusUrl === "string" ? falContext.statusUrl : null,
+          providerStatusCode: coerceProviderStatusCode(falContext?.statusCode),
+          providerResponseSnippet: typeof falContext?.responseSnippet === "string" ? falContext.responseSnippet : null,
           invokeState: "failed",
           timeout: /timeout/i.test(message),
           apiInvokeFinishedAt: new Date().toISOString()

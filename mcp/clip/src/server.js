@@ -77,6 +77,49 @@ async function fetchJson(url, options) {
   return { response, payload, text };
 }
 
+function uniqueNonEmptyStrings(values) {
+  const seen = new Set();
+  const ordered = [];
+  for (const value of values) {
+    if (typeof value !== "string") {
+      continue;
+    }
+    const trimmed = value.trim();
+    if (!trimmed || seen.has(trimmed)) {
+      continue;
+    }
+    seen.add(trimmed);
+    ordered.push(trimmed);
+  }
+  return ordered;
+}
+
+function clipText(value, maxLength = 220) {
+  if (typeof value !== "string") {
+    return "";
+  }
+  const normalized = value.trim();
+  if (normalized.length <= maxLength) {
+    return normalized;
+  }
+  return `${normalized.slice(0, maxLength)}…`;
+}
+
+function withFalContext(message, context) {
+  return `${message} fal_context=${JSON.stringify(context)}`;
+}
+
+function buildFalStatusUrls({ submitBody, endpoint, requestId }) {
+  const endpointBase = `https://queue.fal.run/${endpoint}/requests/${requestId}`;
+  return uniqueNonEmptyStrings([
+    submitBody?.status_url,
+    submitBody?.statusUrl,
+    submitBody?.urls?.status,
+    `${endpointBase}/status`,
+    endpointBase
+  ]);
+}
+
 async function generateViaFal({ input, config, modelTier }) {
   const falApiKey = process.env.FAL_API_KEY;
   if (!falApiKey) {
@@ -134,32 +177,112 @@ async function generateViaFal({ input, config, modelTier }) {
 
   const requestId = submitBody?.request_id ?? submitBody?.requestId ?? submitBody?.id;
   if (typeof requestId !== "string" || requestId.length === 0) {
-    throw new Error("fal submit response missing request id");
+    throw new Error(withFalContext("fal submit response missing request id", {
+      endpoint,
+      statusCode: submitResponse.status,
+      submitUrl,
+      responseSnippet: clipText(submitText)
+    }));
+  }
+  const statusUrls = buildFalStatusUrls({ submitBody, endpoint, requestId });
+  if (statusUrls.length === 0) {
+    throw new Error(withFalContext("fal submit response missing status url", {
+      endpoint,
+      requestId,
+      submitUrl,
+      statusCode: submitResponse.status
+    }));
   }
   console.info("[clip] fal request created", {
     requestId,
     shotId: input?.shotId ?? null,
     projectId: input?.projectId ?? null,
     modelTier,
-    endpoint
+    endpoint,
+    statusUrls
   });
 
   const maxPollAttempts = Number(process.env.CINEFUSE_FAL_MAX_POLL_ATTEMPTS ?? 60);
   const pollDelayMs = Number(process.env.CINEFUSE_FAL_POLL_DELAY_MS ?? 2000);
+  let activeStatusUrl = statusUrls[0];
   for (let attempt = 1; attempt <= maxPollAttempts; attempt += 1) {
     await sleep(pollDelayMs);
-    const statusUrl = `https://queue.fal.run/${endpoint}/requests/${requestId}/status`;
-    const { response: statusResponse, payload: statusBody, text: statusText } = await fetchJson(statusUrl, {
-      method: "GET",
-      headers,
-      signal: AbortSignal.timeout(20_000)
-    });
-    if (!statusResponse.ok) {
-      if (shouldRetryStatus(statusResponse.status) && attempt < maxPollAttempts) {
+    let statusBody = null;
+    let statusText = "";
+    let retryableStatusFailure = null;
+    let terminalFailure = null;
+    let resolvedStatusUrl = activeStatusUrl;
+    for (const statusUrl of statusUrls) {
+      const { response: statusResponse, payload, text } = await fetchJson(statusUrl, {
+        method: "GET",
+        headers,
+        signal: AbortSignal.timeout(20_000)
+      });
+      if (statusResponse.ok) {
+        statusBody = payload;
+        statusText = text;
+        resolvedStatusUrl = statusUrl;
+        break;
+      }
+      if (statusResponse.status === 405) {
+        terminalFailure = {
+          statusCode: statusResponse.status,
+          statusUrl,
+          responseSnippet: clipText(text)
+        };
         continue;
       }
-      throw new Error(`fal status failed (${statusResponse.status}): ${statusText}`);
+      if (shouldRetryStatus(statusResponse.status)) {
+        retryableStatusFailure = {
+          statusCode: statusResponse.status,
+          statusUrl,
+          responseSnippet: clipText(text)
+        };
+        break;
+      }
+      throw new Error(withFalContext(`fal status failed (${statusResponse.status}): ${text}`, {
+        endpoint,
+        requestId,
+        attempt,
+        statusCode: statusResponse.status,
+        statusUrl,
+        responseSnippet: clipText(text)
+      }));
     }
+    if (!statusBody) {
+      if (retryableStatusFailure && attempt < maxPollAttempts) {
+        continue;
+      }
+      if (retryableStatusFailure) {
+        throw new Error(withFalContext(
+          `fal status failed (${retryableStatusFailure.statusCode}): ${retryableStatusFailure.responseSnippet}`,
+          {
+            endpoint,
+            requestId,
+            attempt,
+            statusCode: retryableStatusFailure.statusCode,
+            statusUrl: retryableStatusFailure.statusUrl,
+            responseSnippet: retryableStatusFailure.responseSnippet
+          }
+        ));
+      }
+      if (terminalFailure) {
+        throw new Error(withFalContext(
+          `fal status failed (${terminalFailure.statusCode}): ${terminalFailure.responseSnippet}`,
+          {
+            endpoint,
+            requestId,
+            attempt,
+            statusCode: terminalFailure.statusCode,
+            statusUrl: terminalFailure.statusUrl,
+            statusUrlCandidates: statusUrls,
+            responseSnippet: terminalFailure.responseSnippet
+          }
+        ));
+      }
+      continue;
+    }
+    activeStatusUrl = resolvedStatusUrl;
 
     const rawStatus = statusBody?.status ?? statusBody?.state ?? "";
     const normalizedStatus = String(rawStatus).toLowerCase();
@@ -167,13 +290,22 @@ async function generateViaFal({ input, config, modelTier }) {
       console.info("[clip] fal poll", {
         requestId,
         endpoint,
+        statusUrl: activeStatusUrl,
         attempt,
         maxPollAttempts,
         status: normalizedStatus || "unknown"
       });
     }
     if (normalizedStatus === "failed" || normalizedStatus === "error" || normalizedStatus === "canceled") {
-      throw new Error(`fal generation failed: ${statusBody?.error ?? statusBody?.message ?? "provider error"}`);
+      throw new Error(withFalContext(
+        `fal generation failed: ${statusBody?.error ?? statusBody?.message ?? "provider error"}`,
+        {
+          endpoint,
+          requestId,
+          attempt,
+          statusUrl: activeStatusUrl
+        }
+      ));
     }
 
     if (normalizedStatus === "completed" || normalizedStatus === "succeeded" || normalizedStatus === "done") {
@@ -185,7 +317,17 @@ async function generateViaFal({ input, config, modelTier }) {
           signal: AbortSignal.timeout(20_000)
         });
         if (!responseData.response.ok) {
-          throw new Error(`fal response fetch failed (${responseData.response.status}): ${responseData.text}`);
+          throw new Error(withFalContext(
+            `fal response fetch failed (${responseData.response.status}): ${responseData.text}`,
+            {
+              endpoint,
+              requestId,
+              attempt,
+              statusUrl: activeStatusUrl,
+              responseUrl: statusBody.response_url,
+              statusCode: responseData.response.status
+            }
+          ));
         }
         responseBody = responseData.payload;
       }
@@ -200,6 +342,9 @@ async function generateViaFal({ input, config, modelTier }) {
         estimatedDurationSec: responseBody?.estimatedDurationSec ?? config.estimatedDurationSec,
         costToUsCents: Number(responseBody?.costToUsCents ?? config.costToUsCents),
         status: "ready",
+        requestId,
+        falEndpoint: endpoint,
+        falStatusUrl: activeStatusUrl,
         clipUrl,
         thumbnailUrl: responseBody?.thumbnailUrl ?? null
       };
@@ -209,9 +354,15 @@ async function generateViaFal({ input, config, modelTier }) {
   console.error("[clip] fal poll timeout", {
     requestId,
     endpoint,
+    statusUrl: activeStatusUrl,
     maxPollAttempts
   });
-  throw new Error(`fal generation timed out after ${maxPollAttempts} polls`);
+  throw new Error(withFalContext(`fal generation timed out after ${maxPollAttempts} polls`, {
+    endpoint,
+    requestId,
+    statusUrl: activeStatusUrl,
+    maxPollAttempts
+  }));
 }
 
 async function generateViaProvider({ input, config, modelTier }) {
@@ -357,6 +508,8 @@ export function createServer() {
           costToUsCents: generation.costToUsCents,
           status: generation.status,
           requestId: generation.requestId ?? null,
+          falEndpoint: generation.falEndpoint ?? null,
+          falStatusUrl: generation.falStatusUrl ?? null,
           clipUrl: generation.clipUrl,
           thumbnailUrl: generation.thumbnailUrl ?? null,
           input: input ?? null
