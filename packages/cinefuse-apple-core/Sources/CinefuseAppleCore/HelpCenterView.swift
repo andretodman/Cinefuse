@@ -5,6 +5,7 @@ import WebKit
 
 struct HelpCenterSheet: View {
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.openURL) private var openURL
     @StateObject private var browser = HelpCenterBrowserState()
 
     var body: some View {
@@ -12,7 +13,7 @@ struct HelpCenterSheet: View {
             header
             HelpCenterWebContainer(browser: browser)
         }
-        .frame(minWidth: 980, minHeight: 680)
+        .frame(minWidth: 1200, minHeight: 820)
         .onAppear {
             browser.loadInitialPage()
         }
@@ -42,6 +43,13 @@ struct HelpCenterSheet: View {
 
                 Button { browser.reload() } label: {
                     Label("Reload", systemImage: "arrow.clockwise")
+                }
+                .buttonStyle(SecondaryActionButtonStyle())
+
+                Button {
+                    openURL(HelpCenterContent.docsWebsiteURL)
+                } label: {
+                    Label("Open Docs Website", systemImage: "safari")
                 }
                 .buttonStyle(SecondaryActionButtonStyle())
 
@@ -264,5 +272,18 @@ private enum HelpCenterContent {
             return "<html><body><h1>Cinefuse Help</h1><p>Bundled help content unavailable.</p></body></html>"
         }
         return html
+    }
+
+    static var docsWebsiteURL: URL {
+        if let raw = ProcessInfo.processInfo.environment["CINEFUSE_DOCS_WEBSITE_URL"]?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+           !raw.isEmpty,
+           let url = URL(string: raw) {
+            return url
+        }
+        if let hostedURL {
+            return hostedURL
+        }
+        return URL(string: "https://cinefuse.pubfuse.com/docs")!
     }
 }

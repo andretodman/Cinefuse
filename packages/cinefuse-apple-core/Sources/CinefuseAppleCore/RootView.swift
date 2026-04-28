@@ -2661,6 +2661,10 @@ struct ProjectDetailScreen: View {
     @State private var isRenamingProjectTitle = false
     @State private var projectTitleDraft = ""
     @State private var previewPlaybackRequestToken = 0
+    @State private var isPreviewPoppedOut = false
+#if canImport(AppKit) && !targetEnvironment(macCatalyst)
+    @State private var previewPopoutWindowController: PreviewPopoutWindowController?
+#endif
 
     private var isRenderWorkspace: Bool {
         (EditorWorkspacePreset(rawValue: workspacePresetRaw) ?? .editing) == .render
@@ -2779,33 +2783,42 @@ struct ProjectDetailScreen: View {
                                                 leftPaneContent
                                             }
                                         }
-                                        .frame(width: CGFloat(sideFrame.left))
+                                        .frame(width: isPreviewPoppedOut ? nil : CGFloat(sideFrame.left))
+                                        .frame(maxWidth: isPreviewPoppedOut ? .infinity : nil)
                                         .frame(minWidth: 0, maxHeight: .infinity)
-                                        VerticalPanelHandle { delta in
-                                            leftPaneWidth = clampedLeftPaneWidth(
-                                                leftPaneWidth + delta,
-                                                totalWidth: totalWidth,
-                                                opposingPaneWidth: sideFrame.right
-                                            )
+                                        if !isPreviewPoppedOut {
+                                            VerticalPanelHandle { delta in
+                                                leftPaneWidth = clampedLeftPaneWidth(
+                                                    leftPaneWidth + delta,
+                                                    totalWidth: totalWidth,
+                                                    opposingPaneWidth: sideFrame.right
+                                                )
+                                            }
                                         }
                                     }
 
-                                    EditorPreviewPanel(
-                                        shots: sortedShots,
-                                        selectedShotId: $selectedTimelineShotId,
-                                        playbackRequestToken: previewPlaybackRequestToken,
-                                        showTooltips: showTooltips,
-                                        isCollapsed: $collapsePreviewPanel
-                                    )
-                                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                                    if !isPreviewPoppedOut {
+                                        EditorPreviewPanel(
+                                            shots: sortedShots,
+                                            selectedShotId: $selectedTimelineShotId,
+                                            playbackRequestToken: previewPlaybackRequestToken,
+                                            showTooltips: showTooltips,
+                                            isCollapsed: $collapsePreviewPanel,
+                                            isPoppedOut: false,
+                                            onTogglePopout: { isPreviewPoppedOut.toggle() }
+                                        )
+                                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                                    }
 
                                     if showsRightPanel {
-                                        VerticalPanelHandle { delta in
-                                            rightPaneWidth = clampedRightPaneWidth(
-                                                rightPaneWidth - delta,
-                                                totalWidth: totalWidth,
-                                                opposingPaneWidth: sideFrame.left
-                                            )
+                                        if !isPreviewPoppedOut {
+                                            VerticalPanelHandle { delta in
+                                                rightPaneWidth = clampedRightPaneWidth(
+                                                    rightPaneWidth - delta,
+                                                    totalWidth: totalWidth,
+                                                    opposingPaneWidth: sideFrame.left
+                                                )
+                                            }
                                         }
                                         sidePaneContainer {
                                             if swapSidePanes {
@@ -2814,7 +2827,8 @@ struct ProjectDetailScreen: View {
                                                 rightPaneContent
                                             }
                                         }
-                                        .frame(width: CGFloat(sideFrame.right))
+                                        .frame(width: isPreviewPoppedOut ? nil : CGFloat(sideFrame.right))
+                                        .frame(maxWidth: isPreviewPoppedOut ? .infinity : nil)
                                         .frame(minWidth: 0, maxHeight: .infinity)
                                     }
                                 }
@@ -2878,7 +2892,76 @@ struct ProjectDetailScreen: View {
                 projectTitleDraft = value
             }
         }
+        .onChange(of: isPreviewPoppedOut) { _, isPoppedOut in
+#if canImport(AppKit) && !targetEnvironment(macCatalyst)
+            if isPoppedOut {
+                presentPreviewPopoutWindow()
+            } else {
+                dismissPreviewPopoutWindow()
+            }
+#endif
+        }
+        .onChange(of: shots.map { "\($0.id):\($0.clipUrl ?? "")" }.joined(separator: "|")) { _, _ in
+#if canImport(AppKit) && !targetEnvironment(macCatalyst)
+            refreshPreviewPopoutWindowContent()
+#endif
+        }
+        .onChange(of: selectedTimelineShotId) { _, _ in
+#if canImport(AppKit) && !targetEnvironment(macCatalyst)
+            refreshPreviewPopoutWindowContent()
+#endif
+        }
+        .onChange(of: previewPlaybackRequestToken) { _, _ in
+#if canImport(AppKit) && !targetEnvironment(macCatalyst)
+            refreshPreviewPopoutWindowContent()
+#endif
+        }
     }
+
+#if canImport(AppKit) && !targetEnvironment(macCatalyst)
+    private func previewPopoutRootView() -> some View {
+        EditorPreviewPanel(
+            shots: sortedShots,
+            selectedShotId: $selectedTimelineShotId,
+            playbackRequestToken: previewPlaybackRequestToken,
+            showTooltips: showTooltips,
+            isCollapsed: .constant(false),
+            isPoppedOut: true,
+            onTogglePopout: { isPreviewPoppedOut = false }
+        )
+        .frame(minWidth: 760, minHeight: 440)
+        .padding(CinefuseTokens.Spacing.s)
+        .background(CinefuseTokens.ColorRole.canvas)
+    }
+
+    private func presentPreviewPopoutWindow() {
+        if let windowController = previewPopoutWindowController {
+            windowController.update(rootView: previewPopoutRootView())
+            windowController.showWindow(nil)
+            windowController.window?.makeKeyAndOrderFront(nil)
+            return
+        }
+        let controller = PreviewPopoutWindowController(
+            rootView: previewPopoutRootView(),
+            onWindowClose: {
+                isPreviewPoppedOut = false
+                previewPopoutWindowController = nil
+            }
+        )
+        previewPopoutWindowController = controller
+        controller.showWindow(nil)
+        controller.window?.makeKeyAndOrderFront(nil)
+    }
+
+    private func dismissPreviewPopoutWindow() {
+        previewPopoutWindowController?.close()
+        previewPopoutWindowController = nil
+    }
+
+    private func refreshPreviewPopoutWindowContent() {
+        previewPopoutWindowController?.update(rootView: previewPopoutRootView())
+    }
+#endif
 
     private var timelineShotBoundaries: [TimelineShotBoundary] {
         var cursorMs = 0
@@ -2949,6 +3032,10 @@ struct ProjectDetailScreen: View {
                     onGenerateShot: onGenerateShot,
                     onRetryShot: onRetryShot,
                     onDeleteShot: onDeleteShot,
+                    onPreviewShot: { shotId in
+                        selectedTimelineShotId = shotId
+                        previewPlaybackRequestToken += 1
+                    },
                     showTooltips: showTooltips,
                     isCollapsed: $collapseShotsPanel
                 )
@@ -3299,6 +3386,15 @@ struct ProjectDetailScreen: View {
             Spacer(minLength: CinefuseTokens.Spacing.s)
             ViewThatFits(in: .horizontal) {
                 HStack(spacing: CinefuseTokens.Spacing.xs) {
+                    if isPreviewPoppedOut {
+                        Button {
+                            isPreviewPoppedOut = false
+                        } label: {
+                            Label("Pop In Preview", systemImage: "rectangle.inset.filled.and.person.filled")
+                        }
+                        .buttonStyle(SecondaryActionButtonStyle())
+                        .tooltip("Dock preview back into workspace", enabled: showTooltips)
+                    }
                     Button {
                         onCloseProject()
                     } label: {
@@ -3313,6 +3409,15 @@ struct ProjectDetailScreen: View {
                         .buttonStyle(DestructiveActionButtonStyle())
                 }
                 VStack(alignment: .trailing, spacing: CinefuseTokens.Spacing.xs) {
+                    if isPreviewPoppedOut {
+                        Button {
+                            isPreviewPoppedOut = false
+                        } label: {
+                            Label("Pop In Preview", systemImage: "rectangle.inset.filled.and.person.filled")
+                        }
+                        .buttonStyle(SecondaryActionButtonStyle())
+                        .tooltip("Dock preview back into workspace", enabled: showTooltips)
+                    }
                     Button {
                         onCloseProject()
                     } label: {
@@ -3884,6 +3989,8 @@ struct EditorPreviewPanel: View {
     let playbackRequestToken: Int
     let showTooltips: Bool
     @Binding var isCollapsed: Bool
+    let isPoppedOut: Bool
+    let onTogglePopout: () -> Void
     @State private var queuePlayer = AVQueuePlayer()
     @AppStorage("cinefuse.editor.preview.loopEnabled") private var loopPreviewEnabled = false
     @State private var loopObserver: NSObjectProtocol?
@@ -3941,6 +4048,12 @@ struct EditorPreviewPanel: View {
                             systemName: loopPreviewEnabled ? "repeat.1.circle.fill" : "repeat.circle",
                             label: loopPreviewEnabled ? "Disable loop playback" : "Enable loop playback",
                             action: { loopPreviewEnabled.toggle() },
+                            tooltipEnabled: showTooltips
+                        )
+                        IconCommandButton(
+                            systemName: isPoppedOut ? "rectangle.inset.filled.and.person.filled" : "rectangle.on.rectangle",
+                            label: isPoppedOut ? "Dock preview panel" : "Pop out preview panel",
+                            action: onTogglePopout,
                             tooltipEnabled: showTooltips
                         )
 
@@ -4028,6 +4141,41 @@ struct EditorPreviewPanel: View {
         }
     }
 }
+
+#if canImport(AppKit) && !targetEnvironment(macCatalyst)
+private final class PreviewPopoutWindowController: NSWindowController, NSWindowDelegate {
+    private let onWindowClose: () -> Void
+
+    init<Content: View>(rootView: Content, onWindowClose: @escaping () -> Void) {
+        self.onWindowClose = onWindowClose
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 980, height: 620),
+            styleMask: [.titled, .closable, .resizable, .miniaturizable],
+            backing: .buffered,
+            defer: false
+        )
+        window.title = "Preview"
+        window.minSize = NSSize(width: 760, height: 440)
+        window.isReleasedWhenClosed = false
+        window.contentView = NSHostingView(rootView: AnyView(rootView))
+        super.init(window: window)
+        window.delegate = self
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    func update<Content: View>(rootView: Content) {
+        window?.contentView = NSHostingView(rootView: AnyView(rootView))
+    }
+
+    func windowWillClose(_ notification: Notification) {
+        onWindowClose()
+    }
+}
+#endif
 
 struct VerticalPanelHandle: View {
     let onDrag: (Double) -> Void
@@ -4260,6 +4408,7 @@ struct ShotsPanel: View {
     let onGenerateShot: (String) -> Void
     let onRetryShot: (String) -> Void
     let onDeleteShot: (String) -> Void
+    let onPreviewShot: (String) -> Void
     let showTooltips: Bool
     @Binding var isCollapsed: Bool
     @State private var pendingDeleteShotId: String?
@@ -4506,6 +4655,7 @@ struct ShotsPanel: View {
                             }
                             if let clipUrl = shot.clipUrl, let url = URL(string: clipUrl) {
                                 Button {
+                                    onPreviewShot(shot.id)
                                     openURL(url)
                                 } label: {
                                     Label("Play Render", systemImage: "play.circle")
@@ -4538,6 +4688,13 @@ struct ShotsPanel: View {
                         .background(
                             MediaCardBackground(imageURL: backgroundThumbnailURL)
                         )
+                        .clipShape(RoundedRectangle(cornerRadius: CinefuseTokens.Radius.medium))
+                        .contentShape(RoundedRectangle(cornerRadius: CinefuseTokens.Radius.medium))
+                        .onTapGesture {
+                            if shot.clipUrl != nil {
+                                onPreviewShot(shot.id)
+                            }
+                        }
                     }
                 }
             }
@@ -4728,6 +4885,7 @@ struct JobsPanel: View {
                                 .background(
                                     MediaCardBackground(imageURL: backgroundThumbnailURL)
                                 )
+                                .clipShape(RoundedRectangle(cornerRadius: CinefuseTokens.Radius.medium))
                             }
                         }
                     }
@@ -4790,6 +4948,7 @@ private struct MediaCardBackground: View {
             RoundedRectangle(cornerRadius: CinefuseTokens.Radius.medium)
                 .stroke(CinefuseTokens.ColorRole.borderSubtle, lineWidth: 1)
         }
+        .clipShape(RoundedRectangle(cornerRadius: CinefuseTokens.Radius.medium))
     }
 }
 
