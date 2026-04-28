@@ -121,7 +121,11 @@ export function createHttpServer() {
       await saveJob({
         id: jobId,
         status,
-        progressPct
+        progressPct,
+        outputPayload: {
+          invokeState: status === "failed" ? "failed" : "running",
+          lastProgressAt: new Date().toISOString()
+        }
       });
     } catch (error) {
       console.error("[render] progress save failed", {
@@ -173,7 +177,11 @@ export function createHttpServer() {
     await saveJob({
       id: task.jobId,
       status: "running",
-      progressPct: 15
+      progressPct: 15,
+      outputPayload: {
+        invokeState: "running",
+        apiInvokeStartedAt: new Date().toISOString()
+      }
     });
     publishProjectEvent(task.projectId, {
       type: "shot_status_changed",
@@ -242,8 +250,11 @@ export function createHttpServer() {
         id: task.jobId,
         outputPayload: {
           modelId: generation.modelId ?? null,
+          requestId: generation.requestId ?? null,
           clipUrl: generation.clipUrl ?? null,
-          sparksCost: task.quote.sparksCost
+          sparksCost: task.quote.sparksCost,
+          invokeState: "done",
+          apiInvokeFinishedAt: new Date().toISOString()
         },
         costToUsCents: generation.costToUsCents ?? 0
       });
@@ -280,7 +291,10 @@ export function createHttpServer() {
       await saveJob({
         id: task.jobId,
         outputPayload: {
-          error: message
+          error: message,
+          invokeState: "failed",
+          timeout: /timeout/i.test(message),
+          apiInvokeFinishedAt: new Date().toISOString()
         }
       });
       await updateRenderJobProgress({
@@ -377,9 +391,13 @@ export function createHttpServer() {
       inputPayload: {
         prompt: queuedShot.prompt,
         modelTier: queuedShot.modelTier,
-        sparksCost: quote.sparksCost
+        sparksCost: quote.sparksCost,
+        idempotencyKey: generationIdempotencyKey,
+        apiRequestSentAt: new Date().toISOString()
       },
-      outputPayload: {},
+      outputPayload: {
+        invokeState: "queued"
+      },
       costToUsCents: 0
     });
     publishProjectEvent(projectId, {

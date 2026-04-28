@@ -134,6 +134,9 @@ public struct Job: Codable, Identifiable {
     public let modelId: String?
     public let errorMessage: String?
     public let outputUrl: String?
+    public let requestId: String?
+    public let idempotencyKey: String?
+    public let invokeState: String?
     public let updatedAt: String?
 }
 

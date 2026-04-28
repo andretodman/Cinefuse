@@ -236,6 +236,11 @@ function mapJobRow(row) {
     modelId: typeof outputPayload.modelId === "string" ? outputPayload.modelId : null,
     errorMessage: typeof outputPayload.error === "string" ? outputPayload.error : null,
     outputUrl: typeof outputUrl === "string" ? outputUrl : null,
+    requestId: typeof (outputPayload.requestId ?? outputPayload.request_id) === "string"
+      ? (outputPayload.requestId ?? outputPayload.request_id)
+      : null,
+    idempotencyKey: typeof inputPayload.idempotencyKey === "string" ? inputPayload.idempotencyKey : null,
+    invokeState: typeof outputPayload.invokeState === "string" ? outputPayload.invokeState : null,
     createdAt: row.created_at,
     updatedAt: row.updated_at
   };

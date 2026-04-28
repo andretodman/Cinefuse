@@ -1346,7 +1346,7 @@ struct ProjectWorkspaceScreen: View {
 
         for (shotId, state) in shotRequestStateById {
             guard state.stage.isTimeoutCandidate else { continue }
-            let reference = state.lastEventAt ?? state.responseReceivedAt ?? state.requestSentAt
+            let reference = state.lastMeaningfulTransitionAt ?? state.requestSentAt
             guard let reference else { continue }
             let age = now.timeIntervalSince(reference)
             if age > timeoutSeconds {
@@ -1354,12 +1354,13 @@ struct ProjectWorkspaceScreen: View {
                 updated.stage = .timedOut
                 updated.errorMessage = "No update for \(Int(age))s after request."
                 shotRequestStateById[shotId] = updated
+                appendDebugEvent("timeout shot=\(shotId) waited=\(Int(age))s stage=\(state.stage.rawValue)")
             }
         }
 
         for (jobId, state) in jobRequestStateById {
             guard state.stage.isTimeoutCandidate else { continue }
-            let reference = state.lastEventAt ?? state.responseReceivedAt ?? state.requestSentAt
+            let reference = state.lastMeaningfulTransitionAt ?? state.requestSentAt
             guard let reference else { continue }
             let age = now.timeIntervalSince(reference)
             if age > timeoutSeconds {
@@ -1367,6 +1368,7 @@ struct ProjectWorkspaceScreen: View {
                 updated.stage = .timedOut
                 updated.errorMessage = "No update for \(Int(age))s after request."
                 jobRequestStateById[jobId] = updated
+                appendDebugEvent("timeout job=\(jobId) waited=\(Int(age))s stage=\(state.stage.rawValue)")
             }
         }
     }
@@ -1374,19 +1376,31 @@ struct ProjectWorkspaceScreen: View {
     private func syncRequestStatesFromSnapshot(shots: [Shot], jobs: [Job]) {
         for shot in shots {
             upsertShotRequestState(shot.id) { state in
+                let previousStatus = state.lastKnownStatus
                 state.lastKnownStatus = shot.status
+                state.source = "snapshot"
+                if state.requestSentAt == nil {
+                    state.requestSentAt = Date()
+                }
+                let changed = previousStatus != shot.status
                 switch shot.status {
                 case "queued", "generating", "running", "processing":
                     if state.stage != .failed && state.stage != .timedOut {
-                        state.stage = .waiting
+                        state.stage = shot.status == "queued" ? .waiting : .running
                     }
                 case "ready":
-                    state.stage = .received
+                    state.stage = .done
                 case "failed":
                     state.stage = .failed
                     state.errorMessage = state.errorMessage ?? "Shot generation failed."
                 default:
                     break
+                }
+                if changed {
+                    state.lastMeaningfulTransitionAt = Date()
+                    if shot.status == "ready" || shot.status == "failed" {
+                        appendDebugEvent("snapshot shot final shot=\(shot.id) status=\(shot.status)")
+                    }
                 }
             }
         }
@@ -1394,23 +1408,39 @@ struct ProjectWorkspaceScreen: View {
         for job in jobs {
             let stateDate = parseOptionalISODate(job.updatedAt)
             upsertJobRequestState(job.id) { state in
+                let previousStatus = state.lastKnownStatus
                 state.lastKnownStatus = job.status
-                state.lastEventAt = stateDate ?? state.lastEventAt
+                state.source = "snapshot"
                 if state.requestSentAt == nil {
                     state.requestSentAt = stateDate
                 }
+                let changed = previousStatus != job.status
                 switch job.status {
-                case "queued", "running", "processing":
+                case "queued":
                     if state.stage != .failed && state.stage != .timedOut {
                         state.stage = .waiting
                     }
+                case "running", "processing":
+                    if state.stage != .failed && state.stage != .timedOut {
+                        state.stage = .running
+                    }
                 case "done":
-                    state.stage = .received
+                    state.stage = .done
                 case "failed":
                     state.stage = .failed
                     state.errorMessage = state.errorMessage ?? job.errorMessage ?? "Render job failed."
                 default:
                     break
+                }
+                if changed {
+                    state.lastMeaningfulTransitionAt = stateDate ?? Date()
+                    state.lastEventAt = stateDate ?? state.lastEventAt
+                    if job.status == "done" || job.status == "failed" {
+                        appendDebugEvent("snapshot job final job=\(job.id) status=\(job.status) progress=\(job.progressPct.map(String.init) ?? "n/a")")
+                    }
+                }
+                if state.stage == .running, state.responseReceivedAt == nil {
+                    state.responseReceivedAt = stateDate ?? Date()
                 }
             }
         }
@@ -1557,18 +1587,30 @@ struct ProjectWorkspaceScreen: View {
         case "shot_status_changed":
             guard let shotId = event.shotId else { return }
             upsertShotRequestState(shotId) { state in
-                state.lastEventAt = parseISODate(event.timestamp)
+                let eventDate = parseISODate(event.timestamp)
+                let previousStatus = state.lastKnownStatus
                 state.lastKnownStatus = event.status ?? state.lastKnownStatus
+                state.source = "events"
+                if state.requestSentAt == nil {
+                    state.requestSentAt = eventDate
+                }
                 switch event.status {
-                case "queued", "generating", "running", "processing":
+                case "queued":
                     state.stage = .waiting
+                case "generating", "running", "processing":
+                    state.stage = .running
+                    state.responseReceivedAt = state.responseReceivedAt ?? eventDate
                 case "ready":
-                    state.stage = .received
+                    state.stage = .done
                 case "failed":
                     state.stage = .failed
                     state.errorMessage = state.errorMessage ?? "Shot generation failed."
                 default:
                     break
+                }
+                if previousStatus != state.lastKnownStatus {
+                    state.lastEventAt = eventDate
+                    state.lastMeaningfulTransitionAt = eventDate
                 }
             }
             if let index = shots.firstIndex(where: { $0.id == shotId }) {
@@ -1588,9 +1630,12 @@ struct ProjectWorkspaceScreen: View {
                 )
             }
             if event.status == "ready" {
+                appendDebugEvent("shot final shot=\(shotId) status=ready")
                 Task {
                     await loadSelectedProjectDetails(showLoadingIndicator: false)
                 }
+            } else if event.status == "failed" {
+                appendDebugEvent("shot final shot=\(shotId) status=failed")
             }
         case "job_status_changed":
             guard let jobId = event.jobId else { return }
@@ -1599,18 +1644,30 @@ struct ProjectWorkspaceScreen: View {
                 return
             }
             upsertJobRequestState(jobId) { state in
-                state.lastEventAt = parseISODate(event.timestamp)
+                let eventDate = parseISODate(event.timestamp)
+                let previousStatus = state.lastKnownStatus
                 state.lastKnownStatus = event.status ?? state.lastKnownStatus
+                state.source = "events"
+                if state.requestSentAt == nil {
+                    state.requestSentAt = eventDate
+                }
                 switch event.status {
-                case "queued", "running", "processing":
+                case "queued":
                     state.stage = .waiting
+                case "running", "processing":
+                    state.stage = .running
+                    state.responseReceivedAt = state.responseReceivedAt ?? eventDate
                 case "done":
-                    state.stage = .received
+                    state.stage = .done
                 case "failed":
                     state.stage = .failed
                     state.errorMessage = state.errorMessage ?? "Render job failed."
                 default:
                     break
+                }
+                if previousStatus != state.lastKnownStatus {
+                    state.lastEventAt = eventDate
+                    state.lastMeaningfulTransitionAt = eventDate
                 }
             }
             if let index = jobs.firstIndex(where: { $0.id == jobId }) {
@@ -1627,6 +1684,9 @@ struct ProjectWorkspaceScreen: View {
                     modelId: job.modelId,
                     errorMessage: job.errorMessage,
                     outputUrl: job.outputUrl,
+                    requestId: job.requestId,
+                    idempotencyKey: job.idempotencyKey,
+                    invokeState: job.invokeState,
                     updatedAt: event.timestamp
                 )
             } else if let shotId = event.shotId {
@@ -1643,14 +1703,20 @@ struct ProjectWorkspaceScreen: View {
                         modelId: nil,
                         errorMessage: nil,
                         outputUrl: nil,
+                        requestId: nil,
+                        idempotencyKey: nil,
+                        invokeState: nil,
                         updatedAt: event.timestamp
                     )
                 )
             }
             if event.status == "done" {
+                appendDebugEvent("job final job=\(jobId) status=done progress=\(event.progressPct.map(String.init) ?? "n/a")")
                 Task {
                     await loadSelectedProjectDetails(showLoadingIndicator: false)
                 }
+            } else if event.status == "failed" {
+                appendDebugEvent("job final job=\(jobId) status=failed progress=\(event.progressPct.map(String.init) ?? "n/a")")
             }
         case "shot_deleted":
             guard let shotId = event.shotId else { return }
@@ -1787,8 +1853,11 @@ struct ProjectWorkspaceScreen: View {
         model.errorMessage = nil
         upsertShotRequestState(shotId) { state in
             state.stage = .requestSent
-            state.requestSentAt = Date()
+            state.requestSentAt = state.requestSentAt ?? Date()
+            state.lastMeaningfulTransitionAt = state.requestSentAt
+            state.responseReceivedAt = nil
             state.errorMessage = nil
+            state.source = "local-request"
         }
         appendDebugEvent("generate shot requested shot=\(shotId)")
         do {
@@ -1799,15 +1868,19 @@ struct ProjectWorkspaceScreen: View {
             )
             quotedShotCost = generation.quote
             upsertShotRequestState(shotId) { state in
-                state.stage = .waiting
+                state.stage = .responseReceived
                 state.responseReceivedAt = Date()
+                state.lastMeaningfulTransitionAt = state.responseReceivedAt
                 state.lastKnownStatus = generation.shot.status
+                state.source = "api-response"
             }
             upsertJobRequestState(generation.job.id) { state in
-                state.stage = .waiting
+                state.stage = .responseReceived
                 state.requestSentAt = state.requestSentAt ?? Date()
                 state.responseReceivedAt = Date()
+                state.lastMeaningfulTransitionAt = state.responseReceivedAt
                 state.lastKnownStatus = generation.job.status
+                state.source = "api-response"
             }
             appendDebugEvent("generate shot queued shot=\(shotId) job=\(generation.job.id)")
             await loadSelectedProjectDetails(showLoadingIndicator: false)
@@ -1815,7 +1888,9 @@ struct ProjectWorkspaceScreen: View {
             upsertShotRequestState(shotId) { state in
                 state.stage = .failed
                 state.responseReceivedAt = Date()
+                state.lastMeaningfulTransitionAt = state.responseReceivedAt
                 state.errorMessage = error.localizedDescription
+                state.source = "api-response"
             }
             appendDebugEvent("generate shot failed shot=\(shotId) reason=\(error.localizedDescription)")
             model.errorMessage = error.localizedDescription
@@ -1827,8 +1902,11 @@ struct ProjectWorkspaceScreen: View {
         model.errorMessage = nil
         upsertShotRequestState(shotId) { state in
             state.stage = .requestSent
-            state.requestSentAt = Date()
+            state.requestSentAt = state.requestSentAt ?? Date()
+            state.lastMeaningfulTransitionAt = state.requestSentAt
+            state.responseReceivedAt = nil
             state.errorMessage = nil
+            state.source = "local-request"
         }
         do {
             let generation = try await api.retryShot(
@@ -1838,22 +1916,28 @@ struct ProjectWorkspaceScreen: View {
             )
             quotedShotCost = generation.quote
             upsertShotRequestState(shotId) { state in
-                state.stage = .waiting
+                state.stage = .responseReceived
                 state.responseReceivedAt = Date()
+                state.lastMeaningfulTransitionAt = state.responseReceivedAt
                 state.lastKnownStatus = generation.shot.status
+                state.source = "api-response"
             }
             upsertJobRequestState(generation.job.id) { state in
-                state.stage = .waiting
+                state.stage = .responseReceived
                 state.requestSentAt = state.requestSentAt ?? Date()
                 state.responseReceivedAt = Date()
+                state.lastMeaningfulTransitionAt = state.responseReceivedAt
                 state.lastKnownStatus = generation.job.status
+                state.source = "api-response"
             }
             await loadSelectedProjectDetails(showLoadingIndicator: false)
         } catch {
             upsertShotRequestState(shotId) { state in
                 state.stage = .failed
                 state.responseReceivedAt = Date()
+                state.lastMeaningfulTransitionAt = state.responseReceivedAt
                 state.errorMessage = error.localizedDescription
+                state.source = "api-response"
             }
             model.errorMessage = error.localizedDescription
         }
@@ -1885,10 +1969,12 @@ struct ProjectWorkspaceScreen: View {
                 kind: jobKindDraft
             )
             upsertJobRequestState(createdJob.id) { state in
-                state.stage = .waiting
-                state.requestSentAt = Date()
+                state.stage = .responseReceived
+                state.requestSentAt = state.requestSentAt ?? Date()
                 state.responseReceivedAt = Date()
+                state.lastMeaningfulTransitionAt = state.responseReceivedAt
                 state.lastKnownStatus = createdJob.status
+                state.source = "api-response"
             }
             await loadSelectedProjectDetails(showLoadingIndicator: false)
         } catch {
@@ -2152,10 +2238,12 @@ struct ProjectWorkspaceScreen: View {
                 publishTarget: effectivePublishTarget
             )
             upsertJobRequestState(result.id) { state in
-                state.stage = .waiting
-                state.requestSentAt = requestSentAt
+                state.stage = .responseReceived
+                state.requestSentAt = state.requestSentAt ?? requestSentAt
                 state.responseReceivedAt = Date()
+                state.lastMeaningfulTransitionAt = state.responseReceivedAt
                 state.lastKnownStatus = result.status
+                state.source = "api-response"
             }
             appendDebugEvent("export queued job=\(result.id)")
             await loadSelectedProjectDetails(showLoadingIndicator: false)
@@ -3970,6 +4058,11 @@ struct ShotsPanel: View {
                                     let presentation = statusPresentation(for: shot)
                                     GenerationStatusDot(status: presentation)
                                         .tooltip(presentation.summary, enabled: showTooltips)
+                                        .contextMenu {
+                                            Button("Copy Diagnostics") {
+                                                copyTextToClipboard(presentation.details)
+                                            }
+                                        }
                                         .onTapGesture {
                                             selectedDiagnostics = presentation
                                         }
@@ -4099,15 +4192,6 @@ struct JobsPanel: View {
         )
     }
 
-    private func copyStatusText(_ value: String) {
-#if canImport(AppKit) && !targetEnvironment(macCatalyst)
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(value, forType: .string)
-#elseif canImport(UIKit)
-        UIPasteboard.general.string = value
-#endif
-    }
-
     var body: some View {
         SectionCard(
             title: "Jobs - Track render",
@@ -4163,6 +4247,7 @@ struct JobsPanel: View {
                     ScrollView {
                         LazyVGrid(columns: gridColumns, alignment: .leading, spacing: CinefuseTokens.Spacing.s) {
                             ForEach(jobs) { job in
+                                let presentation = statusPresentation(for: job)
                                 VStack(alignment: .leading, spacing: CinefuseTokens.Spacing.xs) {
                                     HStack(spacing: CinefuseTokens.Spacing.s) {
                                         Text(job.kind.capitalized)
@@ -4170,10 +4255,12 @@ struct JobsPanel: View {
                                         StatusBadge(status: job.status)
                                             .contextMenu {
                                                 Button("Copy Status") {
-                                                    copyStatusText(job.status)
+                                                    copyTextToClipboard(job.status)
+                                                }
+                                                Button("Copy Diagnostics") {
+                                                    copyTextToClipboard(presentation.details)
                                                 }
                                             }
-                                        let presentation = statusPresentation(for: job)
                                         GenerationStatusDot(status: presentation)
                                             .tooltip(presentation.summary, enabled: showTooltips)
                                             .onTapGesture {
@@ -4266,27 +4353,31 @@ struct ArtifactStatusPresentation: Identifiable {
 struct RenderRequestState {
     enum Stage: String {
         case requestSent
+        case responseReceived
         case waiting
-        case received
+        case running
+        case done
         case failed
         case timedOut
 
         var isTimeoutCandidate: Bool {
             switch self {
-            case .requestSent, .waiting:
+            case .requestSent, .responseReceived, .waiting, .running:
                 return true
-            case .received, .failed, .timedOut:
+            case .done, .failed, .timedOut:
                 return false
             }
         }
     }
 
-    var stage: Stage = .waiting
+    var stage: Stage = .requestSent
     var requestSentAt: Date?
     var responseReceivedAt: Date?
     var lastEventAt: Date?
+    var lastMeaningfulTransitionAt: Date?
     var lastKnownStatus: String?
     var errorMessage: String?
+    var source: String?
 }
 
 private func requestTimelineLines(_ requestState: RenderRequestState?) -> [String] {
@@ -4310,10 +4401,17 @@ private func requestTimelineLines(_ requestState: RenderRequestState?) -> [Strin
     } else {
         lines.append("Last event: none yet")
     }
+    if let transition = requestState.lastMeaningfulTransitionAt {
+        lines.append("Last lifecycle transition: \(transition.formatted(date: .abbreviated, time: .standard))")
+    } else {
+        lines.append("Last lifecycle transition: none yet")
+    }
 
     if let sent = requestState.requestSentAt {
         let durationSeconds: Int
-        if let received = requestState.responseReceivedAt {
+        if let terminal = requestState.lastMeaningfulTransitionAt, !requestState.stage.isTimeoutCandidate {
+            durationSeconds = max(0, Int(terminal.timeIntervalSince(sent)))
+        } else if let received = requestState.responseReceivedAt {
             durationSeconds = max(0, Int(received.timeIntervalSince(sent)))
         } else {
             durationSeconds = max(0, Int(Date().timeIntervalSince(sent)))
@@ -4324,11 +4422,26 @@ private func requestTimelineLines(_ requestState: RenderRequestState?) -> [Strin
     }
     if let status = requestState.lastKnownStatus {
         lines.append("API status: \(status)")
+    } else {
+        lines.append("API status: unknown")
+    }
+    if let source = requestState.source {
+        lines.append("Lifecycle source: \(source)")
     }
     if let error = requestState.errorMessage {
-        lines.append("Request error: \(error)")
+        let label = requestState.stage == .timedOut ? "Timeout reason" : "Request error"
+        lines.append("\(label): \(error)")
     }
     return lines
+}
+
+private func copyTextToClipboard(_ value: String) {
+#if canImport(AppKit) && !targetEnvironment(macCatalyst)
+    NSPasteboard.general.clearContents()
+    NSPasteboard.general.setString(value, forType: .string)
+#elseif canImport(UIKit)
+    UIPasteboard.general.string = value
+#endif
 }
 
 private func artifactStatusPresentation(
@@ -4337,6 +4450,12 @@ private func artifactStatusPresentation(
     requestState: RenderRequestState?
 ) -> ArtifactStatusPresentation {
     let requestLines = requestTimelineLines(requestState)
+    let apiEvidence = [
+        "Job ID: \(job.id)",
+        "Request ID: \(job.requestId ?? "n/a")",
+        "Idempotency key: \(job.idempotencyKey ?? "n/a")",
+        "Invoke state: \(job.invokeState ?? "n/a")"
+    ]
     if requestState?.stage == .timedOut || requestState?.stage == .failed {
         let details = [
             "Job: \(job.kind) / \(job.status)",
@@ -4345,7 +4464,7 @@ private func artifactStatusPresentation(
             "Remote URL: \(job.outputUrl ?? "n/a")",
             "Local file: \(localRecord?.localPath ?? "not available")",
             "Error: \(requestState?.errorMessage ?? job.errorMessage ?? localRecord?.errorMessage ?? "request timed out or failed")"
-        ] + requestLines
+        ] + apiEvidence + requestLines
         return ArtifactStatusPresentation(
             level: .error,
             summary: "Request timed out or failed",
@@ -4360,7 +4479,7 @@ private func artifactStatusPresentation(
             "Remote URL: \(job.outputUrl ?? "n/a")",
             "Local file: \(localRecord?.localPath ?? "not available")",
             "Error: \(job.errorMessage ?? localRecord?.errorMessage ?? "unknown")"
-        ] + requestLines
+        ] + apiEvidence + requestLines
         let detailText = details.joined(separator: "\n")
         return ArtifactStatusPresentation(
             level: .error,
@@ -4377,7 +4496,7 @@ private func artifactStatusPresentation(
             "Remote URL: \(job.outputUrl ?? "n/a")",
             "Local file: \(localRecord?.localPath ?? "n/a")",
             "File sync: \(localRecord?.status.rawValue ?? "n/a")"
-        ] + requestLines
+        ] + apiEvidence + requestLines
         let detailText = details.joined(separator: "\n")
         return ArtifactStatusPresentation(
             level: .success,
@@ -4392,11 +4511,19 @@ private func artifactStatusPresentation(
         "Prompt: \(job.promptText ?? "n/a")",
         "Remote URL: \(job.outputUrl ?? "n/a")",
         "Local file: pending"
-    ] + requestLines
+    ] + apiEvidence + requestLines
+    let waitingSummary: String
+    if requestState?.stage == .responseReceived {
+        waitingSummary = "API called and accepted; waiting for worker updates"
+    } else if requestState?.stage == .running {
+        waitingSummary = "Render running; waiting for completion"
+    } else {
+        waitingSummary = "Generation or local file sync is still in progress"
+    }
     let waitingDetailText = waitingDetails.joined(separator: "\n")
     return ArtifactStatusPresentation(
         level: .warning,
-        summary: "Generation or local file sync is still in progress",
+        summary: waitingSummary,
         details: waitingDetailText
     )
 }
@@ -4414,6 +4541,8 @@ private func shotArtifactStatusPresentation(
             "Status: \(shot.status)",
             "Prompt: \(shot.prompt)",
             "Model tier: \(shot.modelTier)",
+            "Request ID: \(job?.requestId ?? "n/a")",
+            "Idempotency key: \(job?.idempotencyKey ?? "n/a")",
             "Error: \(requestState?.errorMessage ?? job?.errorMessage ?? localRecord?.errorMessage ?? "request timed out or failed")"
         ] + requestLines
         return ArtifactStatusPresentation(
@@ -4428,6 +4557,8 @@ private func shotArtifactStatusPresentation(
             "Status: \(shot.status)",
             "Prompt: \(shot.prompt)",
             "Model tier: \(shot.modelTier)",
+            "Request ID: \(job?.requestId ?? "n/a")",
+            "Idempotency key: \(job?.idempotencyKey ?? "n/a")",
             "Error: \(job?.errorMessage ?? localRecord?.errorMessage ?? "unknown")"
         ] + requestLines
         return ArtifactStatusPresentation(level: .error, summary: "Shot generation failed", details: details.joined(separator: "\n"))
@@ -4441,7 +4572,9 @@ private func shotArtifactStatusPresentation(
             "Model tier: \(shot.modelTier)",
             "Remote URL: \(shot.clipUrl ?? "n/a")",
             "Local file: \(localRecord?.localPath ?? "n/a")",
-            "Model: \(job?.modelId ?? "unknown")"
+            "Model: \(job?.modelId ?? "unknown")",
+            "Request ID: \(job?.requestId ?? "n/a")",
+            "Idempotency key: \(job?.idempotencyKey ?? "n/a")"
         ] + requestLines
         return ArtifactStatusPresentation(level: .success, summary: "Shot file is available locally", details: details.joined(separator: "\n"))
     }
@@ -4453,6 +4586,8 @@ private func shotArtifactStatusPresentation(
             "Prompt: \(shot.prompt)",
             "Remote URL: \(shot.clipUrl ?? "n/a")",
             "Local file: unavailable",
+            "Request ID: \(job?.requestId ?? "n/a")",
+            "Idempotency key: \(job?.idempotencyKey ?? "n/a")",
             "Error: \(localRecord?.errorMessage ?? "file sync failed")"
         ] + requestLines
         return ArtifactStatusPresentation(level: .error, summary: "Shot rendered but local file sync failed", details: details.joined(separator: "\n"))
@@ -4463,9 +4598,14 @@ private func shotArtifactStatusPresentation(
         "Status: \(shot.status)",
         "Prompt: \(shot.prompt)",
         "Model tier: \(shot.modelTier)",
-        "Progress: \(job?.progressPct.map(String.init) ?? "n/a")%"
+        "Progress: \(job?.progressPct.map(String.init) ?? "n/a")%",
+        "Request ID: \(job?.requestId ?? "n/a")",
+        "Idempotency key: \(job?.idempotencyKey ?? "n/a")"
     ] + requestLines
-    return ArtifactStatusPresentation(level: .warning, summary: "Shot generation still in progress", details: details.joined(separator: "\n"))
+    let summary = requestState?.stage == .responseReceived
+        ? "Shot API call accepted; waiting for worker"
+        : "Shot generation still in progress"
+    return ArtifactStatusPresentation(level: .warning, summary: summary, details: details.joined(separator: "\n"))
 }
 
 struct GenerationStatusDot: View {
@@ -4503,6 +4643,10 @@ struct StatusDetailsSheet: View {
                 Text(details.summary)
                     .font(CinefuseTokens.Typography.sectionTitle)
                 Spacer()
+                Button("Copy Diagnostics") {
+                    copyTextToClipboard(details.details)
+                }
+                .buttonStyle(SecondaryActionButtonStyle())
                 Button("Close") {
                     dismiss()
                 }

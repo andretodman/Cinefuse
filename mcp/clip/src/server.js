@@ -356,6 +356,7 @@ export function createServer() {
           estimatedDurationSec: generation.estimatedDurationSec,
           costToUsCents: generation.costToUsCents,
           status: generation.status,
+          requestId: generation.requestId ?? null,
           clipUrl: generation.clipUrl,
           thumbnailUrl: generation.thumbnailUrl ?? null,
           input: input ?? null
