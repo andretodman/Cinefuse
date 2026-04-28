@@ -1,0 +1,278 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Cinefuse Help Center</title>
+  <style>
+    :root {
+      --bg: #0f1319;
+      --panel: #171d26;
+      --text: #eaf0fb;
+      --muted: #a8b5cb;
+      --accent: #79b8ff;
+      --border: #2a3443;
+      --good: #4fdc9e;
+      --warn: #f3c969;
+      --bad: #ff8379;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      color: var(--text);
+      background: radial-gradient(circle at 20% -10%, #26344b 0%, var(--bg) 45%);
+      font: 15px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      -webkit-user-select: text;
+      user-select: text;
+    }
+    .page { max-width: 1180px; margin: 0 auto; padding: 24px; }
+    h1, h2, h3 { line-height: 1.2; margin: 0 0 10px; }
+    h1 { font-size: 32px; margin-bottom: 6px; }
+    h2 { margin-top: 28px; border-bottom: 1px solid var(--border); padding-bottom: 8px; }
+    h3 { margin-top: 18px; color: #d6e5ff; }
+    p, li { color: var(--muted); }
+    a { color: var(--accent); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    .layout { display: grid; grid-template-columns: 280px 1fr; gap: 18px; align-items: start; }
+    .panel {
+      background: rgba(23, 29, 38, 0.88);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 14px;
+      backdrop-filter: blur(6px);
+      margin-bottom: 14px;
+    }
+    .toc { position: sticky; top: 14px; }
+    .toc a { display: block; padding: 4px 0; }
+    .badge {
+      display: inline-block;
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      padding: 2px 9px;
+      margin-right: 6px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+    .img {
+      background: #101722;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 10px;
+      margin: 10px 0;
+    }
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    th, td { border: 1px solid var(--border); text-align: left; padding: 7px; vertical-align: top; }
+    th { background: #121a26; color: #d9e7ff; }
+    code, pre {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      background: #101722;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+    }
+    code { padding: 1px 5px; color: #d4e7ff; }
+    pre { padding: 10px; overflow: auto; color: #d4e7ff; }
+    .status-good { color: var(--good); }
+    .status-warn { color: var(--warn); }
+    .status-bad { color: var(--bad); }
+    @media (max-width: 960px) {
+      .layout { grid-template-columns: 1fr; }
+      .toc { position: static; }
+    }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <h1>Cinefuse Help Center</h1>
+    <p>Feature reference, workflow guide, diagnostics handbook, and API/MCP map.</p>
+    <p>
+      <span class="badge">Projects</span>
+      <span class="badge">Shots</span>
+      <span class="badge">Timeline</span>
+      <span class="badge">Jobs</span>
+      <span class="badge">Audio</span>
+      <span class="badge">Export</span>
+      <span class="badge">Diagnostics</span>
+    </p>
+
+    <div class="layout">
+      <nav class="panel toc">
+        <h3>Table of Contents</h3>
+        <a href="#overview">1) Overview</a>
+        <a href="#quickstart">2) Quick Start Workflow</a>
+        <a href="#workspace">3) Workspace + Menu Controls</a>
+        <a href="#projects">4) Projects</a>
+        <a href="#shots">5) Shots + Prompting</a>
+        <a href="#timeline">6) Timeline and Visibility</a>
+        <a href="#jobs">7) Jobs Grid and Status</a>
+        <a href="#audio">8) Audio Lanes</a>
+        <a href="#export">9) Stitch + Export</a>
+        <a href="#diagnostics">10) Diagnostics + Failure Recovery</a>
+        <a href="#api">11) API and MCP Reference</a>
+        <a href="#errors">12) Error Codes and Meaning</a>
+      </nav>
+
+      <main>
+        <section id="overview" class="panel">
+          <h2>1) Overview</h2>
+          <p>Cinefuse is an MCP-first film editor. The app sends requests to the API gateway, which dispatches generation through MCP tools and the render-worker queue.</p>
+          <div class="img">
+            <svg viewBox="0 0 980 170" width="100%" height="170" role="img" aria-label="Cinefuse generation pipeline">
+              <rect x="10" y="50" width="145" height="56" rx="10" fill="#1b2433" stroke="#2a3443"/><text x="82" y="83" text-anchor="middle" fill="#eaf0fb" font-size="14">Create Shot</text>
+              <rect x="188" y="50" width="170" height="56" rx="10" fill="#1b2433" stroke="#2a3443"/><text x="273" y="83" text-anchor="middle" fill="#eaf0fb" font-size="14">Quote + Generate</text>
+              <rect x="390" y="50" width="165" height="56" rx="10" fill="#1b2433" stroke="#2a3443"/><text x="472" y="83" text-anchor="middle" fill="#eaf0fb" font-size="14">Render Worker</text>
+              <rect x="588" y="50" width="160" height="56" rx="10" fill="#1b2433" stroke="#2a3443"/><text x="668" y="83" text-anchor="middle" fill="#eaf0fb" font-size="14">Job Updates</text>
+              <rect x="780" y="50" width="190" height="56" rx="10" fill="#1b2433" stroke="#2a3443"/><text x="875" y="83" text-anchor="middle" fill="#eaf0fb" font-size="14">Timeline + Export</text>
+              <path d="M155 78 L188 78 M358 78 L390 78 M555 78 L588 78 M748 78 L780 78" stroke="#79b8ff" stroke-width="2"/>
+            </svg>
+          </div>
+        </section>
+
+        <section id="quickstart" class="panel">
+          <h2>2) Quick Start Workflow</h2>
+          <ol>
+            <li>Create a project from the top bar.</li>
+            <li>Add one or more shots with detailed prompts.</li>
+            <li>Quote then generate to queue a render job.</li>
+            <li>Watch progress and status in shot cards and the jobs grid.</li>
+            <li>Add audio lanes and run stitch/export when ready.</li>
+          </ol>
+        </section>
+
+        <section id="workspace" class="panel">
+          <h2>3) Workspace + Menu Controls</h2>
+          <p>The top menu includes panel toggles, workspace preset selector, theme selector, settings, and Help.</p>
+          <ul>
+            <li>Toggle side/bottom panes for focused editing.</li>
+            <li>Toggle Audio Lanes / Jobs independently in render mode.</li>
+            <li>Use Help button to open this embedded docs center.</li>
+          </ul>
+        </section>
+
+        <section id="projects" class="panel">
+          <h2>4) Projects</h2>
+          <ul>
+            <li>Create, rename, and select projects from the sidebar.</li>
+            <li>Each project stores shots, tracks, jobs, and generated outputs.</li>
+            <li>Project details sync via API fetch + event stream updates.</li>
+          </ul>
+        </section>
+
+        <section id="shots" class="panel">
+          <h2>5) Shots + Prompting</h2>
+          <p>Shot cards are the source of truth for visual intent and render options.</p>
+          <ul>
+            <li>Prompt text is selectable/copyable.</li>
+            <li>Tier chooses routing behavior and expected cost band.</li>
+            <li>Generate queues a render job; retry is for failed shots.</li>
+            <li>Diagnostics reveal request stage, backend status, and provider details.</li>
+          </ul>
+          <div class="img">
+            <strong>Image slot:</strong> Shot card anatomy (prompt, status, actions, diagnostics menu).
+          </div>
+        </section>
+
+        <section id="timeline" class="panel">
+          <h2>6) Timeline and Visibility</h2>
+          <ul>
+            <li>Timeline shows shot order and render outputs.</li>
+            <li>Hidden clips can be restored using the unhide controls.</li>
+            <li>Rendered clips can be previewed directly from cards.</li>
+          </ul>
+        </section>
+
+        <section id="jobs" class="panel">
+          <h2>7) Jobs Grid and Status</h2>
+          <ul>
+            <li>Jobs panel uses a grid to display multiple active items.</li>
+            <li>Supports retry/delete/copy diagnostics actions.</li>
+            <li>Status can move through queued → generating/running → done, or failed/timedOut.</li>
+          </ul>
+          <p>
+            <span class="status-good">Green:</span> done/ready
+            &nbsp;•&nbsp;<span class="status-warn">Yellow:</span> queued/running
+            &nbsp;•&nbsp;<span class="status-bad">Red:</span> failed/timedOut
+          </p>
+        </section>
+
+        <section id="audio" class="panel">
+          <h2>8) Audio Lanes</h2>
+          <ul>
+            <li>Dialogue, score, and SFX generation lanes.</li>
+            <li>Mix and lipsync passes can be queued as jobs.</li>
+            <li>Audio outputs are attached to timeline context.</li>
+          </ul>
+        </section>
+
+        <section id="export" class="panel">
+          <h2>9) Stitch + Export</h2>
+          <ul>
+            <li>Stitch creates a coherent sequence from shot outputs.</li>
+            <li>Export supports resolution, captions, and publish/archive options.</li>
+            <li>Export jobs appear in the same jobs track for visibility.</li>
+          </ul>
+        </section>
+
+        <section id="diagnostics" class="panel">
+          <h2>10) Diagnostics + Failure Recovery</h2>
+          <ul>
+            <li><strong>Queued too long:</strong> likely worker backlog/offline.</li>
+            <li><strong>Retry conflict:</strong> backend says current status is no longer failed.</li>
+            <li><strong>Timed out:</strong> no meaningful progress transition in timeout window.</li>
+          </ul>
+          <pre>{
+  "requestStage": "queued",
+  "apiStatus": "queued",
+  "requestId": "...",
+  "falStatusUrl": "...",
+  "providerStatusCode": 405
+}</pre>
+        </section>
+
+        <section id="api" class="panel">
+          <h2>11) API and MCP Reference</h2>
+          <h3>Primary HTTP endpoints</h3>
+          <table>
+            <thead><tr><th>Area</th><th>Method + Endpoint</th><th>Key Request Fields</th><th>Response Fields</th></tr></thead>
+            <tbody>
+              <tr><td>Health</td><td>GET <code>/api/v1/cinefuse/health</code></td><td>none</td><td><code>{ ok, version }</code></td></tr>
+              <tr><td>Projects</td><td>GET/POST <code>/api/v1/cinefuse/projects</code></td><td><code>title</code>, <code>logline</code></td><td><code>{ project }</code> / <code>{ projects }</code></td></tr>
+              <tr><td>Timeline</td><td>GET <code>/api/v1/cinefuse/projects/{projectId}/timeline</code></td><td>path <code>projectId</code></td><td><code>{ shots, audioTracks }</code></td></tr>
+              <tr><td>Create Shot</td><td>POST <code>/api/v1/cinefuse/projects/{projectId}/shots</code></td><td><code>promptText</code>, <code>modelTier</code>, <code>durationSec</code></td><td><code>{ shot }</code></td></tr>
+              <tr><td>Generate</td><td>POST <code>/api/v1/cinefuse/projects/{projectId}/shots/{shotId}/generate</code></td><td><code>idempotencyKey</code></td><td><code>{ shot, job }</code></td></tr>
+              <tr><td>Retry Shot</td><td>POST <code>/api/v1/cinefuse/projects/{projectId}/shots/{shotId}/retry</code></td><td>path ids</td><td><code>{ shot, job }</code> or 409 conflict envelope</td></tr>
+              <tr><td>Jobs</td><td>GET <code>/api/v1/cinefuse/projects/{projectId}/jobs</code></td><td>path <code>projectId</code></td><td><code>{ jobs }</code></td></tr>
+              <tr><td>Delete Job</td><td>DELETE <code>/api/v1/cinefuse/projects/{projectId}/jobs/{jobId}</code></td><td>path ids</td><td><code>{ ok: true }</code></td></tr>
+              <tr><td>Events</td><td>GET SSE <code>/api/v1/cinefuse/projects/{projectId}/events</code></td><td>path <code>projectId</code></td><td>event stream updates</td></tr>
+              <tr><td>Export</td><td>POST <code>/api/v1/cinefuse/projects/{projectId}/export/final</code></td><td><code>resolution</code>, <code>captions</code></td><td><code>{ job }</code></td></tr>
+            </tbody>
+          </table>
+
+          <h3>MCP services involved</h3>
+          <ul>
+            <li><code>mcp/clip</code>: quote + generate clip output through provider integration.</li>
+            <li><code>mcp/audio</code>: dialogue/score/sfx/mix/lipsync generation.</li>
+            <li><code>mcp/stitch</code>: stitch timeline segments and transitions.</li>
+            <li><code>mcp/export</code>: finalize export package and metadata.</li>
+            <li><code>mcp/pubfuse</code>: file/project integration with Pubfuse REST.</li>
+            <li><code>mcp/billing</code>: Sparks quote/debit/credit flow.</li>
+          </ul>
+        </section>
+
+        <section id="errors" class="panel">
+          <h2>12) Error Codes and Meaning</h2>
+          <table>
+            <thead><tr><th>Code</th><th>Meaning</th><th>Action</th></tr></thead>
+            <tbody>
+              <tr><td><code>SHOT_RETRY_CONFLICT</code></td><td>Shot status changed; retry no longer valid</td><td>Refresh, then Generate or wait</td></tr>
+              <tr><td><code>SHOT_ALREADY_GENERATING</code></td><td>Generation already active</td><td>Wait for completion</td></tr>
+              <tr><td><code>UNAUTHORIZED_WORKER</code></td><td>Worker token mismatch</td><td>Sync <code>CINEFUSE_WORKER_TOKEN</code></td></tr>
+              <tr><td><code>FAL_STATUS_FAILED</code></td><td>Provider polling failed</td><td>Inspect diagnostics and provider endpoint config</td></tr>
+              <tr><td><code>REDIS_CONNECTION_FAILED</code></td><td>Queue backend unreachable</td><td>Check redis URL/TLS/service state</td></tr>
+            </tbody>
+          </table>
+        </section>
+      </main>
+    </div>
+  </div>
+</body>
+</html>

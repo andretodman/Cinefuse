@@ -1,5 +1,8 @@
 import SwiftUI
 import UniformTypeIdentifiers
+#if canImport(AVFoundation)
+import AVFoundation
+#endif
 #if canImport(AVKit)
 import AVKit
 #endif
@@ -563,12 +566,15 @@ struct ProjectWorkspaceScreen: View {
     @State private var hasLiveEventsConnection = false
     @State private var editorSettings = EditorSettingsModel()
     @State private var showSettingsPanel = false
+    @State private var showHelpCenter = false
     @State private var showDebugWindow = false
     @State private var showOnboardingSheet = false
     @State private var isCreatingSampleProject = false
     @State private var isCheckingServerHealth = false
     @State private var isServerReachable: Bool?
     @State private var localFileRecordsByRemoteURL: [String: LocalFileRecord] = [:]
+    @State private var localThumbnailURLByShotId: [String: URL] = [:]
+    @State private var localThumbnailURLByJobId: [String: URL] = [:]
     @State private var debugEventLog: [String] = []
     @State private var shotRequestStateById: [String: RenderRequestState] = [:]
     @State private var jobRequestStateById: [String: RenderRequestState] = [:]
@@ -644,6 +650,8 @@ struct ProjectWorkspaceScreen: View {
             audioTracks: audioTracks,
             jobs: jobs,
             localFileRecordsByRemoteURL: localFileRecordsByRemoteURL,
+            localThumbnailURLByShotId: localThumbnailURLByShotId,
+            localThumbnailURLByJobId: localThumbnailURLByJobId,
             debugEventLog: debugEventLog,
             shotRequestStateById: shotRequestStateById,
             jobRequestStateById: jobRequestStateById,
@@ -672,10 +680,10 @@ struct ProjectWorkspaceScreen: View {
             onQuote: { Task { await quoteShot() } },
             onCreateShot: { Task { await createShot() } },
             onGenerateShot: { shotId in Task { await generateShot(shotId: shotId) } },
-            onRetryShot: { shotId in Task { await retryShot(shotId: shotId) } },
+            onRetryShot: { shotId in Task { await retryOrRestartShot(shotId: shotId) } },
             onDeleteShot: { shotId in Task { await deleteShotFromProject(shotId: shotId) } },
             onCreateJob: { Task { await createJob() } },
-            onRetryJob: { jobId in Task { await retryJob(jobId: jobId) } },
+            onRetryJob: { jobId in Task { await retryOrRestartJob(jobId: jobId) } },
             onDeleteJob: { jobId in Task { await deleteJobFromProject(jobId: jobId) } },
             onReorderShots: { from, to in Task { await reorderShots(from: from, to: to) } },
             onGenerateDialogue: { Task { await generateDialogueTrack() } },
@@ -727,6 +735,9 @@ struct ProjectWorkspaceScreen: View {
         }
         .sheet(isPresented: $showDebugWindow) {
             DebugGenerationWindow(logLines: debugEventLog)
+        }
+        .sheet(isPresented: $showHelpCenter) {
+            HelpCenterSheet()
         }
         .sheet(isPresented: $showOnboardingSheet) {
             onboardingSheet
@@ -912,6 +923,12 @@ struct ProjectWorkspaceScreen: View {
             .tooltip("Choose appearance theme", enabled: editorSettings.showTooltips)
 
             settingsPresentationTrigger
+            IconCommandButton(
+                systemName: "info.circle",
+                label: "Help",
+                action: { showHelpCenter = true },
+                tooltipEnabled: editorSettings.showTooltips
+            )
         }
     }
 
@@ -1278,6 +1295,8 @@ struct ProjectWorkspaceScreen: View {
         audioTracks = []
         jobs = []
         localFileRecordsByRemoteURL = [:]
+        localThumbnailURLByShotId = [:]
+        localThumbnailURLByJobId = [:]
         debugEventLog = []
         shotRequestStateById = [:]
         jobRequestStateById = [:]
@@ -1447,6 +1466,9 @@ struct ProjectWorkspaceScreen: View {
     }
 
     private func syncGeneratedFiles(projectId: String, shots: [Shot], jobs: [Job]) async {
+        var refreshedShotThumbnails: [String: URL] = [:]
+        var refreshedJobThumbnails: [String: URL] = [:]
+
         for shot in shots {
             guard let clipUrl = shot.clipUrl, !clipUrl.isEmpty else { continue }
             let localRecord = await generatedFilesStore.syncFile(
@@ -1454,24 +1476,118 @@ struct ProjectWorkspaceScreen: View {
                 remoteURLString: clipUrl,
                 preferredBaseName: "shot-\(shot.orderIndex ?? 0)-\(shot.id)"
             )
+            let thumbnailURL = await ensureShotThumbnail(projectId: projectId, shot: shot, localClipRecord: localRecord)
+            if let thumbnailURL {
+                refreshedShotThumbnails[shot.id] = thumbnailURL
+            }
             await MainActor.run {
                 localFileRecordsByRemoteURL[clipUrl] = localRecord
+                if let thumbnailURL {
+                    localThumbnailURLByShotId[shot.id] = thumbnailURL
+                }
                 appendDebugEvent("shot file sync \(localRecord.status.rawValue) shot=\(shot.id)")
             }
         }
 
-        for job in jobs where job.kind == "export" {
+        for job in jobs {
+            if let shotId = job.shotId, let thumbnailURL = refreshedShotThumbnails[shotId] {
+                refreshedJobThumbnails[job.id] = thumbnailURL
+            }
+            guard job.kind == "export" else { continue }
             guard let outputUrl = job.outputUrl, !outputUrl.isEmpty else { continue }
             let localRecord = await generatedFilesStore.syncFile(
                 projectId: projectId,
                 remoteURLString: outputUrl,
                 preferredBaseName: "export-\(job.id)"
             )
+            let outputThumbnailURL = await ensureExportThumbnail(projectId: projectId, job: job, localOutputRecord: localRecord)
+            if let outputThumbnailURL {
+                refreshedJobThumbnails[job.id] = outputThumbnailURL
+            }
             await MainActor.run {
                 localFileRecordsByRemoteURL[outputUrl] = localRecord
+                if let outputThumbnailURL {
+                    localThumbnailURLByJobId[job.id] = outputThumbnailURL
+                }
                 appendDebugEvent("export file sync \(localRecord.status.rawValue) job=\(job.id)")
             }
         }
+
+        await MainActor.run {
+            localThumbnailURLByShotId = refreshedShotThumbnails
+            localThumbnailURLByJobId = refreshedJobThumbnails
+        }
+    }
+
+    private func ensureShotThumbnail(projectId: String, shot: Shot, localClipRecord: LocalFileRecord) async -> URL? {
+        let clipName = clipDisplayName(for: shot)
+        if let existing = try? await generatedFilesStore.existingThumbnailURL(
+            projectId: projectId,
+            clipName: clipName,
+            shotId: shot.id,
+            orderIndex: shot.orderIndex
+        ) {
+            return existing
+        }
+        guard let localClipPath = localClipRecord.localPath else { return nil }
+        let clipURL = URL(fileURLWithPath: localClipPath)
+        guard let imageData = thumbnailJPEGData(from: clipURL) else { return nil }
+        return try? await generatedFilesStore.writeThumbnailData(
+            imageData,
+            projectId: projectId,
+            clipName: clipName,
+            shotId: shot.id,
+            orderIndex: shot.orderIndex
+        )
+    }
+
+    private func ensureExportThumbnail(projectId: String, job: Job, localOutputRecord: LocalFileRecord) async -> URL? {
+        guard let localOutputPath = localOutputRecord.localPath else { return nil }
+        let clipURL = URL(fileURLWithPath: localOutputPath)
+        guard let imageData = thumbnailJPEGData(from: clipURL) else { return nil }
+        return try? await generatedFilesStore.writeThumbnailData(
+            imageData,
+            projectId: projectId,
+            clipName: "export-\(job.id)",
+            shotId: job.id,
+            orderIndex: nil
+        )
+    }
+
+    private func clipDisplayName(for shot: Shot) -> String {
+        let trimmedPrompt = shot.prompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmedPrompt.isEmpty {
+            return trimmedPrompt
+        }
+        return "shot-\(shot.orderIndex ?? 0)"
+    }
+
+    private func thumbnailJPEGData(from videoURL: URL) -> Data? {
+#if canImport(AVFoundation)
+        let asset = AVURLAsset(url: videoURL)
+        let generator = AVAssetImageGenerator(asset: asset)
+        generator.appliesPreferredTrackTransform = true
+        generator.maximumSize = CGSize(width: 1280, height: 720)
+        let frameTime = CMTime(seconds: 0.2, preferredTimescale: 600)
+        guard let cgImage = try? generator.copyCGImage(at: frameTime, actualTime: nil) else {
+            return nil
+        }
+#if canImport(AppKit) && !targetEnvironment(macCatalyst)
+        let image = NSImage(cgImage: cgImage, size: .zero)
+        guard let tiff = image.tiffRepresentation,
+              let rep = NSBitmapImageRep(data: tiff) else {
+            return nil
+        }
+        return rep.representation(using: .jpeg, properties: [.compressionFactor: 0.82])
+#elseif canImport(UIKit)
+        let image = UIImage(cgImage: cgImage)
+        return image.jpegData(compressionQuality: 0.82)
+#else
+        return nil
+#endif
+#else
+        return nil
+#endif
     }
 
     private func loadSelectedProjectDetails(showLoadingIndicator: Bool = false) async {
@@ -2002,6 +2118,53 @@ struct ProjectWorkspaceScreen: View {
         }
     }
 
+    private func restartQueuedShot(shotId: String) async {
+        guard let selectedProjectId else { return }
+        model.errorMessage = nil
+        await loadSelectedProjectDetails(showLoadingIndicator: false)
+        guard let currentShot = shots.first(where: { $0.id == shotId }) else {
+            model.errorMessage = "Shot no longer exists. Refresh and try again."
+            return
+        }
+        guard currentShot.status == "queued" else {
+            model.errorMessage = "Queued restart is only available for queued shots (current: \(currentShot.status))."
+            return
+        }
+        let queuedJobs = jobs.filter { $0.shotId == shotId && $0.status == "queued" }
+        guard !queuedJobs.isEmpty else {
+            model.errorMessage = "No queued job found for this shot. Refresh and try Generate again."
+            return
+        }
+        do {
+            for job in queuedJobs {
+                try await api.deleteJob(
+                    token: model.bearerToken,
+                    projectId: selectedProjectId,
+                    jobId: job.id
+                )
+                jobs.removeAll { $0.id == job.id }
+                jobRequestStateById.removeValue(forKey: job.id)
+            }
+            appendDebugEvent("restart queued shot deleted \(queuedJobs.count) queued job(s) shot=\(shotId)")
+            await generateShot(shotId: shotId)
+        } catch {
+            model.errorMessage = error.localizedDescription
+        }
+    }
+
+    private func retryOrRestartShot(shotId: String) async {
+        await loadSelectedProjectDetails(showLoadingIndicator: false)
+        guard let currentShot = shots.first(where: { $0.id == shotId }) else {
+            model.errorMessage = "Shot no longer exists. Refresh and try again."
+            return
+        }
+        if currentShot.status == "queued" {
+            await restartQueuedShot(shotId: shotId)
+            return
+        }
+        await retryShot(shotId: shotId)
+    }
+
     private func deleteShotFromProject(shotId: String) async {
         guard let selectedProjectId else { return }
         model.errorMessage = nil
@@ -2052,6 +2215,54 @@ struct ProjectWorkspaceScreen: View {
             )
             quotedShotCost = generation.quote
             await loadSelectedProjectDetails(showLoadingIndicator: false)
+        } catch {
+            model.errorMessage = error.localizedDescription
+        }
+    }
+
+    private func retryOrRestartJob(jobId: String) async {
+        guard let selectedProjectId else { return }
+        model.errorMessage = nil
+        await loadSelectedProjectDetails(showLoadingIndicator: false)
+        guard let job = jobs.first(where: { $0.id == jobId }) else {
+            model.errorMessage = "Job no longer exists. Refresh and try again."
+            return
+        }
+        guard job.status == "queued" || job.status == "failed" else {
+            model.errorMessage = "Retry is available for failed or queued jobs (current: \(job.status))."
+            return
+        }
+        if job.status == "failed" {
+            await retryJob(jobId: jobId)
+            return
+        }
+        do {
+            try await api.deleteJob(
+                token: model.bearerToken,
+                projectId: selectedProjectId,
+                jobId: job.id
+            )
+            jobs.removeAll { $0.id == job.id }
+            jobRequestStateById.removeValue(forKey: job.id)
+            appendDebugEvent("restart queued job deleted job=\(job.id) kind=\(job.kind)")
+            if let shotId = job.shotId {
+                await generateShot(shotId: shotId)
+            } else {
+                let recreated = try await api.createJob(
+                    token: model.bearerToken,
+                    projectId: selectedProjectId,
+                    kind: job.kind
+                )
+                upsertJobRequestState(recreated.id) { state in
+                    state.stage = .responseReceived
+                    state.requestSentAt = state.requestSentAt ?? Date()
+                    state.responseReceivedAt = Date()
+                    state.lastMeaningfulTransitionAt = state.responseReceivedAt
+                    state.lastKnownStatus = recreated.status
+                    state.source = "api-response"
+                }
+                await loadSelectedProjectDetails(showLoadingIndicator: false)
+            }
         } catch {
             model.errorMessage = error.localizedDescription
         }
@@ -2376,6 +2587,8 @@ struct ProjectDetailScreen: View {
     let audioTracks: [AudioTrack]
     let jobs: [Job]
     let localFileRecordsByRemoteURL: [String: LocalFileRecord]
+    let localThumbnailURLByShotId: [String: URL]
+    let localThumbnailURLByJobId: [String: URL]
     let debugEventLog: [String]
     let shotRequestStateById: [String: RenderRequestState]
     let jobRequestStateById: [String: RenderRequestState]
@@ -2447,6 +2660,7 @@ struct ProjectDetailScreen: View {
     @State private var trackSyncModes: [Int: AudioTrackSyncMode] = [:]
     @State private var isRenamingProjectTitle = false
     @State private var projectTitleDraft = ""
+    @State private var previewPlaybackRequestToken = 0
 
     private var isRenderWorkspace: Bool {
         (EditorWorkspacePreset(rawValue: workspacePresetRaw) ?? .editing) == .render
@@ -2486,7 +2700,12 @@ struct ProjectDetailScreen: View {
                         HorizontalTimelineTrack(
                             shots: sortedShots,
                             jobs: jobs,
+                            localThumbnailURLByShotId: localThumbnailURLByShotId,
                             selectedShotId: $selectedTimelineShotId,
+                            onPreviewShot: { shotId in
+                                selectedTimelineShotId = shotId
+                                previewPlaybackRequestToken += 1
+                            },
                             onMoveShot: onReorderShots,
                             showTooltips: showTooltips,
                             themePalette: timelineThemeMode.palette,
@@ -2574,6 +2793,7 @@ struct ProjectDetailScreen: View {
                                     EditorPreviewPanel(
                                         shots: sortedShots,
                                         selectedShotId: $selectedTimelineShotId,
+                                        playbackRequestToken: previewPlaybackRequestToken,
                                         showTooltips: showTooltips,
                                         isCollapsed: $collapsePreviewPanel
                                     )
@@ -2717,6 +2937,7 @@ struct ProjectDetailScreen: View {
                     shots: shots,
                     jobs: jobs,
                     localFileRecordsByRemoteURL: localFileRecordsByRemoteURL,
+                    localThumbnailURLByShotId: localThumbnailURLByShotId,
                     shotRequestStateById: shotRequestStateById,
                     characterOptions: characters,
                     shotPromptDraft: $shotPromptDraft,
@@ -2928,6 +3149,8 @@ struct ProjectDetailScreen: View {
         JobsPanel(
             jobs: jobs,
             localFileRecordsByRemoteURL: localFileRecordsByRemoteURL,
+            localThumbnailURLByShotId: localThumbnailURLByShotId,
+            localThumbnailURLByJobId: localThumbnailURLByJobId,
             jobRequestStateById: jobRequestStateById,
             jobKindDraft: $jobKindDraft,
             onCreateJob: onCreateJob,
@@ -3154,7 +3377,9 @@ enum APIServerMode: String, CaseIterable, Identifiable {
 struct HorizontalTimelineTrack: View {
     let shots: [Shot]
     let jobs: [Job]
+    let localThumbnailURLByShotId: [String: URL]
     @Binding var selectedShotId: String?
+    let onPreviewShot: (String) -> Void
     let onMoveShot: (IndexSet, Int) -> Void
     let showTooltips: Bool
     let themePalette: CinefuseTokens.ThemePalette
@@ -3193,6 +3418,7 @@ struct HorizontalTimelineTrack: View {
                             ForEach(Array(visibleShots.enumerated()), id: \.element.id) { index, shot in
                                 TimelineClipCard(
                                     shot: shot,
+                                    localThumbnailURL: localThumbnailURLByShotId[shot.id],
                                     index: index,
                                     progressPct: renderProgress(for: shot),
                                     trimRange: trimByShotId[shot.id],
@@ -3200,6 +3426,7 @@ struct HorizontalTimelineTrack: View {
                                     canMoveLeft: index > 0,
                                     canMoveRight: index < (visibleShots.count - 1),
                                     onSelect: { selectedShotId = shot.id },
+                                    onPreview: { onPreviewShot(shot.id) },
                                     onMoveLeft: {
                                         commitMove(from: index, to: index - 1)
                                         selectedShotId = shot.id
@@ -3448,6 +3675,7 @@ struct HorizontalTimelineTrack: View {
 
 struct TimelineClipCard: View {
     let shot: Shot
+    let localThumbnailURL: URL?
     let index: Int
     let progressPct: Int?
     let trimRange: ClosedRange<Double>?
@@ -3455,6 +3683,7 @@ struct TimelineClipCard: View {
     let canMoveLeft: Bool
     let canMoveRight: Bool
     let onSelect: () -> Void
+    let onPreview: () -> Void
     let onMoveLeft: () -> Void
     let onMoveRight: () -> Void
     let onDuplicate: () -> Void
@@ -3466,13 +3695,45 @@ struct TimelineClipCard: View {
     let isDragging: Bool
     let onDragStarted: () -> Void
 
+    private var previewFrameURL: URL? {
+        if let localThumbnailURL {
+            return localThumbnailURL
+        }
+        if let thumbnail = shot.thumbnailUrl, let url = URL(string: thumbnail) {
+            return url
+        }
+        if let clip = shot.clipUrl, let url = URL(string: clip) {
+            return url
+        }
+        return nil
+    }
+
+    private var cardFillColor: Color {
+        isSelected ? CinefuseTokens.ColorRole.surfacePrimary : CinefuseTokens.ColorRole.surfaceSecondary
+    }
+
+    private var statusPresentation: ArtifactStatusPresentation {
+        let normalized = shot.status.lowercased()
+        switch normalized {
+        case "ready", "done":
+            return ArtifactStatusPresentation(level: .success, summary: "Ready", details: "Timeline clip is ready.")
+        case "failed", "timedout", "timed_out":
+            return ArtifactStatusPresentation(level: .error, summary: "Failed", details: "Timeline clip failed or timed out.")
+        default:
+            return ArtifactStatusPresentation(level: .warning, summary: "In progress", details: "Timeline clip is in progress.")
+        }
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: CinefuseTokens.Spacing.xxs) {
             HStack {
+                GenerationStatusDot(status: statusPresentation)
                 Text("#\(index + 1)")
                     .font(CinefuseTokens.Typography.caption.weight(.semibold))
                 Spacer()
-                StatusBadge(status: shot.status)
+                if shot.status.lowercased() != "ready" {
+                    StatusBadge(status: shot.status)
+                }
             }
             Text(shot.prompt.isEmpty ? "Untitled clip" : shot.prompt)
                 .font(CinefuseTokens.Typography.label)
@@ -3518,17 +3779,38 @@ struct TimelineClipCard: View {
             alignment: .topLeading
         )
         .background(
-            RoundedRectangle(cornerRadius: CinefuseTokens.Radius.medium)
-                .fill(CinefuseTokens.ColorRole.surfaceSecondary)
-                .overlay(
-                    RoundedRectangle(cornerRadius: CinefuseTokens.Radius.medium)
-                        .stroke(
-                            isSelected ? CinefuseTokens.ColorRole.accent : CinefuseTokens.ColorRole.borderSubtle,
-                            lineWidth: isSelected ? 2 : 1
-                        )
-                )
+            ZStack {
+                RoundedRectangle(cornerRadius: CinefuseTokens.Radius.medium)
+                    .fill(cardFillColor)
+                if let previewFrameURL {
+                    AsyncImage(url: previewFrameURL) { phase in
+                        switch phase {
+                        case .success(let image):
+                            image
+                                .resizable()
+                                .scaledToFill()
+                                .overlay(
+                                    LinearGradient(
+                                        colors: [.black.opacity(0.42), .black.opacity(0.68)],
+                                        startPoint: .top,
+                                        endPoint: .bottom
+                                    )
+                                )
+                        default:
+                            EmptyView()
+                        }
+                    }
+                    .clipShape(RoundedRectangle(cornerRadius: CinefuseTokens.Radius.medium))
+                }
+                RoundedRectangle(cornerRadius: CinefuseTokens.Radius.medium)
+                    .stroke(
+                        isSelected ? CinefuseTokens.ColorRole.accent : CinefuseTokens.ColorRole.borderSubtle,
+                        lineWidth: isSelected ? 2 : 1
+                    )
+            }
         )
         .opacity(isDragging ? 0.75 : 1)
+        .onTapGesture(count: 2, perform: onPreview)
         .onTapGesture(perform: onSelect)
         .onDrag {
             onDragStarted()
@@ -3599,9 +3881,12 @@ private struct TimelineClipDropDelegate: DropDelegate {
 struct EditorPreviewPanel: View {
     let shots: [Shot]
     @Binding var selectedShotId: String?
+    let playbackRequestToken: Int
     let showTooltips: Bool
     @Binding var isCollapsed: Bool
     @State private var queuePlayer = AVQueuePlayer()
+    @AppStorage("cinefuse.editor.preview.loopEnabled") private var loopPreviewEnabled = false
+    @State private var loopObserver: NSObjectProtocol?
 
     private var playableShots: [Shot] {
         shots.filter { $0.clipUrl != nil }
@@ -3652,6 +3937,12 @@ struct EditorPreviewPanel: View {
                             },
                             tooltipEnabled: showTooltips
                         )
+                        IconCommandButton(
+                            systemName: loopPreviewEnabled ? "repeat.1.circle.fill" : "repeat.circle",
+                            label: loopPreviewEnabled ? "Disable loop playback" : "Enable loop playback",
+                            action: { loopPreviewEnabled.toggle() },
+                            tooltipEnabled: showTooltips
+                        )
 
                         Spacer()
                         Text("Queue: \(playableShots.count) clips")
@@ -3665,6 +3956,16 @@ struct EditorPreviewPanel: View {
             if selectedShotId == nil {
                 selectedShotId = playableShots.first?.id
             }
+            configureLoopObserver()
+            playSelectedOnly()
+        }
+        .onDisappear {
+            removeLoopObserver()
+        }
+        .onChange(of: loopPreviewEnabled) { _, _ in
+            configureLoopObserver()
+        }
+        .onChange(of: playbackRequestToken) { _, _ in
             playSelectedOnly()
         }
         .onChange(of: shots.map { "\($0.id):\($0.clipUrl ?? "")" }.joined(separator: "|")) { _, _ in
@@ -3705,6 +4006,26 @@ struct EditorPreviewPanel: View {
         queuePlayer.removeAllItems()
         queuePlayer.insert(AVPlayerItem(url: url), after: nil)
         queuePlayer.play()
+    }
+
+    private func configureLoopObserver() {
+        removeLoopObserver()
+        guard loopPreviewEnabled else { return }
+        loopObserver = NotificationCenter.default.addObserver(
+            forName: .AVPlayerItemDidPlayToEndTime,
+            object: nil,
+            queue: .main
+        ) { _ in
+            queuePlayer.seek(to: .zero)
+            queuePlayer.play()
+        }
+    }
+
+    private func removeLoopObserver() {
+        if let loopObserver {
+            NotificationCenter.default.removeObserver(loopObserver)
+            self.loopObserver = nil
+        }
     }
 }
 
@@ -3882,7 +4203,9 @@ struct CharacterPanel: View {
                                     .lineLimit(2)
                                     .layoutPriority(1)
                                 Spacer(minLength: CinefuseTokens.Spacing.s)
-                                StatusBadge(status: character.status)
+                                if character.status.lowercased() != "ready" {
+                                    StatusBadge(status: character.status)
+                                }
                             }
                             VStack(alignment: .leading, spacing: CinefuseTokens.Spacing.xxs) {
                                 Text(character.description)
@@ -3925,6 +4248,7 @@ struct ShotsPanel: View {
     let shots: [Shot]
     let jobs: [Job]
     let localFileRecordsByRemoteURL: [String: LocalFileRecord]
+    let localThumbnailURLByShotId: [String: URL]
     let shotRequestStateById: [String: RenderRequestState]
     let characterOptions: [CharacterProfile]
     @Binding var shotPromptDraft: String
@@ -4114,19 +4438,11 @@ struct ShotsPanel: View {
                     )
                 } else {
                     ForEach(shots) { shot in
+                        let presentation = statusPresentation(for: shot)
+                        let backgroundThumbnailURL = localThumbnailURLByShotId[shot.id]
                         VStack(alignment: .leading, spacing: CinefuseTokens.Spacing.s) {
                             VStack(alignment: .leading, spacing: CinefuseTokens.Spacing.xxs) {
-                                Text(shot.prompt.isEmpty ? "Untitled shot" : shot.prompt)
-                                    .font(CinefuseTokens.Typography.body)
-                                    .lineLimit(2)
-                                    .layoutPriority(1)
-                                    .textSelection(.enabled)
-                                Text(shot.modelTier.capitalized)
-                                    .font(CinefuseTokens.Typography.caption)
-                                    .foregroundStyle(CinefuseTokens.ColorRole.textSecondary)
                                 HStack(spacing: CinefuseTokens.Spacing.xs) {
-                                    StatusBadge(status: shot.status)
-                                    let presentation = statusPresentation(for: shot)
                                     GenerationStatusDot(status: presentation)
                                         .tooltip(presentation.summary, enabled: showTooltips)
                                         .contextMenu {
@@ -4137,7 +4453,19 @@ struct ShotsPanel: View {
                                         .onTapGesture {
                                             selectedDiagnostics = presentation
                                         }
+                                    if shot.status.lowercased() != "ready" {
+                                        StatusBadge(status: shot.status)
+                                    }
+                                    Spacer()
                                 }
+                                Text(shot.prompt.isEmpty ? "Untitled shot" : shot.prompt)
+                                    .font(CinefuseTokens.Typography.body)
+                                    .lineLimit(2)
+                                    .layoutPriority(1)
+                                    .textSelection(.enabled)
+                                Text(shot.modelTier.capitalized)
+                                    .font(CinefuseTokens.Typography.caption)
+                                    .foregroundStyle(CinefuseTokens.ColorRole.textSecondary)
                                 if let lock = shot.characterLocks?.first, !lock.isEmpty {
                                     Text("Character lock")
                                         .font(CinefuseTokens.Typography.caption)
@@ -4194,8 +4522,8 @@ struct ShotsPanel: View {
                                     Image(systemName: "arrow.clockwise")
                                 }
                                 .buttonStyle(SecondaryActionButtonStyle())
-                                .tooltip("Retry failed shot", enabled: showTooltips)
-                                .disabled(shot.status != "failed")
+                                .tooltip("Retry failed or restart queued shot", enabled: showTooltips)
+                                .disabled(!(shot.status == "failed" || shot.status == "queued"))
 
                                 Button(role: .destructive) {
                                     pendingDeleteShotId = shot.id
@@ -4208,8 +4536,7 @@ struct ShotsPanel: View {
                         }
                         .padding(CinefuseTokens.Spacing.s)
                         .background(
-                            RoundedRectangle(cornerRadius: CinefuseTokens.Radius.medium)
-                                .fill(CinefuseTokens.ColorRole.surfaceSecondary)
+                            MediaCardBackground(imageURL: backgroundThumbnailURL)
                         )
                     }
                 }
@@ -4244,6 +4571,8 @@ struct ShotsPanel: View {
 struct JobsPanel: View {
     let jobs: [Job]
     let localFileRecordsByRemoteURL: [String: LocalFileRecord]
+    let localThumbnailURLByShotId: [String: URL]
+    let localThumbnailURLByJobId: [String: URL]
     let jobRequestStateById: [String: RenderRequestState]
     @Binding var jobKindDraft: String
     let onCreateJob: () -> Void
@@ -4251,8 +4580,20 @@ struct JobsPanel: View {
     let onDeleteJob: (String) -> Void
     let showTooltips: Bool
     @Binding var isCollapsed: Bool
+    @AppStorage("cinefuse.editor.jobs.showCompleted") private var showCompletedJobs = false
     @State private var pendingDeleteJobId: String?
     @State private var selectedDiagnostics: ArtifactStatusPresentation?
+
+    private let completedJobStatuses: Set<String> = ["done", "ready", "completed", "success"]
+
+    private var visibleJobs: [Job] {
+        if showCompletedJobs {
+            return jobs
+        }
+        return jobs.filter { job in
+            !completedJobStatuses.contains(job.status.lowercased())
+        }
+    }
 
     private func statusPresentation(for job: Job) -> ArtifactStatusPresentation {
         let localRecord = job.outputUrl.flatMap { localFileRecordsByRemoteURL[$0] }
@@ -4286,6 +4627,9 @@ struct JobsPanel: View {
                         }
                         .tooltip("Queue a manual job", enabled: showTooltips)
                         .buttonStyle(PrimaryActionButtonStyle())
+                        Toggle("Show completed", isOn: $showCompletedJobs)
+                            .toggleStyle(.switch)
+                            .tooltip("Display completed jobs in the list", enabled: showTooltips)
                     }
                     VStack(alignment: .leading, spacing: CinefuseTokens.Spacing.s) {
                         Picker("Job type", selection: $jobKindDraft) {
@@ -4303,13 +4647,18 @@ struct JobsPanel: View {
                         }
                         .tooltip("Queue a manual job", enabled: showTooltips)
                         .buttonStyle(PrimaryActionButtonStyle())
+                        Toggle("Show completed", isOn: $showCompletedJobs)
+                            .toggleStyle(.switch)
+                            .tooltip("Display completed jobs in the list", enabled: showTooltips)
                     }
                 }
 
-                if jobs.isEmpty {
+                if visibleJobs.isEmpty {
                     EmptyStateCard(
-                        title: "No jobs yet",
-                        message: "Jobs appear when you queue rendering, audio, stitch, or export tasks."
+                        title: showCompletedJobs ? "No jobs yet" : "No active jobs",
+                        message: showCompletedJobs
+                            ? "Jobs appear when you queue rendering, audio, stitch, or export tasks."
+                            : "Completed jobs are hidden. Enable Show completed to review history."
                     )
                 } else {
                     let gridColumns = [
@@ -4317,26 +4666,30 @@ struct JobsPanel: View {
                     ]
                     ScrollView {
                         LazyVGrid(columns: gridColumns, alignment: .leading, spacing: CinefuseTokens.Spacing.s) {
-                            ForEach(jobs) { job in
+                            ForEach(visibleJobs) { job in
                                 let presentation = statusPresentation(for: job)
+                                let backgroundThumbnailURL = localThumbnailURLByJobId[job.id]
+                                    ?? job.shotId.flatMap { localThumbnailURLByShotId[$0] }
                                 VStack(alignment: .leading, spacing: CinefuseTokens.Spacing.xs) {
                                     HStack(spacing: CinefuseTokens.Spacing.s) {
-                                        Text(job.kind.capitalized)
-                                            .font(CinefuseTokens.Typography.body)
-                                        StatusBadge(status: job.status)
-                                            .contextMenu {
-                                                Button("Copy Status") {
-                                                    copyTextToClipboard(job.status)
-                                                }
-                                                Button("Copy Diagnostics") {
-                                                    copyTextToClipboard(presentation.details)
-                                                }
-                                            }
                                         GenerationStatusDot(status: presentation)
                                             .tooltip(presentation.summary, enabled: showTooltips)
                                             .onTapGesture {
                                                 selectedDiagnostics = presentation
                                             }
+                                        Text(job.kind.capitalized)
+                                            .font(CinefuseTokens.Typography.body)
+                                        if job.status.lowercased() != "ready" {
+                                            StatusBadge(status: job.status)
+                                                .contextMenu {
+                                                    Button("Copy Status") {
+                                                        copyTextToClipboard(job.status)
+                                                    }
+                                                    Button("Copy Diagnostics") {
+                                                        copyTextToClipboard(presentation.details)
+                                                    }
+                                                }
+                                        }
                                         Spacer()
                                         Text("Cost to us: \(job.costToUsCents)c")
                                             .font(CinefuseTokens.Typography.caption)
@@ -4358,8 +4711,8 @@ struct JobsPanel: View {
                                             Image(systemName: "arrow.clockwise")
                                         }
                                         .buttonStyle(SecondaryActionButtonStyle())
-                                        .tooltip("Retry failed job", enabled: showTooltips)
-                                        .disabled(job.status != "failed")
+                                        .tooltip("Retry failed or restart queued job", enabled: showTooltips)
+                                        .disabled(!(job.status == "failed" || job.status == "queued"))
 
                                         Button(role: .destructive) {
                                             pendingDeleteJobId = job.id
@@ -4373,8 +4726,7 @@ struct JobsPanel: View {
                                 .frame(maxWidth: .infinity, alignment: .leading)
                                 .padding(CinefuseTokens.Spacing.s)
                                 .background(
-                                    RoundedRectangle(cornerRadius: CinefuseTokens.Radius.medium)
-                                        .fill(CinefuseTokens.ColorRole.surfaceSecondary)
+                                    MediaCardBackground(imageURL: backgroundThumbnailURL)
                                 )
                             }
                         }
@@ -4404,6 +4756,39 @@ struct JobsPanel: View {
         }
         .sheet(item: $selectedDiagnostics) { details in
             StatusDetailsSheet(details: details)
+        }
+    }
+}
+
+private struct MediaCardBackground: View {
+    let imageURL: URL?
+
+    var body: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: CinefuseTokens.Radius.medium)
+                .fill(CinefuseTokens.ColorRole.surfaceSecondary)
+            if let imageURL {
+                AsyncImage(url: imageURL) { phase in
+                    switch phase {
+                    case .success(let image):
+                        image
+                            .resizable()
+                            .scaledToFill()
+                            .overlay(
+                                LinearGradient(
+                                    colors: [.black.opacity(0.40), .black.opacity(0.72)],
+                                    startPoint: .top,
+                                    endPoint: .bottom
+                                )
+                            )
+                    default:
+                        EmptyView()
+                    }
+                }
+                .clipShape(RoundedRectangle(cornerRadius: CinefuseTokens.Radius.medium))
+            }
+            RoundedRectangle(cornerRadius: CinefuseTokens.Radius.medium)
+                .stroke(CinefuseTokens.ColorRole.borderSubtle, lineWidth: 1)
         }
     }
 }
@@ -4950,12 +5335,20 @@ struct TimelinePanel: View {
                     }
                     List {
                         ForEach(shots) { shot in
+                            let presentation = ArtifactStatusPresentation(
+                                level: shot.status == "ready" ? .success : (shot.status == "failed" ? .error : .warning),
+                                summary: shot.status.capitalized,
+                                details: "Timeline shot status: \(shot.status)"
+                            )
                             VStack(alignment: .leading, spacing: CinefuseTokens.Spacing.xs) {
                                 HStack {
+                                    GenerationStatusDot(status: presentation)
                                     Text(shot.prompt.isEmpty ? "Untitled shot" : shot.prompt)
                                         .font(CinefuseTokens.Typography.body)
                                     Spacer()
-                                    StatusBadge(status: shot.status)
+                                    if shot.status.lowercased() != "ready" {
+                                        StatusBadge(status: shot.status)
+                                    }
                                 }
                                 MediaPreviewRow(
                                     shot: shot,
@@ -4992,10 +5385,20 @@ struct MediaPreviewRow: View {
     let shot: Shot
     let onPreview: (URL) -> Void
 
+    private var previewURL: URL? {
+        if let thumb = shot.thumbnailUrl, let thumbURL = URL(string: thumb) {
+            return thumbURL
+        }
+        if let clip = shot.clipUrl, let clipURL = URL(string: clip) {
+            return clipURL
+        }
+        return nil
+    }
+
     var body: some View {
         HStack(spacing: CinefuseTokens.Spacing.s) {
-            if let thumb = shot.thumbnailUrl, let thumbURL = URL(string: thumb) {
-                AsyncImage(url: thumbURL) { phase in
+            if let previewURL {
+                AsyncImage(url: previewURL) { phase in
                     switch phase {
                     case .success(let image):
                         image.resizable().scaledToFill()
@@ -5090,7 +5493,9 @@ struct AudioLaneView: View {
                             Link("Play", destination: url)
                                 .font(CinefuseTokens.Typography.caption)
                         }
-                        StatusBadge(status: track.status)
+                        if track.status.lowercased() != "ready" {
+                            StatusBadge(status: track.status)
+                        }
                     }
                     .padding(CinefuseTokens.Spacing.xs)
                     .background(

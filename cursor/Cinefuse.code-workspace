@@ -1,0 +1,19 @@
+{
+	"folders": [
+		{
+			"path": ".."
+		},
+		{
+			"path": "../../PubfuseStreamingSDKIOS"
+		},
+		{
+			"path": "../../PubfuseStreamingSDKAndroid"
+		},
+		{
+			"path": "../../PubfuseRewrite/PubfuseRestApi"
+		}
+	],
+	"settings": {
+		"makefile.configureOnOpen": false
+	}
+}

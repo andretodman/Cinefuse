@@ -75,6 +75,40 @@ final class MacAppTests: XCTestCase {
         XCTAssertEqual(second.showTooltips, false)
         XCTAssertEqual(second.restoreLastOpenWorkspace, false)
     }
+
+    func testThumbnailFileNameIsDeterministicAndSanitized() async throws {
+        let store = GeneratedFilesStore()
+        let fileName = await store.thumbnailFileName(
+            clipName: "Wide / Opening: Shot",
+            shotId: "shot:01",
+            orderIndex: 3
+        )
+        XCTAssertEqual(fileName, "Wide---Opening--Shot-3-shot-01.jpg")
+    }
+
+    func testWriteThumbnailDataCreatesResolvableFile() async throws {
+        let store = GeneratedFilesStore()
+        let projectId = "thumb-test-\(UUID().uuidString)"
+        let shotId = "shot-\(UUID().uuidString)"
+        let payload = Data([0xFF, 0xD8, 0xFF, 0xD9]) // minimal JPEG markers
+
+        let writtenURL = try await store.writeThumbnailData(
+            payload,
+            projectId: projectId,
+            clipName: "Hero Clip",
+            shotId: shotId,
+            orderIndex: 1
+        )
+        XCTAssertTrue(FileManager.default.fileExists(atPath: writtenURL.path))
+
+        let resolved = try await store.existingThumbnailURL(
+            projectId: projectId,
+            clipName: "Hero Clip",
+            shotId: shotId,
+            orderIndex: 1
+        )
+        XCTAssertEqual(resolved?.path, writtenURL.path)
+    }
 }
 
 final class MacAppContractTests: XCTestCase {

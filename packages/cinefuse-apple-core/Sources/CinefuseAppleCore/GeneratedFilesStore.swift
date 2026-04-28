@@ -33,7 +33,7 @@ public struct LocalFileRecord: Codable, Identifiable {
     }
 }
 
-actor GeneratedFilesStore {
+public actor GeneratedFilesStore {
     private struct Manifest: Codable {
         var remoteToLocalRelativePath: [String: String]
     }
@@ -41,12 +41,12 @@ actor GeneratedFilesStore {
     private let fileManager: FileManager
     private let session: URLSession
 
-    init(fileManager: FileManager = .default, session: URLSession = .shared) {
+    public init(fileManager: FileManager = .default, session: URLSession = .shared) {
         self.fileManager = fileManager
         self.session = session
     }
 
-    func rootDirectoryURL() throws -> URL {
+    public func rootDirectoryURL() throws -> URL {
         guard let documentsURL = fileManager.urls(for: .documentDirectory, in: .userDomainMask).first else {
             throw NSError(domain: "GeneratedFilesStore", code: 1, userInfo: [
                 NSLocalizedDescriptionKey: "Documents directory unavailable."
@@ -59,7 +59,7 @@ actor GeneratedFilesStore {
         return root
     }
 
-    func syncFile(
+    public func syncFile(
         projectId: String,
         remoteURLString: String,
         preferredBaseName: String
@@ -150,6 +150,62 @@ actor GeneratedFilesStore {
         }
     }
 
+    public func thumbnailURL(
+        projectId: String,
+        clipName: String,
+        shotId: String,
+        orderIndex: Int?
+    ) throws -> URL {
+        let directory = try ensureThumbnailFolder(projectId: projectId)
+        let fileName = thumbnailFileName(
+            clipName: clipName,
+            shotId: shotId,
+            orderIndex: orderIndex
+        )
+        return directory.appendingPathComponent(fileName, isDirectory: false)
+    }
+
+    public func existingThumbnailURL(
+        projectId: String,
+        clipName: String,
+        shotId: String,
+        orderIndex: Int?
+    ) throws -> URL? {
+        let url = try thumbnailURL(
+            projectId: projectId,
+            clipName: clipName,
+            shotId: shotId,
+            orderIndex: orderIndex
+        )
+        return fileManager.fileExists(atPath: url.path) ? url : nil
+    }
+
+    @discardableResult
+    public func writeThumbnailData(
+        _ data: Data,
+        projectId: String,
+        clipName: String,
+        shotId: String,
+        orderIndex: Int?
+    ) throws -> URL {
+        let url = try thumbnailURL(
+            projectId: projectId,
+            clipName: clipName,
+            shotId: shotId,
+            orderIndex: orderIndex
+        )
+        try data.write(to: url, options: .atomic)
+        return url
+    }
+
+    public func thumbnailFileName(clipName: String, shotId: String, orderIndex: Int?) -> String {
+        let sanitizedClipName = sanitizeFileName(clipName)
+        let sanitizedShotId = sanitizeFileName(shotId)
+        let clipToken = sanitizedClipName == "generated-file" ? "shot" : sanitizedClipName
+        let orderToken = orderIndex.map(String.init) ?? "0"
+        return "\(clipToken)-\(orderToken)-\(sanitizedShotId).jpg"
+    }
+
     private func ensureProjectFolder(projectId: String) throws -> URL {
         let root = try rootDirectoryURL()
         let folder = root.appendingPathComponent(sanitizeFileName(projectId), isDirectory: true)
@@ -157,6 +213,15 @@ actor GeneratedFilesStore {
             try fileManager.createDirectory(at: folder, withIntermediateDirectories: true)
         }
         return folder
+    }
+
+    private func ensureThumbnailFolder(projectId: String) throws -> URL {
+        let projectFolder = try ensureProjectFolder(projectId: projectId)
+        let thumbnailsFolder = projectFolder.appendingPathComponent("thumbnails", isDirectory: true)
+        if !fileManager.fileExists(atPath: thumbnailsFolder.path) {
+            try fileManager.createDirectory(at: thumbnailsFolder, withIntermediateDirectories: true)
+        }
+        return thumbnailsFolder
     }
 
     private func inferredExtension(from remoteURL: URL) -> String {
