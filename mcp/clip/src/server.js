@@ -112,6 +112,12 @@ async function generateViaFal({ input, config, modelTier }) {
   if (!submitResponse.ok) {
     throw new Error(`fal submit failed (${submitResponse.status}): ${submitText}`);
   }
+  console.info("[clip] fal submit accepted", {
+    shotId: input?.shotId ?? null,
+    projectId: input?.projectId ?? null,
+    modelTier,
+    endpoint
+  });
 
   const submitClipUrl = extractClipUrl(submitBody);
   if (submitClipUrl) {
@@ -130,6 +136,13 @@ async function generateViaFal({ input, config, modelTier }) {
   if (typeof requestId !== "string" || requestId.length === 0) {
     throw new Error("fal submit response missing request id");
   }
+  console.info("[clip] fal request created", {
+    requestId,
+    shotId: input?.shotId ?? null,
+    projectId: input?.projectId ?? null,
+    modelTier,
+    endpoint
+  });
 
   const maxPollAttempts = Number(process.env.CINEFUSE_FAL_MAX_POLL_ATTEMPTS ?? 60);
   const pollDelayMs = Number(process.env.CINEFUSE_FAL_POLL_DELAY_MS ?? 2000);
@@ -150,6 +163,15 @@ async function generateViaFal({ input, config, modelTier }) {
 
     const rawStatus = statusBody?.status ?? statusBody?.state ?? "";
     const normalizedStatus = String(rawStatus).toLowerCase();
+    if (attempt === 1 || attempt % 5 === 0 || normalizedStatus === "completed") {
+      console.info("[clip] fal poll", {
+        requestId,
+        endpoint,
+        attempt,
+        maxPollAttempts,
+        status: normalizedStatus || "unknown"
+      });
+    }
     if (normalizedStatus === "failed" || normalizedStatus === "error" || normalizedStatus === "canceled") {
       throw new Error(`fal generation failed: ${statusBody?.error ?? statusBody?.message ?? "provider error"}`);
     }
@@ -184,6 +206,11 @@ async function generateViaFal({ input, config, modelTier }) {
     }
   }
 
+  console.error("[clip] fal poll timeout", {
+    requestId,
+    endpoint,
+    maxPollAttempts
+  });
   throw new Error(`fal generation timed out after ${maxPollAttempts} polls`);
 }
 

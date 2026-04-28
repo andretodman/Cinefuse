@@ -130,6 +130,7 @@ public struct Job: Codable, Identifiable {
     public let status: String
     public let progressPct: Int?
     public let costToUsCents: Int
+    public let updatedAt: String?
 }
 
 public struct ListJobsResponse: Codable {

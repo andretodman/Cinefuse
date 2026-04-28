@@ -117,11 +117,22 @@ export function createHttpServer() {
   }
 
   async function updateRenderJobProgress({ projectId, jobId, shotId, status = "running", progressPct }) {
-    await saveJob({
-      id: jobId,
-      status,
-      progressPct
-    });
+    try {
+      await saveJob({
+        id: jobId,
+        status,
+        progressPct
+      });
+    } catch (error) {
+      console.error("[render] progress save failed", {
+        projectId,
+        shotId,
+        jobId,
+        status,
+        progressPct,
+        message: error instanceof Error ? error.message : "unknown error"
+      });
+    }
     publishProjectEvent(projectId, {
       type: "job_status_changed",
       jobId,
@@ -132,6 +143,11 @@ export function createHttpServer() {
   }
 
   async function processRenderTask(task) {
+    console.info("[render] task started", {
+      projectId: task.projectId,
+      shotId: task.shotId,
+      jobId: task.jobId
+    });
     const currentShot = await getShot(task.shotId, task.projectId);
     if (!currentShot) {
       await saveJob({
@@ -178,6 +194,12 @@ export function createHttpServer() {
         return;
       }
       runningProgress = Math.min(90, runningProgress + 10);
+      console.info("[render] progress tick", {
+        projectId: task.projectId,
+        shotId: task.shotId,
+        jobId: task.jobId,
+        progressPct: runningProgress
+      });
       void updateRenderJobProgress({
         projectId: task.projectId,
         jobId: task.jobId,
@@ -188,6 +210,12 @@ export function createHttpServer() {
     }, 4000);
 
     try {
+      console.info("[render] invoking clip.generate_clip", {
+        projectId: task.projectId,
+        shotId: task.shotId,
+        jobId: task.jobId,
+        modelTier: currentShot.modelTier
+      });
       const generation = await mcpHost.invoke("clip", "generate_clip", {
         shotId: task.shotId,
         projectId: task.projectId,
@@ -196,6 +224,12 @@ export function createHttpServer() {
         userId: task.userId
       });
       clearInterval(progressTimer);
+      console.info("[render] clip.generate_clip completed", {
+        projectId: task.projectId,
+        shotId: task.shotId,
+        jobId: task.jobId,
+        clipUrl: generation.clipUrl ?? null
+      });
 
       await saveShot({
         ...currentShot,
@@ -225,8 +259,20 @@ export function createHttpServer() {
         shotId: task.shotId,
         status: "ready"
       });
+      console.info("[render] task completed", {
+        projectId: task.projectId,
+        shotId: task.shotId,
+        jobId: task.jobId
+      });
     } catch (error) {
       clearInterval(progressTimer);
+      const message = error instanceof Error ? error.message : "generation failed";
+      console.error("[render] task failed", {
+        projectId: task.projectId,
+        shotId: task.shotId,
+        jobId: task.jobId,
+        message
+      });
       await saveShot({
         ...currentShot,
         status: "failed"
@@ -234,7 +280,7 @@ export function createHttpServer() {
       await saveJob({
         id: task.jobId,
         outputPayload: {
-          error: error instanceof Error ? error.message : "generation failed"
+          error: message
         }
       });
       await updateRenderJobProgress({

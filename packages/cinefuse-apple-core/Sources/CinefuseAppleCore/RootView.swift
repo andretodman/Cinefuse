@@ -1404,7 +1404,8 @@ struct ProjectWorkspaceScreen: View {
                     kind: job.kind,
                     status: event.status ?? job.status,
                     progressPct: event.progressPct ?? job.progressPct,
-                    costToUsCents: job.costToUsCents
+                    costToUsCents: job.costToUsCents,
+                    updatedAt: event.timestamp
                 )
             } else if let shotId = event.shotId {
                 jobs.append(
@@ -1415,7 +1416,8 @@ struct ProjectWorkspaceScreen: View {
                         kind: "clip",
                         status: event.status ?? "queued",
                         progressPct: event.progressPct,
-                        costToUsCents: 0
+                        costToUsCents: 0,
+                        updatedAt: event.timestamp
                     )
                 )
             }
@@ -1437,13 +1439,25 @@ struct ProjectWorkspaceScreen: View {
         guard let selectedProjectId else { return }
         model.errorMessage = nil
         do {
-            _ = try await api.createShot(
+            let createdShot = try await api.createShot(
                 token: model.bearerToken,
                 projectId: selectedProjectId,
                 prompt: shotPromptDraft,
                 modelTier: shotModelTierDraft,
                 characterLocks: selectedCharacterLockId.isEmpty ? [] : [selectedCharacterLockId]
             )
+            if !shots.contains(where: { $0.id == createdShot.id }) {
+                var updatedShots = shots
+                updatedShots.append(createdShot)
+                shots = updatedShots.sorted { lhs, rhs in
+                    let left = lhs.orderIndex ?? Int.max
+                    let right = rhs.orderIndex ?? Int.max
+                    if left != right {
+                        return left < right
+                    }
+                    return lhs.id < rhs.id
+                }
+            }
             shotPromptDraft = ""
             quotedShotCost = nil
             await loadSelectedProjectDetails(showLoadingIndicator: false)
@@ -2751,7 +2765,7 @@ struct HorizontalTimelineTrack: View {
         .onAppear {
             syncDisplayedShots()
         }
-        .onChange(of: shots.map(\.id).joined(separator: "|")) { _, _ in
+        .onChange(of: shotContentSignature) { _, _ in
             syncDisplayedShots()
         }
     }
@@ -2762,6 +2776,21 @@ struct HorizontalTimelineTrack: View {
 
     private var visibleShots: [Shot] {
         displayedShots.filter { !hiddenShotIds.contains($0.id) }
+    }
+
+    private var shotContentSignature: String {
+        shots
+            .map { shot in
+                [
+                    shot.id,
+                    String(shot.orderIndex ?? -1),
+                    shot.status,
+                    shot.prompt,
+                    shot.clipUrl ?? ""
+                ]
+                .joined(separator: "::")
+            }
+            .joined(separator: "|")
     }
 
     private func syncDisplayedShots() {
@@ -2888,6 +2917,7 @@ struct HorizontalTimelineTrack: View {
             return nil
         }
     }
+
 }
 
 struct TimelineClipCard: View {
@@ -3384,6 +3414,11 @@ struct ShotsPanel: View {
     @Environment(\.openURL) private var openURL
 
     private let inFlightStatuses: Set<String> = ["queued", "generating", "running", "processing"]
+    private let diagnosticsTimestampFormatter: RelativeDateTimeFormatter = {
+        let formatter = RelativeDateTimeFormatter()
+        formatter.unitsStyle = .short
+        return formatter
+    }()
 
     private func renderProgress(for shot: Shot) -> Int? {
         let candidates = jobs.filter { $0.shotId == shot.id }.compactMap(\.progressPct)
@@ -3402,6 +3437,34 @@ struct ShotsPanel: View {
         default:
             return nil
         }
+    }
+
+    private func latestJob(for shotId: String) -> Job? {
+        jobs
+            .filter { $0.shotId == shotId }
+            .max { lhs, rhs in
+                parseTimestamp(lhs.updatedAt) < parseTimestamp(rhs.updatedAt)
+            }
+    }
+
+    private func parseTimestamp(_ value: String?) -> Date {
+        guard let value else { return .distantPast }
+        return ISO8601DateFormatter().date(from: value) ?? .distantPast
+    }
+
+    private func diagnosticsLine(for shot: Shot) -> String? {
+        guard let job = latestJob(for: shot.id) else { return nil }
+        let progressText = (job.progressPct ?? renderProgress(for: shot)).map { "\($0)%" } ?? "n/a"
+        let statusText = job.status.capitalized
+        let updatedAt = parseTimestamp(job.updatedAt)
+        let age = Date().timeIntervalSince(updatedAt)
+        let updatedText = updatedAt == .distantPast
+            ? "update unknown"
+            : "updated \(diagnosticsTimestampFormatter.localizedString(for: updatedAt, relativeTo: Date()))"
+        if inFlightStatuses.contains(job.status), age > 20 {
+            return "Render diagnostics: \(statusText) \(progressText) - no update in \(Int(age))s"
+        }
+        return "Render diagnostics: \(statusText) \(progressText) - \(updatedText)"
     }
 
     var body: some View {
@@ -3542,6 +3605,11 @@ struct ShotsPanel: View {
                                         .font(CinefuseTokens.Typography.caption)
                                         .foregroundStyle(CinefuseTokens.ColorRole.textSecondary)
                                 }
+                            }
+                            if let diagnostics = diagnosticsLine(for: shot) {
+                                Text(diagnostics)
+                                    .font(CinefuseTokens.Typography.micro)
+                                    .foregroundStyle(CinefuseTokens.ColorRole.textSecondary)
                             }
                             if let clipUrl = shot.clipUrl, let url = URL(string: clipUrl) {
                                 Button {
