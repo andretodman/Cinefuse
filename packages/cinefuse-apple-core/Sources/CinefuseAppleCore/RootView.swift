@@ -3995,6 +3995,12 @@ struct ShotsPanel: View {
         let updatedText = updatedAt == .distantPast
             ? "update unknown"
             : "updated \(diagnosticsTimestampFormatter.localizedString(for: updatedAt, relativeTo: Date()))"
+        let providerNotStarted = (job.requestId == nil || job.requestId == "n/a")
+            && (job.falEndpoint == nil || job.falEndpoint == "n/a")
+            && (job.falStatusUrl == nil || job.falStatusUrl == "n/a")
+        if job.status == "queued", age > 30, providerNotStarted {
+            return "Render diagnostics: Queued too long (>30s) - worker backlog/offline likely. Check render-worker logs."
+        }
         if inFlightStatuses.contains(job.status), age > 20 {
             return "Render diagnostics: \(statusText) \(progressText) - no update in \(Int(age))s"
         }
@@ -4711,10 +4717,23 @@ private func shotArtifactStatusPresentation(
         "Provider status URL: \(job?.falStatusUrl ?? "n/a")",
         "Provider status code: \(job?.providerStatusCode.map(String.init) ?? "n/a")"
     ] + requestLines
+    let providerNotStarted = (job?.requestId == nil || job?.requestId == "n/a")
+        && (job?.falEndpoint == nil || job?.falEndpoint == "n/a")
+        && (job?.falStatusUrl == nil || job?.falStatusUrl == "n/a")
+    let queuedTooLongLikely = shot.status == "queued" && providerNotStarted
     let summary = requestState?.stage == .responseReceived
         ? "Shot API call accepted; waiting for worker"
+        : queuedTooLongLikely
+        ? "Queued: worker backlog/offline likely"
         : "Shot generation still in progress"
-    return ArtifactStatusPresentation(level: .warning, summary: summary, details: details.joined(separator: "\n"))
+    let queuedGuidance = queuedTooLongLikely
+        ? ["Provider call has not started yet; render-worker may be delayed or offline."]
+        : []
+    return ArtifactStatusPresentation(
+        level: .warning,
+        summary: summary,
+        details: (details + queuedGuidance).joined(separator: "\n")
+    )
 }
 
 struct GenerationStatusDot: View {
