@@ -29,6 +29,11 @@ function json(response, status, payload) {
   response.end(JSON.stringify(payload));
 }
 
+function html(response, status, payload) {
+  response.writeHead(status, { "content-type": "text/html; charset=utf-8" });
+  response.end(payload);
+}
+
 async function readBody(request) {
   let body = "";
   for await (const chunk of request) {
@@ -91,6 +96,188 @@ function applyLegacySparksAliasHeaders(response, pathName) {
   }
   response.setHeader("x-cinefuse-deprecated-route", "/v1/sparks/balance");
   response.setHeader("x-cinefuse-canonical-route", "/api/v1/cinefuse/sparks/balance");
+}
+
+function renderLandingPage() {
+  return `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Cinefuse</title>
+    <style>
+      :root {
+        color-scheme: dark;
+      }
+      body {
+        margin: 0;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, sans-serif;
+        background: #0b0f16;
+        color: #e8eef7;
+      }
+      .wrap {
+        max-width: 980px;
+        margin: 0 auto;
+        padding: 48px 20px 64px;
+      }
+      .badge {
+        display: inline-block;
+        border: 1px solid #2d3b52;
+        border-radius: 999px;
+        padding: 6px 12px;
+        color: #a6bbde;
+        font-size: 13px;
+      }
+      h1 {
+        margin: 16px 0 8px;
+        font-size: clamp(34px, 6vw, 56px);
+        line-height: 1.05;
+      }
+      .sub {
+        color: #b8c7de;
+        font-size: 18px;
+        max-width: 760px;
+      }
+      .row {
+        margin-top: 24px;
+        display: flex;
+        gap: 12px;
+        flex-wrap: wrap;
+      }
+      a.button {
+        text-decoration: none;
+        font-weight: 600;
+        border-radius: 10px;
+        padding: 11px 16px;
+      }
+      a.primary {
+        background: #2f7cff;
+        color: white;
+      }
+      a.secondary {
+        border: 1px solid #2d3b52;
+        color: #cfe0ff;
+      }
+      .grid {
+        margin-top: 36px;
+        display: grid;
+        gap: 14px;
+        grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      }
+      .card {
+        border: 1px solid #253248;
+        border-radius: 14px;
+        padding: 16px;
+        background: #111827;
+      }
+      .card h3 {
+        margin: 0 0 8px;
+        font-size: 16px;
+      }
+      .card p {
+        margin: 0;
+        color: #aebfd9;
+        font-size: 14px;
+      }
+      footer {
+        margin-top: 40px;
+        color: #8ea2c1;
+        font-size: 13px;
+      }
+    </style>
+  </head>
+  <body>
+    <main class="wrap">
+      <span class="badge">Cinefuse by Pubfuse</span>
+      <h1>Generate, edit, and export cinematic clips.</h1>
+      <p class="sub">
+        Cinefuse is an AI video editor for creators. Draft shots, generate clips, assemble timelines, and export finished cuts from one workspace.
+      </p>
+      <div class="row">
+        <a class="button primary" href="/docs">Read Docs</a>
+        <a class="button secondary" href="/api/v1/cinefuse/health">API Health</a>
+      </div>
+      <section class="grid" aria-label="Product sections">
+        <article class="card">
+          <h3>About</h3>
+          <p>Built for rapid story iteration with prompt-to-clip workflows and timeline-aware assembly.</p>
+        </article>
+        <article class="card">
+          <h3>Product</h3>
+          <p>Shots, jobs, audio lanes, and export operations coordinated through Cinefuse MCP servers.</p>
+        </article>
+        <article class="card">
+          <h3>Developer Docs</h3>
+          <p>Setup, API contract, architecture docs, and milestone plans for local and cloud environments.</p>
+        </article>
+      </section>
+      <footer>
+        Looking for machine-readable APIs? Use the <code>/api/v1/cinefuse/*</code> routes with authorization.
+      </footer>
+    </main>
+  </body>
+</html>`;
+}
+
+function renderDocsPage() {
+  return `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Cinefuse Docs</title>
+    <style>
+      body {
+        margin: 0;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, sans-serif;
+        background: #0b0f16;
+        color: #e8eef7;
+      }
+      .wrap {
+        max-width: 900px;
+        margin: 0 auto;
+        padding: 42px 20px 64px;
+      }
+      h1 { margin-top: 0; font-size: 36px; }
+      p { color: #b7c7dd; }
+      ul {
+        margin: 18px 0 0;
+        padding: 0;
+        list-style: none;
+        display: grid;
+        gap: 10px;
+      }
+      a {
+        display: block;
+        text-decoration: none;
+        color: #cfe0ff;
+        border: 1px solid #2b3a52;
+        border-radius: 10px;
+        padding: 12px 14px;
+        background: #111827;
+      }
+      a:hover { border-color: #3f5680; }
+      .back {
+        margin-top: 18px;
+        display: inline-block;
+        color: #9eb3d7;
+      }
+    </style>
+  </head>
+  <body>
+    <main class="wrap">
+      <h1>Cinefuse Docs</h1>
+      <p>Documentation index for Cinefuse architecture, API contracts, and implementation milestones.</p>
+      <ul>
+        <li><a href="/api/v1/cinefuse/health">API Health Endpoint</a></li>
+        <li><a href="https://github.com/atodman/Cinefuse/blob/main/PLAN.md">PLAN.md</a></li>
+        <li><a href="https://github.com/atodman/Cinefuse/blob/main/MILESTONES.md">MILESTONES.md</a></li>
+        <li><a href="https://github.com/atodman/Cinefuse/blob/main/docs/CINEFUSE-API-CONTRACT.md">CINEFUSE-API-CONTRACT.md</a></li>
+      </ul>
+      <a class="back" href="/">← Back to Cinefuse home</a>
+    </main>
+  </body>
+</html>`;
 }
 
 export function createHttpServer() {
@@ -485,6 +672,14 @@ export function createHttpServer() {
 
       if (method === "GET" && url.pathname === "/api/v1/cinefuse/health") {
         return json(response, 200, { ok: true, service: "api-gateway", domain: "cinefuse" });
+      }
+
+      if (method === "GET" && (url.pathname === "/" || url.pathname === "/index.html")) {
+        return html(response, 200, renderLandingPage());
+      }
+
+      if (method === "GET" && (url.pathname === "/docs" || url.pathname === "/docs/")) {
+        return html(response, 200, renderDocsPage());
       }
 
     const auth = parseBearerAuth(request.headers.authorization);
