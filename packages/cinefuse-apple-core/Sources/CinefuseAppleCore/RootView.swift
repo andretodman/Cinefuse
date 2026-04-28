@@ -1687,6 +1687,10 @@ struct ProjectWorkspaceScreen: View {
                     requestId: job.requestId,
                     idempotencyKey: job.idempotencyKey,
                     invokeState: job.invokeState,
+                    falEndpoint: job.falEndpoint,
+                    falStatusUrl: job.falStatusUrl,
+                    providerStatusCode: job.providerStatusCode,
+                    providerResponseSnippet: job.providerResponseSnippet,
                     updatedAt: event.timestamp
                 )
             } else if let shotId = event.shotId {
@@ -1706,6 +1710,10 @@ struct ProjectWorkspaceScreen: View {
                         requestId: nil,
                         idempotencyKey: nil,
                         invokeState: nil,
+                        falEndpoint: nil,
+                        falStatusUrl: nil,
+                        providerStatusCode: nil,
+                        providerResponseSnippet: nil,
                         updatedAt: event.timestamp
                     )
                 )
@@ -1885,15 +1893,26 @@ struct ProjectWorkspaceScreen: View {
             appendDebugEvent("generate shot queued shot=\(shotId) job=\(generation.job.id)")
             await loadSelectedProjectDetails(showLoadingIndicator: false)
         } catch {
+            let nsError = error as NSError
+            let isAlreadyGenerating = nsError.domain == "CinefuseAPI"
+                && nsError.code == 409
+                && nsError.localizedDescription.localizedCaseInsensitiveContains("already in progress")
             upsertShotRequestState(shotId) { state in
-                state.stage = .failed
+                state.stage = isAlreadyGenerating ? .waiting : .failed
                 state.responseReceivedAt = Date()
                 state.lastMeaningfulTransitionAt = state.responseReceivedAt
-                state.errorMessage = error.localizedDescription
+                state.errorMessage = isAlreadyGenerating
+                    ? "Shot generation is already in progress. Wait for the current run to finish before retrying."
+                    : error.localizedDescription
                 state.source = "api-response"
             }
-            appendDebugEvent("generate shot failed shot=\(shotId) reason=\(error.localizedDescription)")
-            model.errorMessage = error.localizedDescription
+            if isAlreadyGenerating {
+                appendDebugEvent("generate shot conflict shot=\(shotId) reason=already in progress")
+                model.errorMessage = nil
+            } else {
+                appendDebugEvent("generate shot failed shot=\(shotId) reason=\(error.localizedDescription)")
+                model.errorMessage = error.localizedDescription
+            }
         }
     }
 
@@ -1932,14 +1951,20 @@ struct ProjectWorkspaceScreen: View {
             }
             await loadSelectedProjectDetails(showLoadingIndicator: false)
         } catch {
+            let nsError = error as NSError
+            let isAlreadyGenerating = nsError.domain == "CinefuseAPI"
+                && nsError.code == 409
+                && nsError.localizedDescription.localizedCaseInsensitiveContains("already in progress")
             upsertShotRequestState(shotId) { state in
-                state.stage = .failed
+                state.stage = isAlreadyGenerating ? .waiting : .failed
                 state.responseReceivedAt = Date()
                 state.lastMeaningfulTransitionAt = state.responseReceivedAt
-                state.errorMessage = error.localizedDescription
+                state.errorMessage = isAlreadyGenerating
+                    ? "Shot generation is already in progress. Wait for the current run to finish before retrying."
+                    : error.localizedDescription
                 state.source = "api-response"
             }
-            model.errorMessage = error.localizedDescription
+            model.errorMessage = isAlreadyGenerating ? nil : error.localizedDescription
         }
     }
 
@@ -4455,7 +4480,11 @@ private func artifactStatusPresentation(
         "Job ID: \(job.id)",
         "Request ID: \(job.requestId ?? "n/a")",
         "Idempotency key: \(job.idempotencyKey ?? "n/a")",
-        "Invoke state: \(job.invokeState ?? "n/a")"
+        "Invoke state: \(job.invokeState ?? "n/a")",
+        "Provider endpoint: \(job.falEndpoint ?? "n/a")",
+        "Provider status URL: \(job.falStatusUrl ?? "n/a")",
+        "Provider status code: \(job.providerStatusCode.map(String.init) ?? "n/a")",
+        "Provider response: \(job.providerResponseSnippet ?? "n/a")"
     ]
     if requestState?.stage == .timedOut || requestState?.stage == .failed {
         let details = [
@@ -4522,6 +4551,14 @@ private func artifactStatusPresentation(
         waitingSummary = "Generation or local file sync is still in progress"
     }
     let waitingDetailText = waitingDetails.joined(separator: "\n")
+    if let error = requestState?.errorMessage,
+       error.localizedCaseInsensitiveContains("already in progress") {
+        return ArtifactStatusPresentation(
+            level: .warning,
+            summary: "Shot already generating; wait for current render",
+            details: waitingDetailText
+        )
+    }
     return ArtifactStatusPresentation(
         level: .warning,
         summary: waitingSummary,
@@ -4544,6 +4581,9 @@ private func shotArtifactStatusPresentation(
             "Model tier: \(shot.modelTier)",
             "Request ID: \(job?.requestId ?? "n/a")",
             "Idempotency key: \(job?.idempotencyKey ?? "n/a")",
+            "Provider endpoint: \(job?.falEndpoint ?? "n/a")",
+            "Provider status URL: \(job?.falStatusUrl ?? "n/a")",
+            "Provider status code: \(job?.providerStatusCode.map(String.init) ?? "n/a")",
             "Error: \(requestState?.errorMessage ?? job?.errorMessage ?? localRecord?.errorMessage ?? "request timed out or failed")"
         ] + requestLines
         return ArtifactStatusPresentation(
@@ -4560,6 +4600,9 @@ private func shotArtifactStatusPresentation(
             "Model tier: \(shot.modelTier)",
             "Request ID: \(job?.requestId ?? "n/a")",
             "Idempotency key: \(job?.idempotencyKey ?? "n/a")",
+            "Provider endpoint: \(job?.falEndpoint ?? "n/a")",
+            "Provider status URL: \(job?.falStatusUrl ?? "n/a")",
+            "Provider status code: \(job?.providerStatusCode.map(String.init) ?? "n/a")",
             "Error: \(job?.errorMessage ?? localRecord?.errorMessage ?? "unknown")"
         ] + requestLines
         return ArtifactStatusPresentation(level: .error, summary: "Shot generation failed", details: details.joined(separator: "\n"))
@@ -4575,7 +4618,10 @@ private func shotArtifactStatusPresentation(
             "Local file: \(localRecord?.localPath ?? "n/a")",
             "Model: \(job?.modelId ?? "unknown")",
             "Request ID: \(job?.requestId ?? "n/a")",
-            "Idempotency key: \(job?.idempotencyKey ?? "n/a")"
+            "Idempotency key: \(job?.idempotencyKey ?? "n/a")",
+            "Provider endpoint: \(job?.falEndpoint ?? "n/a")",
+            "Provider status URL: \(job?.falStatusUrl ?? "n/a")",
+            "Provider status code: \(job?.providerStatusCode.map(String.init) ?? "n/a")"
         ] + requestLines
         return ArtifactStatusPresentation(level: .success, summary: "Shot file is available locally", details: details.joined(separator: "\n"))
     }
@@ -4589,6 +4635,9 @@ private func shotArtifactStatusPresentation(
             "Local file: unavailable",
             "Request ID: \(job?.requestId ?? "n/a")",
             "Idempotency key: \(job?.idempotencyKey ?? "n/a")",
+            "Provider endpoint: \(job?.falEndpoint ?? "n/a")",
+            "Provider status URL: \(job?.falStatusUrl ?? "n/a")",
+            "Provider status code: \(job?.providerStatusCode.map(String.init) ?? "n/a")",
             "Error: \(localRecord?.errorMessage ?? "file sync failed")"
         ] + requestLines
         return ArtifactStatusPresentation(level: .error, summary: "Shot rendered but local file sync failed", details: details.joined(separator: "\n"))
@@ -4601,7 +4650,10 @@ private func shotArtifactStatusPresentation(
         "Model tier: \(shot.modelTier)",
         "Progress: \(job?.progressPct.map(String.init) ?? "n/a")%",
         "Request ID: \(job?.requestId ?? "n/a")",
-        "Idempotency key: \(job?.idempotencyKey ?? "n/a")"
+        "Idempotency key: \(job?.idempotencyKey ?? "n/a")",
+        "Provider endpoint: \(job?.falEndpoint ?? "n/a")",
+        "Provider status URL: \(job?.falStatusUrl ?? "n/a")",
+        "Provider status code: \(job?.providerStatusCode.map(String.init) ?? "n/a")"
     ] + requestLines
     let summary = requestState?.stage == .responseReceived
         ? "Shot API call accepted; waiting for worker"

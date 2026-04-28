@@ -137,6 +137,10 @@ public struct Job: Codable, Identifiable {
     public let requestId: String?
     public let idempotencyKey: String?
     public let invokeState: String?
+    public let falEndpoint: String?
+    public let falStatusUrl: String?
+    public let providerStatusCode: Int?
+    public let providerResponseSnippet: String?
     public let updatedAt: String?
 }
 

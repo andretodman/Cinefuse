@@ -723,7 +723,7 @@ public struct APIClient {
                     request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
                     DiagnosticsLogger.apiRequestStart(method: "GET", url: request.url ?? baseURL, context: "streamProjectEvents")
 
-                    let (bytes, response) = try await URLSession.shared.bytes(for: request)
+                    let (bytes, response) = try await makeStreamSession().bytes(for: request)
                     try validateStatus(response: response)
                     if let http = response as? HTTPURLResponse {
                         DiagnosticsLogger.apiRequestSuccess(
@@ -763,6 +763,11 @@ public struct APIClient {
                     }
                     continuation.finish()
                 } catch {
+                    if isExpectedEventStreamTimeout(error) {
+                        DiagnosticsLogger.renderStatus(message: "event stream read timeout; reconnecting")
+                        continuation.finish()
+                        return
+                    }
                     DiagnosticsLogger.apiRequestFailure(
                         method: "GET",
                         url: buildURL(path: "\(Self.cinefusePrefix)/projects/\(projectId)/events"),
@@ -777,6 +782,25 @@ public struct APIClient {
                 task.cancel()
             }
         }
+    }
+
+    private func makeStreamSession() -> URLSession {
+        let configuration = URLSessionConfiguration.default
+        configuration.timeoutIntervalForRequest = 90
+        configuration.timeoutIntervalForResource = 6 * 60 * 60
+        configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
+        return URLSession(configuration: configuration)
+    }
+
+    private func isExpectedEventStreamTimeout(_ error: Error) -> Bool {
+        let nsError = error as NSError
+        if nsError.domain == NSURLErrorDomain && nsError.code == NSURLErrorTimedOut {
+            return true
+        }
+        if let urlError = error as? URLError {
+            return urlError.code == .timedOut
+        }
+        return false
     }
 
     private func buildURL(path: String) -> URL {

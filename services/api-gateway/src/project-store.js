@@ -241,6 +241,14 @@ function mapJobRow(row) {
       : null,
     idempotencyKey: typeof inputPayload.idempotencyKey === "string" ? inputPayload.idempotencyKey : null,
     invokeState: typeof outputPayload.invokeState === "string" ? outputPayload.invokeState : null,
+    falEndpoint: typeof outputPayload.falEndpoint === "string" ? outputPayload.falEndpoint : null,
+    falStatusUrl: typeof outputPayload.falStatusUrl === "string" ? outputPayload.falStatusUrl : null,
+    providerStatusCode: Number.isFinite(Number(outputPayload.providerStatusCode))
+      ? Number(outputPayload.providerStatusCode)
+      : null,
+    providerResponseSnippet: typeof outputPayload.providerResponseSnippet === "string"
+      ? outputPayload.providerResponseSnippet
+      : null,
     createdAt: row.created_at,
     updatedAt: row.updated_at
   };

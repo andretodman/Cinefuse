@@ -164,12 +164,16 @@ async function generateViaFal({ input, config, modelTier }) {
 
   const submitClipUrl = extractClipUrl(submitBody);
   if (submitClipUrl) {
+    const directRequestId = submitBody?.request_id ?? submitBody?.requestId ?? submitBody?.id ?? null;
     return {
       modelId: submitBody?.modelId ?? config.modelId,
       sparksCost: submitBody?.sparksCost ?? config.sparks,
       estimatedDurationSec: submitBody?.estimatedDurationSec ?? config.estimatedDurationSec,
       costToUsCents: Number(submitBody?.costToUsCents ?? config.costToUsCents),
       status: "ready",
+      requestId: typeof directRequestId === "string" ? directRequestId : null,
+      falEndpoint: endpoint,
+      falStatusUrl: typeof submitBody?.status_url === "string" ? submitBody.status_url : null,
       clipUrl: submitClipUrl,
       thumbnailUrl: submitBody?.thumbnailUrl ?? null
     };
