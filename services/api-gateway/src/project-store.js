@@ -10,19 +10,88 @@ const jobs = new Map();
 
 let pool;
 
+function parsePositiveInt(value, fallback) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return fallback;
+  }
+  return Math.floor(parsed);
+}
+
+function looksLikeUnresolvedReference(value) {
+  return typeof value === "string" && value.includes("${") && value.includes("}");
+}
+
+function stripInlineSSLRootCert(rawConnectionString) {
+  if (typeof rawConnectionString !== "string") {
+    return rawConnectionString;
+  }
+  const parameter = "sslrootcert=";
+  const index = rawConnectionString.indexOf(parameter);
+  if (index === -1) {
+    return rawConnectionString;
+  }
+  const valueStart = index + parameter.length;
+  const nextAmpersand = rawConnectionString.indexOf("&", valueStart);
+  const valueEnd = nextAmpersand === -1 ? rawConnectionString.length : nextAmpersand;
+  const value = rawConnectionString.slice(valueStart, valueEnd);
+  const hasInlineCert = value.includes("BEGIN")
+    || value.includes("CERTIFICATE")
+    || /[\n\r\t]/.test(value);
+  if (!hasInlineCert) {
+    return rawConnectionString;
+  }
+  let removeStart = index;
+  if (removeStart > 0 && (rawConnectionString[removeStart - 1] === "?" || rawConnectionString[removeStart - 1] === "&")) {
+    removeStart -= 1;
+  }
+  let removeEnd = valueEnd;
+  if (removeEnd < rawConnectionString.length && rawConnectionString[removeEnd] === "&") {
+    removeEnd += 1;
+  }
+  return rawConnectionString.slice(0, removeStart) + rawConnectionString.slice(removeEnd);
+}
+
+function firstUsableConnectionString(...candidates) {
+  for (const candidate of candidates) {
+    if (typeof candidate !== "string" || candidate.trim().length === 0) {
+      continue;
+    }
+    if (looksLikeUnresolvedReference(candidate)) {
+      continue;
+    }
+    return stripInlineSSLRootCert(candidate.trim());
+  }
+  return null;
+}
+
 function resolveConnectionString() {
   if (process.env.NODE_ENV === "test") {
-    return process.env.CINEFUSE_DATABASE_URL_TEST
-      ?? process.env.DATABASE_URL_TEST
-      ?? process.env.CINEFUSE_DATABASE_URL
-      ?? process.env.DATABASE_URL
-      ?? null;
+    return firstUsableConnectionString(
+      process.env.CINEFUSE_DATABASE_URL_TEST,
+      process.env.DATABASE_URL_TEST,
+      process.env.CINEFUSE_DATABASE_URL,
+      process.env.DATABASE_URL,
+      process.env.DATABASE_URL_RESOLVED,
+      process.env.POSTGRES_URL
+    );
   }
-  return process.env.CINEFUSE_DATABASE_URL ?? process.env.DATABASE_URL ?? null;
+  return firstUsableConnectionString(
+    process.env.CINEFUSE_DATABASE_URL,
+    process.env.DATABASE_URL,
+    process.env.DATABASE_URL_RESOLVED,
+    process.env.POSTGRES_URL
+  );
 }
 
 function resolvePoolConfig(connectionString) {
-  const config = { connectionString };
+  const config = {
+    connectionString,
+    // Fail fast when the DB is unreachable so UI doesn't hang indefinitely.
+    connectionTimeoutMillis: parsePositiveInt(process.env.DATABASE_CONNECT_TIMEOUT_MS, 5000),
+    query_timeout: parsePositiveInt(process.env.DATABASE_QUERY_TIMEOUT_MS, 10000),
+    statement_timeout: parsePositiveInt(process.env.DATABASE_STATEMENT_TIMEOUT_MS, 10000)
+  };
   let sslMode = "";
   try {
     const parsed = new URL(connectionString);

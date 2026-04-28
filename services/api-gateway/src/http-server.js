@@ -261,27 +261,28 @@ export function createHttpServer() {
   return createServer(async (request, response) => {
     const method = request.method ?? "GET";
     const url = new URL(request.url ?? "/", "http://localhost");
+    try {
 
-    if (method === "POST" && url.pathname === "/api/v1/internal/render/process") {
-      if (request.headers["x-cinefuse-worker-token"] !== WORKER_AUTH_TOKEN) {
-        return writeError(response, 401, "unauthorized worker", "UNAUTHORIZED_WORKER");
+      if (method === "POST" && url.pathname === "/api/v1/internal/render/process") {
+        if (request.headers["x-cinefuse-worker-token"] !== WORKER_AUTH_TOKEN) {
+          return writeError(response, 401, "unauthorized worker", "UNAUTHORIZED_WORKER");
+        }
+        const task = await readBody(request);
+        await processRenderTask(task);
+        return json(response, 200, { ok: true });
       }
-      const task = await readBody(request);
-      await processRenderTask(task);
-      return json(response, 200, { ok: true });
-    }
 
-    if (method === "GET" && url.pathname === "/health") {
-      return json(response, 200, { ok: true, service: "api-gateway" });
-    }
+      if (method === "GET" && url.pathname === "/health") {
+        return json(response, 200, { ok: true, service: "api-gateway" });
+      }
 
-    if (method === "GET" && url.pathname === "/v1/mcp/servers") {
-      return json(response, 200, { servers: mcpHost.listServers() });
-    }
+      if (method === "GET" && url.pathname === "/v1/mcp/servers") {
+        return json(response, 200, { servers: mcpHost.listServers() });
+      }
 
-    if (method === "GET" && url.pathname === "/api/v1/cinefuse/health") {
-      return json(response, 200, { ok: true, service: "api-gateway", domain: "cinefuse" });
-    }
+      if (method === "GET" && url.pathname === "/api/v1/cinefuse/health") {
+        return json(response, 200, { ok: true, service: "api-gateway", domain: "cinefuse" });
+      }
 
     const auth = parseBearerAuth(request.headers.authorization);
     if (!auth) {
@@ -1082,6 +1083,22 @@ export function createHttpServer() {
       return json(response, 200, result);
     }
 
-    return writeError(response, 404, "not_found", "NOT_FOUND");
+      return writeError(response, 404, "not_found", "NOT_FOUND");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "request handling failed";
+      console.error("[api-gateway] unhandled request error", {
+        method,
+        path: url.pathname,
+        message
+      });
+      if (!response.headersSent) {
+        return writeError(response, 500, message, "INTERNAL_ERROR");
+      }
+      try {
+        response.end();
+      } catch {
+        // no-op
+      }
+    }
   });
 }

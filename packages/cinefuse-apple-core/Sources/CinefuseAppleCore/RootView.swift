@@ -703,15 +703,18 @@ struct ProjectWorkspaceScreen: View {
             onboardingSheet
         }
         .task {
+            await refreshServerHealth()
             if editorSettings.restoreLastOpenWorkspace, !lastProjectId.isEmpty {
                 await refresh(selectProjectId: lastProjectId)
             } else {
                 await refresh(selectProjectId: selectedProjectId)
             }
-            await refreshServerHealth()
             if !onboardingCompleted && model.projects.isEmpty {
                 showOnboardingSheet = true
             }
+        }
+        .task(id: activeServerBaseURL) {
+            await refreshServerHealth()
         }
         .preferredColorScheme(timelineThemeMode.colorScheme)
         .task(id: selectedProjectId) {
@@ -1114,17 +1117,21 @@ struct ProjectWorkspaceScreen: View {
 
     private func refresh(selectProjectId: String? = nil) async {
         model.isLoading = true
+        defer { model.isLoading = false }
         model.errorMessage = nil
         if requiresPubfuseJWTForActiveServer && model.pubfuseAccessToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            model.isLoading = false
             model.errorMessage = "Remote server requires a Pubfuse login token. Sign out and sign in again to reconnect."
             return
         }
         do {
-            async let projects = api.listProjects(token: model.bearerToken)
-            async let balance = api.getBalance(token: model.bearerToken)
-            model.projects = try await projects
-            model.balance = try await balance
+            async let projectsTask = withTimeout(seconds: 20, message: "Loading projects timed out") {
+                try await api.listProjects(token: model.bearerToken)
+            }
+            async let balanceTask = withTimeout(seconds: 20, message: "Loading Spark balance timed out") {
+                try await api.getBalance(token: model.bearerToken)
+            }
+            model.projects = try await projectsTask
+            model.balance = try await balanceTask
             if let selectProjectId {
                 selectedProjectId = selectProjectId
             } else if !model.projects.contains(where: { $0.id == selectedProjectId }) {
@@ -1139,7 +1146,30 @@ struct ProjectWorkspaceScreen: View {
                 model.errorMessage = message
             }
         }
-        model.isLoading = false
+    }
+
+    private func withTimeout<T>(
+        seconds: TimeInterval,
+        message: String,
+        operation: @escaping @Sendable () async throws -> T
+    ) async throws -> T {
+        try await withThrowingTaskGroup(of: T.self) { group in
+            group.addTask {
+                try await operation()
+            }
+            group.addTask {
+                let delayNanoseconds = UInt64(max(0, seconds) * 1_000_000_000)
+                try await Task.sleep(nanoseconds: delayNanoseconds)
+                throw NSError(
+                    domain: "Cinefuse.Refresh",
+                    code: 408,
+                    userInfo: [NSLocalizedDescriptionKey: message]
+                )
+            }
+            let result = try await group.next()!
+            group.cancelAll()
+            return result
+        }
     }
 
     private func createProject() async {
