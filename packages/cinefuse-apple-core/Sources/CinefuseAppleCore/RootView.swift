@@ -662,6 +662,7 @@ struct ProjectWorkspaceScreen: View {
                     jobKindDraft: $jobKindDraft,
                     onCloseProject: closeProject,
                     onDeleteProject: { Task { await deleteSelectedProject() } },
+                    onRenameProject: { title in Task { await renameSelectedProject(title: title) } },
                     onCreateCharacter: { Task { await createCharacter() } },
                     onTrainCharacter: { characterId in Task { await trainCharacter(characterId: characterId) } },
                     onGenerateStoryboard: { Task { await generateStoryboard() } },
@@ -669,7 +670,11 @@ struct ProjectWorkspaceScreen: View {
                     onQuote: { Task { await quoteShot() } },
                     onCreateShot: { Task { await createShot() } },
                     onGenerateShot: { shotId in Task { await generateShot(shotId: shotId) } },
+                    onRetryShot: { shotId in Task { await retryShot(shotId: shotId) } },
+                    onDeleteShot: { shotId in Task { await deleteShotFromProject(shotId: shotId) } },
                     onCreateJob: { Task { await createJob() } },
+                    onRetryJob: { jobId in Task { await retryJob(jobId: jobId) } },
+                    onDeleteJob: { jobId in Task { await deleteJobFromProject(jobId: jobId) } },
                     onReorderShots: { from, to in Task { await reorderShots(from: from, to: to) } },
                     onGenerateDialogue: { Task { await generateDialogueTrack() } },
                     onGenerateScore: { Task { await generateScoreTrack() } },
@@ -1310,7 +1315,7 @@ struct ProjectWorkspaceScreen: View {
                     if event.type == "connected" {
                         continue
                     }
-                    await loadSelectedProjectDetails(showLoadingIndicator: false)
+                    applyProjectEvent(event)
                 }
             } catch {
                 // Background event stream failures should not block the editor flow.
@@ -1318,6 +1323,66 @@ struct ProjectWorkspaceScreen: View {
 
             hasLiveEventsConnection = false
             try? await Task.sleep(nanoseconds: 1_000_000_000)
+        }
+    }
+
+    private func applyProjectEvent(_ event: ProjectEvent) {
+        switch event.type {
+        case "shot_status_changed":
+            guard let shotId = event.shotId else { return }
+            if let index = shots.firstIndex(where: { $0.id == shotId }) {
+                let shot = shots[index]
+                shots[index] = Shot(
+                    id: shot.id,
+                    projectId: shot.projectId,
+                    prompt: shot.prompt,
+                    modelTier: shot.modelTier,
+                    status: event.status ?? shot.status,
+                    clipUrl: shot.clipUrl,
+                    orderIndex: shot.orderIndex,
+                    durationSec: shot.durationSec,
+                    thumbnailUrl: shot.thumbnailUrl,
+                    audioRefs: shot.audioRefs,
+                    characterLocks: shot.characterLocks
+                )
+            }
+        case "job_status_changed":
+            guard let jobId = event.jobId else { return }
+            if let index = jobs.firstIndex(where: { $0.id == jobId }) {
+                let job = jobs[index]
+                jobs[index] = Job(
+                    id: job.id,
+                    projectId: job.projectId,
+                    shotId: job.shotId,
+                    kind: job.kind,
+                    status: event.status ?? job.status,
+                    progressPct: event.progressPct ?? job.progressPct,
+                    costToUsCents: job.costToUsCents
+                )
+            } else if let shotId = event.shotId {
+                jobs.append(
+                    Job(
+                        id: jobId,
+                        projectId: event.projectId,
+                        shotId: shotId,
+                        kind: "clip",
+                        status: event.status ?? "queued",
+                        progressPct: event.progressPct,
+                        costToUsCents: 0
+                    )
+                )
+            }
+        case "shot_deleted":
+            guard let shotId = event.shotId else { return }
+            shots.removeAll { $0.id == shotId }
+            jobs.removeAll { $0.shotId == shotId }
+        case "job_deleted":
+            guard let jobId = event.jobId else { return }
+            jobs.removeAll { $0.id == jobId }
+        default:
+            Task {
+                await loadSelectedProjectDetails(showLoadingIndicator: false)
+            }
         }
     }
 
@@ -1332,6 +1397,7 @@ struct ProjectWorkspaceScreen: View {
                 modelTier: shotModelTierDraft,
                 characterLocks: selectedCharacterLockId.isEmpty ? [] : [selectedCharacterLockId]
             )
+            shotPromptDraft = ""
             quotedShotCost = nil
             await loadSelectedProjectDetails(showLoadingIndicator: false)
         } catch {
@@ -1437,6 +1503,38 @@ struct ProjectWorkspaceScreen: View {
         }
     }
 
+    private func retryShot(shotId: String) async {
+        guard let selectedProjectId else { return }
+        model.errorMessage = nil
+        do {
+            let generation = try await api.retryShot(
+                token: model.bearerToken,
+                projectId: selectedProjectId,
+                shotId: shotId
+            )
+            quotedShotCost = generation.quote
+            await loadSelectedProjectDetails(showLoadingIndicator: false)
+        } catch {
+            model.errorMessage = error.localizedDescription
+        }
+    }
+
+    private func deleteShotFromProject(shotId: String) async {
+        guard let selectedProjectId else { return }
+        model.errorMessage = nil
+        do {
+            try await api.deleteShot(
+                token: model.bearerToken,
+                projectId: selectedProjectId,
+                shotId: shotId
+            )
+            shots.removeAll { $0.id == shotId }
+            jobs.removeAll { $0.shotId == shotId }
+        } catch {
+            model.errorMessage = error.localizedDescription
+        }
+    }
+
     private func createJob() async {
         guard let selectedProjectId else { return }
         model.errorMessage = nil
@@ -1447,6 +1545,56 @@ struct ProjectWorkspaceScreen: View {
                 kind: jobKindDraft
             )
             await loadSelectedProjectDetails(showLoadingIndicator: false)
+        } catch {
+            model.errorMessage = error.localizedDescription
+        }
+    }
+
+    private func retryJob(jobId: String) async {
+        guard let selectedProjectId else { return }
+        model.errorMessage = nil
+        do {
+            let generation = try await api.retryJob(
+                token: model.bearerToken,
+                projectId: selectedProjectId,
+                jobId: jobId
+            )
+            quotedShotCost = generation.quote
+            await loadSelectedProjectDetails(showLoadingIndicator: false)
+        } catch {
+            model.errorMessage = error.localizedDescription
+        }
+    }
+
+    private func deleteJobFromProject(jobId: String) async {
+        guard let selectedProjectId else { return }
+        model.errorMessage = nil
+        do {
+            try await api.deleteJob(
+                token: model.bearerToken,
+                projectId: selectedProjectId,
+                jobId: jobId
+            )
+            jobs.removeAll { $0.id == jobId }
+        } catch {
+            model.errorMessage = error.localizedDescription
+        }
+    }
+
+    private func renameSelectedProject(title: String) async {
+        guard let selectedProjectId else { return }
+        let normalized = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalized.isEmpty else { return }
+        model.errorMessage = nil
+        do {
+            let updated = try await api.renameProject(
+                token: model.bearerToken,
+                projectId: selectedProjectId,
+                title: normalized
+            )
+            if let index = model.projects.firstIndex(where: { $0.id == selectedProjectId }) {
+                model.projects[index] = updated
+            }
         } catch {
             model.errorMessage = error.localizedDescription
         }
@@ -1741,6 +1889,7 @@ struct ProjectDetailScreen: View {
 
     let onCloseProject: () -> Void
     let onDeleteProject: () -> Void
+    let onRenameProject: (String) -> Void
     let onCreateCharacter: () -> Void
     let onTrainCharacter: (String) -> Void
     let onGenerateStoryboard: () -> Void
@@ -1748,7 +1897,11 @@ struct ProjectDetailScreen: View {
     let onQuote: () -> Void
     let onCreateShot: () -> Void
     let onGenerateShot: (String) -> Void
+    let onRetryShot: (String) -> Void
+    let onDeleteShot: (String) -> Void
     let onCreateJob: () -> Void
+    let onRetryJob: (String) -> Void
+    let onDeleteJob: (String) -> Void
     let onReorderShots: (IndexSet, Int) -> Void
     let onGenerateDialogue: () -> Void
     let onGenerateScore: () -> Void
@@ -1773,6 +1926,8 @@ struct ProjectDetailScreen: View {
     @AppStorage("cinefuse.editor.workspacePreset") private var workspacePresetRaw = EditorWorkspacePreset.editing.rawValue
     @State private var selectedTimelineShotId: String?
     @State private var trackSyncModes: [Int: AudioTrackSyncMode] = [:]
+    @State private var isRenamingProjectTitle = false
+    @State private var projectTitleDraft = ""
 
     var body: some View {
         Group {
@@ -1942,6 +2097,8 @@ struct ProjectDetailScreen: View {
                                         jobs: jobs,
                                         jobKindDraft: $jobKindDraft,
                                         onCreateJob: onCreateJob,
+                                        onRetryJob: onRetryJob,
+                                        onDeleteJob: onDeleteJob,
                                         showTooltips: showTooltips
                                     )
                                     .frame(minWidth: 0, maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -1974,6 +2131,17 @@ struct ProjectDetailScreen: View {
         }
         .onChange(of: showBottomPane) { _, _ in
             sanitizePersistedLayout()
+        }
+        .onChange(of: project?.id) { _, _ in
+            guard let project else { return }
+            projectTitleDraft = project.title
+            isRenamingProjectTitle = false
+        }
+        .onChange(of: project?.title) { _, value in
+            guard let value else { return }
+            if !isRenamingProjectTitle {
+                projectTitleDraft = value
+            }
         }
     }
 
@@ -2030,6 +2198,7 @@ struct ProjectDetailScreen: View {
             VStack(alignment: .leading, spacing: CinefuseTokens.Spacing.s) {
                 ShotsPanel(
                     shots: shots,
+                    jobs: jobs,
                     characterOptions: characters,
                     shotPromptDraft: $shotPromptDraft,
                     shotModelTierDraft: $shotModelTierDraft,
@@ -2038,6 +2207,8 @@ struct ProjectDetailScreen: View {
                     onQuote: onQuote,
                     onCreateShot: onCreateShot,
                     onGenerateShot: onGenerateShot,
+                    onRetryShot: onRetryShot,
+                    onDeleteShot: onDeleteShot,
                     showTooltips: showTooltips
                 )
                 SectionCard(
@@ -2255,8 +2426,42 @@ struct ProjectDetailScreen: View {
     private func header(project: Project) -> some View {
         HStack(alignment: .top, spacing: CinefuseTokens.Spacing.s) {
             VStack(alignment: .leading, spacing: CinefuseTokens.Spacing.xxs) {
-                Text(project.title)
-                    .font(CinefuseTokens.Typography.sectionTitle)
+                if isRenamingProjectTitle {
+                    HStack(spacing: CinefuseTokens.Spacing.xs) {
+                        TextField("Project title", text: $projectTitleDraft)
+                            .textFieldStyle(.roundedBorder)
+                        Button {
+                            let nextTitle = projectTitleDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+                            if !nextTitle.isEmpty && nextTitle != project.title {
+                                onRenameProject(nextTitle)
+                            }
+                            isRenamingProjectTitle = false
+                        } label: {
+                            Image(systemName: "checkmark")
+                        }
+                        .buttonStyle(SecondaryActionButtonStyle())
+                        Button {
+                            isRenamingProjectTitle = false
+                            projectTitleDraft = project.title
+                        } label: {
+                            Image(systemName: "xmark")
+                        }
+                        .buttonStyle(SecondaryActionButtonStyle())
+                    }
+                } else {
+                    HStack(spacing: CinefuseTokens.Spacing.xs) {
+                        Text(project.title)
+                            .font(CinefuseTokens.Typography.sectionTitle)
+                        Button {
+                            projectTitleDraft = project.title
+                            isRenamingProjectTitle = true
+                        } label: {
+                            Image(systemName: "square.and.pencil")
+                        }
+                        .buttonStyle(SecondaryActionButtonStyle())
+                        .tooltip("Rename project", enabled: showTooltips)
+                    }
+                }
                 Text("Project ID: \(project.id) · \(shots.count) clips · \(audioTracks.count) tracks")
                     .font(CinefuseTokens.Typography.caption)
                     .foregroundStyle(CinefuseTokens.ColorRole.textSecondary)
@@ -3014,6 +3219,7 @@ struct CharacterPanel: View {
 
 struct ShotsPanel: View {
     let shots: [Shot]
+    let jobs: [Job]
     let characterOptions: [CharacterProfile]
     @Binding var shotPromptDraft: String
     @Binding var shotModelTierDraft: String
@@ -3022,9 +3228,18 @@ struct ShotsPanel: View {
     let onQuote: () -> Void
     let onCreateShot: () -> Void
     let onGenerateShot: (String) -> Void
+    let onRetryShot: (String) -> Void
+    let onDeleteShot: (String) -> Void
     let showTooltips: Bool
+    @State private var pendingDeleteShotId: String?
 
     private let inFlightStatuses: Set<String> = ["queued", "generating", "running"]
+
+    private func progressForShot(_ shotId: String) -> Int? {
+        let candidates = jobs.filter { $0.shotId == shotId }.compactMap(\.progressPct)
+        guard let latest = candidates.last else { return nil }
+        return max(0, min(100, latest))
+    }
 
     var body: some View {
         SectionCard(
@@ -3155,6 +3370,33 @@ struct ShotsPanel: View {
                             .tooltip("Generate final clip for this shot", enabled: showTooltips)
                             .buttonStyle(SecondaryActionButtonStyle())
                             .disabled(inFlightStatuses.contains(shot.status) || shot.status == "ready")
+                            if let progress = progressForShot(shot.id) {
+                                HStack(spacing: CinefuseTokens.Spacing.xs) {
+                                    ProgressView(value: Double(progress), total: 100)
+                                        .frame(maxWidth: .infinity)
+                                    Text("\(progress)%")
+                                        .font(CinefuseTokens.Typography.caption)
+                                        .foregroundStyle(CinefuseTokens.ColorRole.textSecondary)
+                                }
+                            }
+                            HStack(spacing: CinefuseTokens.Spacing.xs) {
+                                Button {
+                                    onRetryShot(shot.id)
+                                } label: {
+                                    Image(systemName: "arrow.clockwise")
+                                }
+                                .buttonStyle(SecondaryActionButtonStyle())
+                                .tooltip("Retry failed shot", enabled: showTooltips)
+                                .disabled(shot.status != "failed")
+
+                                Button(role: .destructive) {
+                                    pendingDeleteShotId = shot.id
+                                } label: {
+                                    Image(systemName: "delete.left")
+                                }
+                                .buttonStyle(DestructiveActionButtonStyle())
+                                .tooltip("Delete shot", enabled: showTooltips)
+                            }
                         }
                         .padding(CinefuseTokens.Spacing.s)
                         .background(
@@ -3164,7 +3406,27 @@ struct ShotsPanel: View {
                     }
                 }
             }
-        }.padding(CinefuseTokens.Spacing.s)
+        }
+        .padding(CinefuseTokens.Spacing.s)
+        .confirmationDialog("Delete this shot?", isPresented: Binding(
+            get: { pendingDeleteShotId != nil },
+            set: { isPresented in
+                if !isPresented {
+                    pendingDeleteShotId = nil
+                }
+            }
+        )) {
+            Button("Delete Shot", role: .destructive) {
+                guard let shotId = pendingDeleteShotId else { return }
+                onDeleteShot(shotId)
+                pendingDeleteShotId = nil
+            }
+            Button("Cancel", role: .cancel) {
+                pendingDeleteShotId = nil
+            }
+        } message: {
+            Text("This removes the shot and related render jobs from the project.")
+        }
     }
 }
 
@@ -3172,7 +3434,10 @@ struct JobsPanel: View {
     let jobs: [Job]
     @Binding var jobKindDraft: String
     let onCreateJob: () -> Void
+    let onRetryJob: (String) -> Void
+    let onDeleteJob: (String) -> Void
     let showTooltips: Bool
+    @State private var pendingDeleteJobId: String?
 
     var body: some View {
         SectionCard(
@@ -3226,14 +3491,43 @@ struct JobsPanel: View {
                     ScrollView {
                         VStack(alignment: .leading, spacing: CinefuseTokens.Spacing.s) {
                             ForEach(jobs) { job in
-                                HStack(spacing: CinefuseTokens.Spacing.s) {
-                                    Text(job.kind.capitalized)
-                                        .font(CinefuseTokens.Typography.body)
-                                    StatusBadge(status: job.status)
-                                    Spacer()
-                                    Text("Cost to us: \(job.costToUsCents)c")
-                                        .font(CinefuseTokens.Typography.caption)
-                                        .foregroundStyle(CinefuseTokens.ColorRole.textSecondary)
+                                VStack(alignment: .leading, spacing: CinefuseTokens.Spacing.xs) {
+                                    HStack(spacing: CinefuseTokens.Spacing.s) {
+                                        Text(job.kind.capitalized)
+                                            .font(CinefuseTokens.Typography.body)
+                                        StatusBadge(status: job.status)
+                                        Spacer()
+                                        Text("Cost to us: \(job.costToUsCents)c")
+                                            .font(CinefuseTokens.Typography.caption)
+                                            .foregroundStyle(CinefuseTokens.ColorRole.textSecondary)
+                                    }
+                                    if let progress = job.progressPct {
+                                        HStack(spacing: CinefuseTokens.Spacing.xs) {
+                                            ProgressView(value: Double(progress), total: 100)
+                                                .frame(maxWidth: .infinity)
+                                            Text("\(progress)%")
+                                                .font(CinefuseTokens.Typography.caption)
+                                                .foregroundStyle(CinefuseTokens.ColorRole.textSecondary)
+                                        }
+                                    }
+                                    HStack(spacing: CinefuseTokens.Spacing.xs) {
+                                        Button {
+                                            onRetryJob(job.id)
+                                        } label: {
+                                            Image(systemName: "arrow.clockwise")
+                                        }
+                                        .buttonStyle(SecondaryActionButtonStyle())
+                                        .tooltip("Retry failed job", enabled: showTooltips)
+                                        .disabled(job.status != "failed")
+
+                                        Button(role: .destructive) {
+                                            pendingDeleteJobId = job.id
+                                        } label: {
+                                            Image(systemName: "trash")
+                                        }
+                                        .buttonStyle(DestructiveActionButtonStyle())
+                                        .tooltip("Delete job", enabled: showTooltips)
+                                    }
                                 }
                                 .padding(CinefuseTokens.Spacing.s)
                                 .background(
@@ -3246,6 +3540,25 @@ struct JobsPanel: View {
                     .frame(maxHeight: .infinity, alignment: .top)
                 }
             }
+        }
+        .confirmationDialog("Delete this job?", isPresented: Binding(
+            get: { pendingDeleteJobId != nil },
+            set: { isPresented in
+                if !isPresented {
+                    pendingDeleteJobId = nil
+                }
+            }
+        )) {
+            Button("Delete Job", role: .destructive) {
+                guard let jobId = pendingDeleteJobId else { return }
+                onDeleteJob(jobId)
+                pendingDeleteJobId = nil
+            }
+            Button("Cancel", role: .cancel) {
+                pendingDeleteJobId = nil
+            }
+        } message: {
+            Text("This removes the job from the render track.")
         }
     }
 }

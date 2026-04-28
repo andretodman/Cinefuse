@@ -65,6 +65,7 @@ test("api contract: create/list projects and get spark balance", async () => {
   assert.equal(generateBody.shot.status, "queued");
   assert.equal(generateBody.shot.clipUrl, null);
   assert.equal(generateBody.job.status, "queued");
+  assert.equal(generateBody.job.progressPct, 0);
   assert.equal(generateBody.quote.sparksCost, 70);
 
   let shotStatus = "queued";
@@ -107,6 +108,7 @@ test("api contract: create/list projects and get spark balance", async () => {
   );
   const generatedClipJob = jobsBody.jobs.find((job) => job.kind === "clip" && job.shotId === shotId);
   assert.ok(generatedClipJob);
+  assert.equal(typeof generatedClipJob.progressPct === "number", true);
   if (generatedClipJob.status === "done") {
     assert.equal(generatedClipJob.costToUsCents > 0, true);
   }
@@ -126,6 +128,95 @@ test("api contract: create/list projects and get spark balance", async () => {
   assert.equal(listAfterDelete.status, 200);
   const listAfterDeleteBody = await listAfterDelete.json();
   assert.equal(listAfterDeleteBody.projects.length, 0);
+
+  await new Promise((resolve, reject) => {
+    server.close((error) => {
+      if (error) {
+        reject(error);
+        return;
+      }
+      resolve();
+    });
+  });
+});
+
+test("api contract: rename project and retry/delete failed shot/job", async () => {
+  const headers = authHeaders("usr_contract_recovery");
+  await clearProjects();
+  const server = createHttpServer();
+  await new Promise((resolve) => server.listen(0, resolve));
+  const address = server.address();
+  const port = typeof address === "object" && address ? address.port : 0;
+  const baseUrl = `http://127.0.0.1:${port}`;
+
+  const createProjectResponse = await fetch(`${baseUrl}/api/v1/cinefuse/projects`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ title: "Recovery Project" })
+  });
+  assert.equal(createProjectResponse.status, 201);
+  const projectId = (await createProjectResponse.json()).project.id;
+
+  const renameResponse = await fetch(`${baseUrl}/api/v1/cinefuse/projects/${projectId}`, {
+    method: "PATCH",
+    headers,
+    body: JSON.stringify({ title: "Renamed Recovery Project" })
+  });
+  assert.equal(renameResponse.status, 200);
+  const renamedBody = await renameResponse.json();
+  assert.equal(renamedBody.project.title, "Renamed Recovery Project");
+
+  const createFailedShotResponse = await fetch(`${baseUrl}/api/v1/cinefuse/projects/${projectId}/shots`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ prompt: "stormy skyline", modelTier: "budget", status: "failed" })
+  });
+  assert.equal(createFailedShotResponse.status, 201);
+  const failedShot = (await createFailedShotResponse.json()).shot;
+
+  const retryShotResponse = await fetch(
+    `${baseUrl}/api/v1/cinefuse/projects/${projectId}/shots/${failedShot.id}/retry`,
+    { method: "POST", headers }
+  );
+  assert.equal(retryShotResponse.status, 200);
+  const retryShotBody = await retryShotResponse.json();
+  assert.equal(retryShotBody.shot.status, "queued");
+  assert.equal(retryShotBody.job.status, "queued");
+  assert.equal(retryShotBody.job.progressPct, 0);
+
+  const createFailedJobResponse = await fetch(`${baseUrl}/api/v1/cinefuse/projects/${projectId}/jobs`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({
+      kind: "clip",
+      shotId: failedShot.id,
+      status: "failed",
+      progressPct: 0
+    })
+  });
+  assert.equal(createFailedJobResponse.status, 201);
+  const failedJobId = (await createFailedJobResponse.json()).job.id;
+
+  const retryJobResponse = await fetch(
+    `${baseUrl}/api/v1/cinefuse/projects/${projectId}/jobs/${failedJobId}/retry`,
+    { method: "POST", headers }
+  );
+  assert.equal(retryJobResponse.status, 200);
+  const retryJobBody = await retryJobResponse.json();
+  assert.equal(retryJobBody.job.status, "queued");
+  assert.equal(retryJobBody.job.progressPct, 0);
+
+  const deleteJobResponse = await fetch(
+    `${baseUrl}/api/v1/cinefuse/projects/${projectId}/jobs/${failedJobId}`,
+    { method: "DELETE", headers }
+  );
+  assert.equal(deleteJobResponse.status, 200);
+
+  const deleteShotResponse = await fetch(
+    `${baseUrl}/api/v1/cinefuse/projects/${projectId}/shots/${failedShot.id}`,
+    { method: "DELETE", headers }
+  );
+  assert.equal(deleteShotResponse.status, 200);
 
   await new Promise((resolve, reject) => {
     server.close((error) => {

@@ -185,6 +185,17 @@ public struct APIClient {
         try validate(response: response, data: data)
     }
 
+    public func renameProject(token: String, projectId: String, title: String) async throws -> Project {
+        var request = URLRequest(url: buildURL(path: "\(Self.cinefusePrefix)/projects/\(projectId)"))
+        request.httpMethod = "PATCH"
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONEncoder().encode(["title": title])
+        let (data, response) = try await URLSession.shared.data(for: request)
+        try validate(response: response, data: data)
+        return try JSONDecoder().decode(CreateProjectResponse.self, from: data).project
+    }
+
     public func listShots(token: String, projectId: String) async throws -> [Shot] {
         var request = URLRequest(url: buildURL(path: "\(Self.cinefusePrefix)/projects/\(projectId)/shots"))
         request.httpMethod = "GET"
@@ -628,6 +639,23 @@ public struct APIClient {
         return try JSONDecoder().decode(GenerateShotResponse.self, from: data)
     }
 
+    public func retryShot(token: String, projectId: String, shotId: String) async throws -> GenerateShotResponse {
+        var request = URLRequest(url: buildURL(path: "\(Self.cinefusePrefix)/projects/\(projectId)/shots/\(shotId)/retry"))
+        request.httpMethod = "POST"
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        let (data, response) = try await URLSession.shared.data(for: request)
+        try validate(response: response, data: data)
+        return try JSONDecoder().decode(GenerateShotResponse.self, from: data)
+    }
+
+    public func deleteShot(token: String, projectId: String, shotId: String) async throws {
+        var request = URLRequest(url: buildURL(path: "\(Self.cinefusePrefix)/projects/\(projectId)/shots/\(shotId)"))
+        request.httpMethod = "DELETE"
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        let (data, response) = try await URLSession.shared.data(for: request)
+        try validate(response: response, data: data)
+    }
+
     public func listJobs(token: String, projectId: String) async throws -> [Job] {
         var request = URLRequest(url: buildURL(path: "\(Self.cinefusePrefix)/projects/\(projectId)/jobs"))
         request.httpMethod = "GET"
@@ -646,6 +674,23 @@ public struct APIClient {
         let (data, response) = try await URLSession.shared.data(for: request)
         try validate(response: response, data: data)
         return try JSONDecoder().decode(CreateJobResponse.self, from: data).job
+    }
+
+    public func retryJob(token: String, projectId: String, jobId: String) async throws -> GenerateShotResponse {
+        var request = URLRequest(url: buildURL(path: "\(Self.cinefusePrefix)/projects/\(projectId)/jobs/\(jobId)/retry"))
+        request.httpMethod = "POST"
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        let (data, response) = try await URLSession.shared.data(for: request)
+        try validate(response: response, data: data)
+        return try JSONDecoder().decode(GenerateShotResponse.self, from: data)
+    }
+
+    public func deleteJob(token: String, projectId: String, jobId: String) async throws {
+        var request = URLRequest(url: buildURL(path: "\(Self.cinefusePrefix)/projects/\(projectId)/jobs/\(jobId)"))
+        request.httpMethod = "DELETE"
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        let (data, response) = try await URLSession.shared.data(for: request)
+        try validate(response: response, data: data)
     }
 
     public func getBalance(token: String) async throws -> Int {

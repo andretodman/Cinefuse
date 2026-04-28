@@ -4,7 +4,10 @@ import { createClient } from "redis";
 import { parseBearerAuth } from "./auth.js";
 import { createMcpHost } from "./mcp-host.js";
 import {
+  deleteJob,
   deleteProject,
+  deleteShot,
+  getJob,
   getProject,
   getShot,
   listCharacters,
@@ -119,13 +122,15 @@ export function createHttpServer() {
       await saveJob({
         id: task.jobId,
         status: "failed",
+        progressPct: 0,
         outputPayload: { error: "shot not found during generation" }
       });
       publishProjectEvent(task.projectId, {
         type: "job_status_changed",
         jobId: task.jobId,
         shotId: task.shotId,
-        status: "failed"
+        status: "failed",
+        progressPct: 0
       });
       return;
     }
@@ -136,7 +141,8 @@ export function createHttpServer() {
     });
     await saveJob({
       id: task.jobId,
-      status: "running"
+      status: "running",
+      progressPct: 15
     });
     publishProjectEvent(task.projectId, {
       type: "shot_status_changed",
@@ -147,7 +153,8 @@ export function createHttpServer() {
       type: "job_status_changed",
       jobId: task.jobId,
       shotId: task.shotId,
-      status: "running"
+      status: "running",
+      progressPct: 15
     });
 
     try {
@@ -169,6 +176,7 @@ export function createHttpServer() {
       await saveJob({
         id: task.jobId,
         status: "done",
+        progressPct: 100,
         outputPayload: {
           modelId: generation.modelId ?? null,
           clipUrl: generation.clipUrl ?? null,
@@ -185,7 +193,8 @@ export function createHttpServer() {
         type: "job_status_changed",
         jobId: task.jobId,
         shotId: task.shotId,
-        status: "done"
+        status: "done",
+        progressPct: 100
       });
     } catch (error) {
       await saveShot({
@@ -195,6 +204,7 @@ export function createHttpServer() {
       await saveJob({
         id: task.jobId,
         status: "failed",
+        progressPct: 0,
         outputPayload: {
           error: error instanceof Error ? error.message : "generation failed"
         }
@@ -208,7 +218,8 @@ export function createHttpServer() {
         type: "job_status_changed",
         jobId: task.jobId,
         shotId: task.shotId,
-        status: "failed"
+        status: "failed",
+        progressPct: 0
       });
       await mcpHost.invoke("billing", "credit", {
         userId: task.userId,
@@ -256,6 +267,71 @@ export function createHttpServer() {
     queueMicrotask(() => {
       void processRenderQueue();
     });
+  }
+
+  async function queueShotGeneration({ projectId, shot, userId, idempotencyKey }) {
+    const quote = await mcpHost.invoke("clip", "quote_clip", {
+      shotId: shot.id,
+      projectId,
+      prompt: shot.prompt,
+      modelTier: shot.modelTier,
+      characterLocks: shot.characterLocks ?? [],
+      userId
+    });
+    const jobId = randomUUID();
+    const generationIdempotencyKey = idempotencyKey ?? `shot-generate:${shot.id}:${jobId}`;
+
+    await mcpHost.invoke("billing", "debit", {
+      userId,
+      amount: quote.sparksCost,
+      idempotencyKey: generationIdempotencyKey,
+      relatedResourceType: "shot",
+      relatedResourceId: shot.id
+    });
+
+    const queuedShot = await saveShot({
+      ...shot,
+      status: "queued"
+    });
+    const job = await saveJob({
+      id: jobId,
+      projectId,
+      shotId: queuedShot.id,
+      kind: "clip",
+      status: "queued",
+      progressPct: 0,
+      inputPayload: {
+        prompt: queuedShot.prompt,
+        modelTier: queuedShot.modelTier,
+        sparksCost: quote.sparksCost
+      },
+      outputPayload: {},
+      costToUsCents: 0
+    });
+    publishProjectEvent(projectId, {
+      type: "shot_status_changed",
+      shotId: shot.id,
+      status: "queued",
+      progressPct: 0
+    });
+    publishProjectEvent(projectId, {
+      type: "job_status_changed",
+      jobId,
+      shotId: shot.id,
+      status: "queued",
+      progressPct: 0
+    });
+
+    await enqueueRenderTask({
+      jobId,
+      shotId: shot.id,
+      projectId,
+      userId,
+      quote,
+      debitIdempotencyKey: generationIdempotencyKey
+    });
+
+    return { queuedShot, job, quote, generationIdempotencyKey };
   }
 
   return createServer(async (request, response) => {
@@ -449,6 +525,23 @@ export function createHttpServer() {
       }
       return json(response, 200, { project });
     }
+    if (projectDetailMatch && method === "PATCH") {
+      const projectId = decodeURIComponent(projectDetailMatch[1]);
+      const project = await getProject(projectId, auth.userId);
+      if (!project) {
+        return writeError(response, 404, "project not found", "PROJECT_NOT_FOUND");
+      }
+      const payload = await readBody(request);
+      const title = typeof payload.title === "string" ? payload.title.trim() : "";
+      if (title.length === 0) {
+        return writeError(response, 400, "title required", "TITLE_REQUIRED");
+      }
+      const updated = await saveProject({
+        ...project,
+        title
+      });
+      return json(response, 200, { project: updated });
+    }
     if (projectDetailMatch && method === "DELETE") {
       const projectId = decodeURIComponent(projectDetailMatch[1]);
       const deleted = await deleteProject(projectId, auth.userId);
@@ -639,6 +732,10 @@ export function createHttpServer() {
     const stitchLoudnessMatch = url.pathname.match(/^\/api\/v1\/cinefuse\/projects\/([^/]+)\/stitch\/loudness\/normalize$/);
     const exportFinalMatch = url.pathname.match(/^\/api\/v1\/cinefuse\/projects\/([^/]+)\/export\/final$/);
     const shotQuoteMatch = url.pathname.match(/^\/api\/v1\/cinefuse\/projects\/([^/]+)\/shots\/quote$/);
+    const shotDetailMatch = url.pathname.match(/^\/api\/v1\/cinefuse\/projects\/([^/]+)\/shots\/([^/]+)$/);
+    const shotRetryMatch = url.pathname.match(/^\/api\/v1\/cinefuse\/projects\/([^/]+)\/shots\/([^/]+)\/retry$/);
+    const jobDetailMatch = url.pathname.match(/^\/api\/v1\/cinefuse\/projects\/([^/]+)\/jobs\/([^/]+)$/);
+    const jobRetryMatch = url.pathname.match(/^\/api\/v1\/cinefuse\/projects\/([^/]+)\/jobs\/([^/]+)\/retry$/);
     if (timelineMatch && method === "GET") {
       const projectId = decodeURIComponent(timelineMatch[1]);
       const project = await getProject(projectId, auth.userId);
@@ -955,6 +1052,56 @@ export function createHttpServer() {
       });
       return json(response, 201, { shot });
     }
+    if (shotDetailMatch && method === "DELETE") {
+      const projectId = decodeURIComponent(shotDetailMatch[1]);
+      const shotId = decodeURIComponent(shotDetailMatch[2]);
+      const project = await getProject(projectId, auth.userId);
+      if (!project) {
+        return writeError(response, 404, "project not found", "PROJECT_NOT_FOUND");
+      }
+      const deleted = await deleteShot(shotId, projectId);
+      if (!deleted) {
+        return writeError(response, 404, "shot not found", "SHOT_NOT_FOUND");
+      }
+      publishProjectEvent(projectId, {
+        type: "shot_deleted",
+        shotId
+      });
+      return json(response, 200, { ok: true, deletedShotId: shotId });
+    }
+    if (shotRetryMatch && method === "POST") {
+      const projectId = decodeURIComponent(shotRetryMatch[1]);
+      const shotId = decodeURIComponent(shotRetryMatch[2]);
+      const project = await getProject(projectId, auth.userId);
+      if (!project) {
+        return writeError(response, 404, "project not found", "PROJECT_NOT_FOUND");
+      }
+      const shot = await getShot(shotId, projectId);
+      if (!shot) {
+        return writeError(response, 404, "shot not found", "SHOT_NOT_FOUND");
+      }
+      if (shot.status !== "failed") {
+        return writeError(response, 409, "only failed shots can be retried", "SHOT_RETRY_CONFLICT");
+      }
+      const payload = await readBody(request);
+      const result = await queueShotGeneration({
+        projectId,
+        shot,
+        userId: auth.userId,
+        idempotencyKey: payload.idempotencyKey
+      });
+      return json(response, 200, {
+        shot: result.queuedShot,
+        job: result.job,
+        quote: {
+          sparksCost: result.quote.sparksCost,
+          modelTier: result.quote.modelTier,
+          modelId: result.quote.modelId,
+          estimatedDurationSec: result.quote.estimatedDurationSec,
+          idempotencyKey: result.generationIdempotencyKey
+        }
+      });
+    }
 
     const shotGenerateMatch = url.pathname.match(
       /^\/api\/v1\/cinefuse\/projects\/([^/]+)\/shots\/([^/]+)\/generate$/
@@ -974,73 +1121,23 @@ export function createHttpServer() {
         return writeError(response, 409, "shot generation already in progress", "SHOT_ALREADY_GENERATING");
       }
 
-      const quote = await mcpHost.invoke("clip", "quote_clip", {
-        shotId,
-        projectId,
-        prompt: shot.prompt,
-        modelTier: shot.modelTier,
-        characterLocks: shot.characterLocks ?? [],
-        userId: auth.userId
-      });
       const payload = await readBody(request);
-      const jobId = randomUUID();
-      const generationIdempotencyKey = payload.idempotencyKey ?? `shot-generate:${shotId}:${jobId}`;
-
-      await mcpHost.invoke("billing", "debit", {
-        userId: auth.userId,
-        amount: quote.sparksCost,
-        idempotencyKey: generationIdempotencyKey,
-        relatedResourceType: "shot",
-        relatedResourceId: shotId
-      });
-
-      const queuedShot = await saveShot({
-        ...shot,
-        status: "queued"
-      });
-      const job = await saveJob({
-        id: jobId,
+      const result = await queueShotGeneration({
         projectId,
-        shotId: queuedShot.id,
-        kind: "clip",
-        status: "queued",
-        inputPayload: {
-          prompt: queuedShot.prompt,
-          modelTier: queuedShot.modelTier,
-          sparksCost: quote.sparksCost
-        },
-        outputPayload: {},
-        costToUsCents: 0
-      });
-      publishProjectEvent(projectId, {
-        type: "shot_status_changed",
-        shotId,
-        status: "queued"
-      });
-      publishProjectEvent(projectId, {
-        type: "job_status_changed",
-        jobId,
-        shotId,
-        status: "queued"
-      });
-      await enqueueRenderTask({
-        jobId,
-        shotId,
-        projectId,
+        shot,
         userId: auth.userId,
-        quote,
-        debitIdempotencyKey: generationIdempotencyKey
+        idempotencyKey: payload.idempotencyKey
       });
 
       return json(response, 200, {
-        shot: queuedShot,
-        job,
+        shot: result.queuedShot,
+        job: result.job,
         quote: {
-          sparksCost: quote.sparksCost,
-          modelTier: quote.modelTier,
-          modelId: quote.modelId,
-          estimatedDurationSec: quote.estimatedDurationSec,
-          idempotencyKey: generationIdempotencyKey
+          sparksCost: result.quote.sparksCost,
+          modelTier: result.quote.modelTier,
+          modelId: result.quote.modelId,
+          estimatedDurationSec: result.quote.estimatedDurationSec,
+          idempotencyKey: result.generationIdempotencyKey
         }
       });
     }
@@ -1067,11 +1164,69 @@ export function createHttpServer() {
         shotId: payload.shotId ?? null,
         kind: payload.kind ?? "clip",
         status: payload.status ?? "queued",
+        progressPct: payload.progressPct ?? 0,
         inputPayload: payload.inputPayload ?? {},
         outputPayload: payload.outputPayload ?? {},
         costToUsCents: payload.costToUsCents ?? 0
       });
       return json(response, 201, { job });
+    }
+    if (jobDetailMatch && method === "DELETE") {
+      const projectId = decodeURIComponent(jobDetailMatch[1]);
+      const jobId = decodeURIComponent(jobDetailMatch[2]);
+      const project = await getProject(projectId, auth.userId);
+      if (!project) {
+        return writeError(response, 404, "project not found", "PROJECT_NOT_FOUND");
+      }
+      const deleted = await deleteJob(jobId, projectId);
+      if (!deleted) {
+        return writeError(response, 404, "job not found", "JOB_NOT_FOUND");
+      }
+      publishProjectEvent(projectId, {
+        type: "job_deleted",
+        jobId
+      });
+      return json(response, 200, { ok: true, deletedJobId: jobId });
+    }
+    if (jobRetryMatch && method === "POST") {
+      const projectId = decodeURIComponent(jobRetryMatch[1]);
+      const jobId = decodeURIComponent(jobRetryMatch[2]);
+      const project = await getProject(projectId, auth.userId);
+      if (!project) {
+        return writeError(response, 404, "project not found", "PROJECT_NOT_FOUND");
+      }
+      const job = await getJob(jobId, projectId);
+      if (!job) {
+        return writeError(response, 404, "job not found", "JOB_NOT_FOUND");
+      }
+      if (job.status !== "failed") {
+        return writeError(response, 409, "only failed jobs can be retried", "JOB_RETRY_CONFLICT");
+      }
+      if (job.kind !== "clip" || !job.shotId) {
+        return writeError(response, 400, "retry supported only for failed clip jobs", "JOB_RETRY_UNSUPPORTED");
+      }
+      const shot = await getShot(job.shotId, projectId);
+      if (!shot) {
+        return writeError(response, 404, "shot not found", "SHOT_NOT_FOUND");
+      }
+      const payload = await readBody(request);
+      const result = await queueShotGeneration({
+        projectId,
+        shot,
+        userId: auth.userId,
+        idempotencyKey: payload.idempotencyKey
+      });
+      return json(response, 200, {
+        shot: result.queuedShot,
+        job: result.job,
+        quote: {
+          sparksCost: result.quote.sparksCost,
+          modelTier: result.quote.modelTier,
+          modelId: result.quote.modelId,
+          estimatedDurationSec: result.quote.estimatedDurationSec,
+          idempotencyKey: result.generationIdempotencyKey
+        }
+      });
     }
 
     if (method === "POST" && url.pathname === "/v1/mcp/invoke") {

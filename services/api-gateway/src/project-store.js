@@ -211,6 +211,10 @@ function mapSceneRow(row) {
 }
 
 function mapJobRow(row) {
+  const outputPayload = row.output_payload ?? {};
+  const progressPct = normalizeProgressPct(
+    row.progress_pct ?? outputPayload.progressPct ?? outputPayload.progress_pct
+  );
   return {
     id: row.id,
     projectId: row.project_id,
@@ -218,11 +222,23 @@ function mapJobRow(row) {
     kind: row.kind,
     status: row.status,
     inputPayload: row.input_payload ?? {},
-    outputPayload: row.output_payload ?? {},
+    outputPayload,
+    progressPct,
     costToUsCents: row.cost_to_us_cents ?? 0,
     createdAt: row.created_at,
     updatedAt: row.updated_at
   };
+}
+
+function normalizeProgressPct(value) {
+  if (value === null || value === undefined) {
+    return null;
+  }
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) {
+    return null;
+  }
+  return Math.max(0, Math.min(100, Math.round(parsed)));
 }
 
 function mapCharacterRow(row) {
@@ -564,6 +580,42 @@ export async function saveShot(input) {
   return shot;
 }
 
+export async function deleteShot(shotId, projectId) {
+  const db = getPool();
+  if (db) {
+    await db.query("BEGIN");
+    try {
+      await db.query(
+        `DELETE FROM cinefuse_jobs
+         WHERE shot_id = $1 AND project_id = $2`,
+        [shotId, projectId]
+      );
+      const { rowCount } = await db.query(
+        `DELETE FROM cinefuse_shots
+         WHERE id = $1 AND project_id = $2`,
+        [shotId, projectId]
+      );
+      await db.query("COMMIT");
+      return rowCount > 0;
+    } catch (error) {
+      await db.query("ROLLBACK");
+      throw error;
+    }
+  }
+
+  const shot = shots.get(shotId);
+  if (!shot || shot.projectId !== projectId) {
+    return false;
+  }
+  shots.delete(shotId);
+  for (const [jobId, job] of jobs.entries()) {
+    if (job.shotId === shotId && job.projectId === projectId) {
+      jobs.delete(jobId);
+    }
+  }
+  return true;
+}
+
 export async function listAudioTracks(projectId) {
   const db = getPool();
   if (!db) {
@@ -688,6 +740,23 @@ export async function listJobs(projectId) {
 export async function saveJob(input) {
   const existing = await getJob(input.id);
   const now = new Date().toISOString();
+  const outputPayload = {
+    ...(existing?.outputPayload ?? {}),
+    ...(input.outputPayload ?? {})
+  };
+  const progressPct = normalizeProgressPct(
+    input.progressPct
+      ?? outputPayload.progressPct
+      ?? outputPayload.progress_pct
+      ?? existing?.progressPct
+  );
+  if (progressPct === null) {
+    delete outputPayload.progressPct;
+    delete outputPayload.progress_pct;
+  } else {
+    outputPayload.progressPct = progressPct;
+    delete outputPayload.progress_pct;
+  }
   const job = {
     id: input.id,
     projectId: input.projectId ?? existing?.projectId,
@@ -695,7 +764,8 @@ export async function saveJob(input) {
     kind: input.kind ?? existing?.kind ?? "clip",
     status: input.status ?? existing?.status ?? "queued",
     inputPayload: input.inputPayload ?? existing?.inputPayload ?? {},
-    outputPayload: input.outputPayload ?? existing?.outputPayload ?? {},
+    outputPayload,
+    progressPct,
     costToUsCents: input.costToUsCents ?? existing?.costToUsCents ?? 0,
     createdAt: existing?.createdAt ?? input.createdAt ?? now,
     updatedAt: now
@@ -735,7 +805,7 @@ export async function saveJob(input) {
   return job;
 }
 
-async function getJob(jobId) {
+export async function getJob(jobId, projectId) {
   const db = getPool();
   if (db) {
     const { rows } = await db.query(
@@ -745,9 +815,41 @@ async function getJob(jobId) {
        LIMIT 1`,
       [jobId]
     );
-    return rows[0] ? mapJobRow(rows[0]) : null;
+    if (!rows[0]) {
+      return null;
+    }
+    const job = mapJobRow(rows[0]);
+    if (projectId && job.projectId !== projectId) {
+      return null;
+    }
+    return job;
   }
-  return jobs.get(jobId) ?? null;
+  const job = jobs.get(jobId) ?? null;
+  if (!job) {
+    return null;
+  }
+  if (projectId && job.projectId !== projectId) {
+    return null;
+  }
+  return job;
+}
+
+export async function deleteJob(jobId, projectId) {
+  const db = getPool();
+  if (db) {
+    const { rowCount } = await db.query(
+      `DELETE FROM cinefuse_jobs
+       WHERE id = $1 AND project_id = $2`,
+      [jobId, projectId]
+    );
+    return rowCount > 0;
+  }
+  const job = jobs.get(jobId);
+  if (!job || job.projectId !== projectId) {
+    return false;
+  }
+  jobs.delete(jobId);
+  return true;
 }
 
 export async function clearProjects() {

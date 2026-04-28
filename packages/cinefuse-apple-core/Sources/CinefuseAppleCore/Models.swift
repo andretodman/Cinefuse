@@ -128,6 +128,7 @@ public struct Job: Codable, Identifiable {
     public let shotId: String?
     public let kind: String
     public let status: String
+    public let progressPct: Int?
     public let costToUsCents: Int
 }
 
@@ -170,6 +171,7 @@ public struct ProjectEvent: Codable {
     public let shotId: String?
     public let jobId: String?
     public let status: String?
+    public let progressPct: Int?
     public let timestamp: String
 }
 
