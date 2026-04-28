@@ -686,11 +686,22 @@ public struct APIClient {
     }
 
     public func deleteJob(token: String, projectId: String, jobId: String) async throws {
-        var request = URLRequest(url: buildURL(path: "\(Self.cinefusePrefix)/projects/\(projectId)/jobs/\(jobId)"))
-        request.httpMethod = "DELETE"
-        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        let (data, response) = try await URLSession.shared.data(for: request)
-        try validate(response: response, data: data)
+        do {
+            var request = URLRequest(url: buildURL(path: "\(Self.cinefusePrefix)/projects/\(projectId)/jobs/\(jobId)"))
+            request.httpMethod = "DELETE"
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+            let (data, response) = try await URLSession.shared.data(for: request)
+            try validate(response: response, data: data)
+            return
+        } catch {
+            guard isMissingRouteError(error) else {
+                throw error
+            }
+            // Compatibility fallback for older deployed gateways that don't expose DELETE /jobs/:id yet.
+            let existingJobs = try await listJobs(token: token, projectId: projectId)
+            let existingKind = existingJobs.first(where: { $0.id == jobId })?.kind ?? "clip"
+            try await upsertDeletedJob(token: token, projectId: projectId, jobId: jobId, kind: existingKind)
+        }
     }
 
     public func getBalance(token: String) async throws -> Int {
@@ -787,6 +798,32 @@ public struct APIClient {
                 userInfo: [NSLocalizedDescriptionKey: HTTPURLResponse.localizedString(forStatusCode: http.statusCode)]
             )
         }
+    }
+
+    private func isMissingRouteError(_ error: Error) -> Bool {
+        let nsError = error as NSError
+        guard nsError.domain == "APIClient", nsError.code == 404 else {
+            return false
+        }
+        let message = nsError.localizedDescription.lowercased()
+        return message.contains("endpoint not found") || message.contains("not found")
+    }
+
+    private func upsertDeletedJob(token: String, projectId: String, jobId: String, kind: String) async throws {
+        var request = URLRequest(url: buildURL(path: "\(Self.cinefusePrefix)/projects/\(projectId)/jobs"))
+        request.httpMethod = "POST"
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONEncoder().encode([
+            "id": AnyEncodable(jobId),
+            "kind": AnyEncodable(kind),
+            "status": AnyEncodable("deleted"),
+            "inputPayload": AnyEncodable([String: String]()),
+            "outputPayload": AnyEncodable([String: String]()),
+            "costToUsCents": AnyEncodable(0)
+        ] as [String: AnyEncodable])
+        let (data, response) = try await URLSession.shared.data(for: request)
+        try validate(response: response, data: data)
     }
 
     private func validate(response: URLResponse, data: Data) throws {

@@ -550,6 +550,8 @@ struct ProjectWorkspaceScreen: View {
     @AppStorage("cinefuse.editor.showLeftPane") private var showLeftPane = true
     @AppStorage("cinefuse.editor.showRightPane") private var showRightPane = true
     @AppStorage("cinefuse.editor.showBottomPane") private var showBottomPane = true
+    @AppStorage("cinefuse.editor.showAudioPanel") private var showAudioPanel = true
+    @AppStorage("cinefuse.editor.showJobsPanel") private var showJobsPanel = true
     @AppStorage("cinefuse.editor.swapSidePanes") private var swapSidePanes = false
     @AppStorage("cinefuse.editor.workspacePreset") private var workspacePresetRaw = EditorWorkspacePreset.editing.rawValue
     @State private var jobKindDraft = "clip"
@@ -840,7 +842,35 @@ struct ProjectWorkspaceScreen: View {
             IconCommandButton(
                 systemName: showBottomPane ? "rectangle.split.3x1.fill" : "rectangle.split.3x1",
                 label: "Toggle bottom panel",
-                action: { showBottomPane.toggle() },
+                action: {
+                    showBottomPane.toggle()
+                    if showBottomPane && !showAudioPanel && !showJobsPanel {
+                        showAudioPanel = true
+                        showJobsPanel = true
+                    }
+                },
+                tooltipEnabled: editorSettings.showTooltips
+            )
+            IconCommandButton(
+                systemName: showAudioPanel ? "waveform" : "waveform.slash",
+                label: "Toggle audio lanes panel",
+                action: {
+                    showAudioPanel.toggle()
+                    if showAudioPanel {
+                        showBottomPane = true
+                    }
+                },
+                tooltipEnabled: editorSettings.showTooltips
+            )
+            IconCommandButton(
+                systemName: showJobsPanel ? "list.bullet.clipboard.fill" : "list.bullet.clipboard",
+                label: "Toggle jobs panel",
+                action: {
+                    showJobsPanel.toggle()
+                    if showJobsPanel {
+                        showBottomPane = true
+                    }
+                },
                 tooltipEnabled: editorSettings.showTooltips
             )
             IconCommandButton(
@@ -991,16 +1021,29 @@ struct ProjectWorkspaceScreen: View {
             showLeftPane = true
             showRightPane = true
             showBottomPane = true
+            showAudioPanel = true
+            showJobsPanel = true
             swapSidePanes = false
         case .audio:
             showLeftPane = false
             showRightPane = true
             showBottomPane = true
+            showAudioPanel = true
+            showJobsPanel = true
             swapSidePanes = false
         case .review:
             showLeftPane = true
             showRightPane = false
             showBottomPane = true
+            showAudioPanel = true
+            showJobsPanel = true
+            swapSidePanes = false
+        case .render:
+            showLeftPane = false
+            showRightPane = false
+            showBottomPane = true
+            showAudioPanel = true
+            showJobsPanel = true
             swapSidePanes = false
         }
     }
@@ -1280,7 +1323,7 @@ struct ProjectWorkspaceScreen: View {
                 characters = latestCharacters
                 shots = latestTimeline.shots
                 audioTracks = latestTimeline.audioTracks
-                jobs = latestJobs
+                jobs = latestJobs.filter { $0.status != "deleted" }
             }
             model.errorMessage = nil
         } catch {
@@ -1348,6 +1391,10 @@ struct ProjectWorkspaceScreen: View {
             }
         case "job_status_changed":
             guard let jobId = event.jobId else { return }
+            if event.status == "deleted" {
+                jobs.removeAll { $0.id == jobId }
+                return
+            }
             if let index = jobs.firstIndex(where: { $0.id == jobId }) {
                 let job = jobs[index]
                 jobs[index] = Job(
@@ -1922,12 +1969,26 @@ struct ProjectDetailScreen: View {
     @AppStorage("cinefuse.editor.showLeftPane") private var showLeftPane = true
     @AppStorage("cinefuse.editor.showRightPane") private var showRightPane = true
     @AppStorage("cinefuse.editor.showBottomPane") private var showBottomPane = true
+    @AppStorage("cinefuse.editor.showAudioPanel") private var showAudioPanel = true
+    @AppStorage("cinefuse.editor.showJobsPanel") private var showJobsPanel = true
     @AppStorage("cinefuse.editor.swapSidePanes") private var swapSidePanes = false
     @AppStorage("cinefuse.editor.workspacePreset") private var workspacePresetRaw = EditorWorkspacePreset.editing.rawValue
+    @AppStorage("cinefuse.editor.collapse.timeline") private var collapseTimelinePanel = false
+    @AppStorage("cinefuse.editor.collapse.preview") private var collapsePreviewPanel = false
+    @AppStorage("cinefuse.editor.collapse.storyboard") private var collapseStoryboardPanel = false
+    @AppStorage("cinefuse.editor.collapse.characters") private var collapseCharacterPanel = false
+    @AppStorage("cinefuse.editor.collapse.shots") private var collapseShotsPanel = false
+    @AppStorage("cinefuse.editor.collapse.export") private var collapseExportPanel = false
+    @AppStorage("cinefuse.editor.collapse.audio") private var collapseAudioPanel = false
+    @AppStorage("cinefuse.editor.collapse.jobs") private var collapseJobsPanel = false
     @State private var selectedTimelineShotId: String?
     @State private var trackSyncModes: [Int: AudioTrackSyncMode] = [:]
     @State private var isRenamingProjectTitle = false
     @State private var projectTitleDraft = ""
+
+    private var isRenderWorkspace: Bool {
+        (EditorWorkspacePreset(rawValue: workspacePresetRaw) ?? .editing) == .render
+    }
 
     var body: some View {
         Group {
@@ -1940,173 +2001,146 @@ struct ProjectDetailScreen: View {
                             .font(CinefuseTokens.Typography.caption)
                     }
 
-                    HorizontalTimelineTrack(
-                        shots: sortedShots,
-                        selectedShotId: $selectedTimelineShotId,
-                        onMoveShot: onReorderShots,
-                        showTooltips: showTooltips,
-                        themePalette: timelineThemeMode.palette
-                    )
+                    if !isRenderWorkspace {
+                        HorizontalTimelineTrack(
+                            shots: sortedShots,
+                            jobs: jobs,
+                            selectedShotId: $selectedTimelineShotId,
+                            onMoveShot: onReorderShots,
+                            showTooltips: showTooltips,
+                            themePalette: timelineThemeMode.palette,
+                            isCollapsed: $collapseTimelinePanel
+                        )
+                    }
 
                     GeometryReader { geometry in
                         let totalWidth = Double(max(geometry.size.width, 320))
                         let totalHeight = Double(max(geometry.size.height, 280))
+                        let showsBottomRegion = showBottomPane && (showAudioPanel || showJobsPanel)
                         let bottomHandleHeight = Double(CinefuseTokens.Control.splitterHitArea)
                         let minTopWorkspaceHeight = Double(CinefuseTokens.Control.minTopWorkspaceHeight)
                         let maxBottomByAvailableSpace = max(
                             0,
-                            totalHeight - minTopWorkspaceHeight - (showBottomPane ? bottomHandleHeight : 0)
+                            totalHeight - minTopWorkspaceHeight - (showsBottomRegion ? bottomHandleHeight : 0)
                         )
                         let minBottomPanelHeight = Double(CinefuseTokens.Control.minBottomPanelHeight)
                         let sanitizedBottomHeight: Double = {
-                            guard showBottomPane else { return 0 }
+                            guard showsBottomRegion else { return 0 }
                             if maxBottomByAvailableSpace >= minBottomPanelHeight {
                                 return min(max(bottomPaneHeight, minBottomPanelHeight), maxBottomByAvailableSpace)
                             }
                             return maxBottomByAvailableSpace
                         }()
+                        let visibleBottomPanelCount = (showAudioPanel ? 1 : 0) + (showJobsPanel ? 1 : 0)
+                        let collapsedBottomPanelCount = (showAudioPanel && collapseAudioPanel ? 1 : 0)
+                            + (showJobsPanel && collapseJobsPanel ? 1 : 0)
+                        let allVisibleBottomPanelsCollapsed = visibleBottomPanelCount > 0
+                            && visibleBottomPanelCount == collapsedBottomPanelCount
+                        let collapsedBottomHeight = 78.0
+                        let effectiveBottomHeight = allVisibleBottomPanelsCollapsed
+                            ? min(sanitizedBottomHeight, collapsedBottomHeight)
+                            : sanitizedBottomHeight
                         let topWorkspaceHeight = max(
                             0,
-                            totalHeight - sanitizedBottomHeight - (showBottomPane ? bottomHandleHeight : 0)
+                            totalHeight - effectiveBottomHeight - (showsBottomRegion ? bottomHandleHeight : 0)
                         )
                         let sideFrame = paneLayout(totalWidth: totalWidth)
                         let showsLeftPanel = showLeftPane && sideFrame.left > 1
                         let showsRightPanel = showRightPane && sideFrame.right > 1
 
                         VStack(spacing: 0) {
-                            HStack(spacing: 0) {
-                                if showsLeftPanel {
-                                    sidePaneContainer {
-                                        if swapSidePanes {
-                                            rightPaneContent
-                                        } else {
-                                            leftPaneContent
-                                        }
-                                    }
-                                    .frame(width: CGFloat(sideFrame.left))
-                                    .frame(minWidth: 0, maxHeight: .infinity)
-                                    VerticalPanelHandle { delta in
-                                        leftPaneWidth = clampedLeftPaneWidth(
-                                            leftPaneWidth + delta,
-                                            totalWidth: totalWidth,
-                                            opposingPaneWidth: sideFrame.right
-                                        )
-                                    }
-                                }
-
-                                EditorPreviewPanel(
-                                    shots: sortedShots,
-                                    selectedShotId: $selectedTimelineShotId,
-                                    showTooltips: showTooltips
-                                )
-                                .frame(maxWidth: .infinity, maxHeight: .infinity)
-//                                .padding(.horizontal, CinefuseTokens.Spacing.s)
-
-                                if showsRightPanel {
-                                    VerticalPanelHandle { delta in
-                                        rightPaneWidth = clampedRightPaneWidth(
-                                            rightPaneWidth - delta,
-                                            totalWidth: totalWidth,
-                                            opposingPaneWidth: sideFrame.left
-                                        )
-                                    }
-                                    sidePaneContainer {
-                                        if swapSidePanes {
-                                            leftPaneContent
-                                        } else {
-                                            rightPaneContent
-                                        }
-                                    }
-                                    .frame(width: CGFloat(sideFrame.right))
-                                    .frame(minWidth: 0, maxHeight: .infinity)
-                                }
-                            }
-                            .frame(height: CGFloat(topWorkspaceHeight))
-                            .clipped()
-
-                            if showBottomPane {
-                                HorizontalPanelHandle { delta in
-                                    bottomPaneHeight = clampedBottomPaneHeight(
-                                        bottomPaneHeight - delta,
-                                        totalHeight: totalHeight
-                                    )
-                                }
+                            if isRenderWorkspace {
                                 HStack(alignment: .top, spacing: CinefuseTokens.Spacing.s) {
-                                    SectionCard(
-                                        title: "Audio Lanes",
-//                                        subtitle: "Dialogue, score, and SFX tracks mapped to timeline order."
-                                    ) {
-                                        VStack(alignment: .leading, spacing: CinefuseTokens.Spacing.s) {
-                                            ViewThatFits(in: .horizontal) {
-                                                HStack(spacing: CinefuseTokens.Spacing.s) {
-                                                    TextField("Audio title", text: $audioTrackTitleDraft)
-                                                        .textFieldStyle(.roundedBorder)
-                                                    Button("Generate Dialogue", action: onGenerateDialogue)
-                                                        .tooltip("Generate spoken dialogue track", enabled: showTooltips)
-                                                        .buttonStyle(SecondaryActionButtonStyle())
-                                                    Button("Generate Score", action: onGenerateScore)
-                                                        .tooltip("Generate background music score", enabled: showTooltips)
-                                                        .buttonStyle(SecondaryActionButtonStyle())
-                                                    Button("Generate SFX", action: onGenerateSFX)
-                                                        .tooltip("Generate one-shot sound effect", enabled: showTooltips)
-                                                        .buttonStyle(SecondaryActionButtonStyle())
-                                                    Button("Mix", action: onMixAudio)
-                                                        .tooltip("Create mixed audio master for timeline", enabled: showTooltips)
-                                                        .buttonStyle(SecondaryActionButtonStyle())
-                                                    Button("Lip-sync", action: onLipSync)
-                                                        .tooltip("Run lip-sync pass for selected shot", enabled: showTooltips)
-                                                        .buttonStyle(SecondaryActionButtonStyle())
-                                                }
-                                                VStack(alignment: .leading, spacing: CinefuseTokens.Spacing.s) {
-                                                    TextField("Audio title", text: $audioTrackTitleDraft)
-                                                        .textFieldStyle(.roundedBorder)
-                                                    HStack(spacing: CinefuseTokens.Spacing.s) {
-                                                        Button("Generate Dialogue", action: onGenerateDialogue)
-                                                            .tooltip("Generate spoken dialogue track", enabled: showTooltips)
-                                                            .buttonStyle(SecondaryActionButtonStyle())
-                                                        Button("Generate Score", action: onGenerateScore)
-                                                            .tooltip("Generate background music score", enabled: showTooltips)
-                                                            .buttonStyle(SecondaryActionButtonStyle())
-                                                        Button("Generate SFX", action: onGenerateSFX)
-                                                            .tooltip("Generate one-shot sound effect", enabled: showTooltips)
-                                                            .buttonStyle(SecondaryActionButtonStyle())
-                                                        Button("Mix", action: onMixAudio)
-                                                            .tooltip("Create mixed audio master for timeline", enabled: showTooltips)
-                                                            .buttonStyle(SecondaryActionButtonStyle())
-                                                        Button("Lip-sync", action: onLipSync)
-                                                            .tooltip("Run lip-sync pass for selected shot", enabled: showTooltips)
-                                                            .buttonStyle(SecondaryActionButtonStyle())
-                                                    }
-                                                }
-                                            }
-                                            ScrollView {
-                                                AudioLaneView(
-                                                    audioTracks: audioTracks,
-                                                    shotBoundaries: timelineShotBoundaries,
-                                                    syncModes: $trackSyncModes,
-                                                    themePalette: timelineThemeMode.palette
-                                                )
-                                            }
-                                            .frame(maxHeight: .infinity, alignment: .top)
-                                        }
+                                    if showAudioPanel {
+                                        audioLanesPanelCard
+                                            .frame(minWidth: 0, maxWidth: .infinity, alignment: .topLeading)
                                     }
-                                    .frame(minWidth: 0, maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-                                    .clipped()
-
-                                    JobsPanel(
-                                        jobs: jobs,
-                                        jobKindDraft: $jobKindDraft,
-                                        onCreateJob: onCreateJob,
-                                        onRetryJob: onRetryJob,
-                                        onDeleteJob: onDeleteJob,
-                                        showTooltips: showTooltips
-                                    )
-                                    .frame(minWidth: 0, maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-                                    .clipped()
+                                    if showJobsPanel {
+                                        jobsPanelCard
+                                            .frame(minWidth: 0, maxWidth: .infinity, alignment: .topLeading)
+                                    }
+                                    if !showAudioPanel && !showJobsPanel {
+                                        EmptyStateCard(
+                                            title: "Render panels hidden",
+                                            message: "Enable Audio Lanes or Jobs from the top menu to continue."
+                                        )
+                                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                                    }
                                 }
                                 .padding(.top, CinefuseTokens.Spacing.s)
-                                .frame(height: CGFloat(sanitizedBottomHeight), alignment: .top)
+                                .frame(maxHeight: .infinity, alignment: .top)
+                            } else {
+                                HStack(spacing: 0) {
+                                    if showsLeftPanel {
+                                        sidePaneContainer {
+                                            if swapSidePanes {
+                                                rightPaneContent
+                                            } else {
+                                                leftPaneContent
+                                            }
+                                        }
+                                        .frame(width: CGFloat(sideFrame.left))
+                                        .frame(minWidth: 0, maxHeight: .infinity)
+                                        VerticalPanelHandle { delta in
+                                            leftPaneWidth = clampedLeftPaneWidth(
+                                                leftPaneWidth + delta,
+                                                totalWidth: totalWidth,
+                                                opposingPaneWidth: sideFrame.right
+                                            )
+                                        }
+                                    }
+
+                                    EditorPreviewPanel(
+                                        shots: sortedShots,
+                                        selectedShotId: $selectedTimelineShotId,
+                                        showTooltips: showTooltips,
+                                        isCollapsed: $collapsePreviewPanel
+                                    )
+                                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+                                    if showsRightPanel {
+                                        VerticalPanelHandle { delta in
+                                            rightPaneWidth = clampedRightPaneWidth(
+                                                rightPaneWidth - delta,
+                                                totalWidth: totalWidth,
+                                                opposingPaneWidth: sideFrame.left
+                                            )
+                                        }
+                                        sidePaneContainer {
+                                            if swapSidePanes {
+                                                leftPaneContent
+                                            } else {
+                                                rightPaneContent
+                                            }
+                                        }
+                                        .frame(width: CGFloat(sideFrame.right))
+                                        .frame(minWidth: 0, maxHeight: .infinity)
+                                    }
+                                }
+                                .frame(height: CGFloat(topWorkspaceHeight))
                                 .clipped()
+
+                                if showsBottomRegion {
+                                    HorizontalPanelHandle { delta in
+                                        bottomPaneHeight = clampedBottomPaneHeight(
+                                            bottomPaneHeight - delta,
+                                            totalHeight: totalHeight
+                                        )
+                                    }
+                                    HStack(alignment: .top, spacing: CinefuseTokens.Spacing.s) {
+                                        if showAudioPanel {
+                                            audioLanesPanelCard
+                                                .frame(minWidth: 0, maxWidth: .infinity, alignment: .topLeading)
+                                        }
+                                        if showJobsPanel {
+                                            jobsPanelCard
+                                                .frame(minWidth: 0, maxWidth: .infinity, alignment: .topLeading)
+                                        }
+                                    }
+                                    .padding(.top, CinefuseTokens.Spacing.s)
+                                    .frame(height: CGFloat(effectiveBottomHeight), alignment: .top)
+                                    .clipped()
+                                }
                             }
                         }
                     }
@@ -2176,7 +2210,8 @@ struct ProjectDetailScreen: View {
                 StoryboardPanel(
                     scenes: scenes,
                     onGenerateStoryboard: onGenerateStoryboard,
-                    onReviseScene: onReviseScene
+                    onReviseScene: onReviseScene,
+                    isCollapsed: $collapseStoryboardPanel
                 )
                 CharacterPanel(
                     characters: characters,
@@ -2184,7 +2219,8 @@ struct ProjectDetailScreen: View {
                     newCharacterDescription: $newCharacterDescription,
                     onCreateCharacter: onCreateCharacter,
                     onTrainCharacter: onTrainCharacter,
-                    showTooltips: showTooltips
+                    showTooltips: showTooltips,
+                    isCollapsed: $collapseCharacterPanel
                 )
             }
             .padding(CinefuseTokens.Spacing.s)
@@ -2209,11 +2245,12 @@ struct ProjectDetailScreen: View {
                     onGenerateShot: onGenerateShot,
                     onRetryShot: onRetryShot,
                     onDeleteShot: onDeleteShot,
-                    showTooltips: showTooltips
+                    showTooltips: showTooltips,
+                    isCollapsed: $collapseShotsPanel
                 )
                 SectionCard(
                     title: "Export",
-//                    subtitle: "Render the current timeline order into a combined output."
+                    isCollapsed: $collapseExportPanel
                 ) {
                     VStack(alignment: .leading, spacing: CinefuseTokens.Spacing.s) {
                         HStack(spacing: CinefuseTokens.Spacing.s) {
@@ -2329,6 +2366,79 @@ struct ProjectDetailScreen: View {
         }
         .frame(minWidth: 0, maxWidth: .infinity)
         .clipped()
+    }
+
+    private var audioLanesPanelCard: some View {
+        SectionCard(
+            title: "Audio Lanes",
+            isCollapsed: $collapseAudioPanel
+        ) {
+            VStack(alignment: .leading, spacing: CinefuseTokens.Spacing.s) {
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: CinefuseTokens.Spacing.s) {
+                        TextField("Audio title", text: $audioTrackTitleDraft)
+                            .textFieldStyle(.roundedBorder)
+                        Button("Generate Dialogue", action: onGenerateDialogue)
+                            .tooltip("Generate spoken dialogue track", enabled: showTooltips)
+                            .buttonStyle(SecondaryActionButtonStyle())
+                        Button("Generate Score", action: onGenerateScore)
+                            .tooltip("Generate background music score", enabled: showTooltips)
+                            .buttonStyle(SecondaryActionButtonStyle())
+                        Button("Generate SFX", action: onGenerateSFX)
+                            .tooltip("Generate one-shot sound effect", enabled: showTooltips)
+                            .buttonStyle(SecondaryActionButtonStyle())
+                        Button("Mix", action: onMixAudio)
+                            .tooltip("Create mixed audio master for timeline", enabled: showTooltips)
+                            .buttonStyle(SecondaryActionButtonStyle())
+                        Button("Lip-sync", action: onLipSync)
+                            .tooltip("Run lip-sync pass for selected shot", enabled: showTooltips)
+                            .buttonStyle(SecondaryActionButtonStyle())
+                    }
+                    VStack(alignment: .leading, spacing: CinefuseTokens.Spacing.s) {
+                        TextField("Audio title", text: $audioTrackTitleDraft)
+                            .textFieldStyle(.roundedBorder)
+                        HStack(spacing: CinefuseTokens.Spacing.s) {
+                            Button("Generate Dialogue", action: onGenerateDialogue)
+                                .tooltip("Generate spoken dialogue track", enabled: showTooltips)
+                                .buttonStyle(SecondaryActionButtonStyle())
+                            Button("Generate Score", action: onGenerateScore)
+                                .tooltip("Generate background music score", enabled: showTooltips)
+                                .buttonStyle(SecondaryActionButtonStyle())
+                            Button("Generate SFX", action: onGenerateSFX)
+                                .tooltip("Generate one-shot sound effect", enabled: showTooltips)
+                                .buttonStyle(SecondaryActionButtonStyle())
+                            Button("Mix", action: onMixAudio)
+                                .tooltip("Create mixed audio master for timeline", enabled: showTooltips)
+                                .buttonStyle(SecondaryActionButtonStyle())
+                            Button("Lip-sync", action: onLipSync)
+                                .tooltip("Run lip-sync pass for selected shot", enabled: showTooltips)
+                                .buttonStyle(SecondaryActionButtonStyle())
+                        }
+                    }
+                }
+                ScrollView {
+                    AudioLaneView(
+                        audioTracks: audioTracks,
+                        shotBoundaries: timelineShotBoundaries,
+                        syncModes: $trackSyncModes,
+                        themePalette: timelineThemeMode.palette
+                    )
+                }
+                .frame(maxHeight: .infinity, alignment: .top)
+            }
+        }
+    }
+
+    private var jobsPanelCard: some View {
+        JobsPanel(
+            jobs: jobs,
+            jobKindDraft: $jobKindDraft,
+            onCreateJob: onCreateJob,
+            onRetryJob: onRetryJob,
+            onDeleteJob: onDeleteJob,
+            showTooltips: showTooltips,
+            isCollapsed: $collapseJobsPanel
+        )
     }
 
     private func sidePaneContainer<Content: View>(@ViewBuilder content: () -> Content) -> some View {
@@ -2514,6 +2624,7 @@ enum EditorWorkspacePreset: String, CaseIterable, Identifiable {
     case editing
     case audio
     case review
+    case render
 
     var id: String { rawValue }
 
@@ -2522,6 +2633,7 @@ enum EditorWorkspacePreset: String, CaseIterable, Identifiable {
         case .editing: return "Edit"
         case .audio: return "Audio"
         case .review: return "Review"
+        case .render: return "Render"
         }
     }
 }
@@ -2544,10 +2656,12 @@ enum APIServerMode: String, CaseIterable, Identifiable {
 
 struct HorizontalTimelineTrack: View {
     let shots: [Shot]
+    let jobs: [Job]
     @Binding var selectedShotId: String?
     let onMoveShot: (IndexSet, Int) -> Void
     let showTooltips: Bool
     let themePalette: CinefuseTokens.ThemePalette
+    @Binding var isCollapsed: Bool
     @State private var orderedShots: [Shot] = []
     @State private var draggingShotId: String?
     @State private var dragSourceIndex: Int?
@@ -2558,7 +2672,7 @@ struct HorizontalTimelineTrack: View {
     var body: some View {
         SectionCard(
             title: "Timeline",
-//            subtitle: "Left-to-right playback order. Select a clip to cue preview."
+            isCollapsed: $isCollapsed
         ) {
             if visibleShots.isEmpty {
                 EmptyStateCard(
@@ -2578,6 +2692,7 @@ struct HorizontalTimelineTrack: View {
                                 TimelineClipCard(
                                     shot: shot,
                                     index: index,
+                                    progressPct: renderProgress(for: shot),
                                     trimRange: trimByShotId[shot.id],
                                     isSelected: selectedShotId == shot.id,
                                     canMoveLeft: index > 0,
@@ -2754,11 +2869,31 @@ struct HorizontalTimelineTrack: View {
         let newUpper = max(min(current.upperBound - amount, duration), current.lowerBound + 0.5)
         trimByShotId[shotId] = current.lowerBound...newUpper
     }
+
+    private func renderProgress(for shot: Shot) -> Int? {
+        let candidates = jobs.filter { $0.shotId == shot.id }.compactMap(\.progressPct)
+        if let latest = candidates.last {
+            return max(0, min(100, latest))
+        }
+        switch shot.status {
+        case "queued":
+            return 5
+        case "generating", "running":
+            return 35
+        case "ready":
+            return 100
+        case "failed":
+            return 0
+        default:
+            return nil
+        }
+    }
 }
 
 struct TimelineClipCard: View {
     let shot: Shot
     let index: Int
+    let progressPct: Int?
     let trimRange: ClosedRange<Double>?
     let isSelected: Bool
     let canMoveLeft: Bool
@@ -2789,6 +2924,14 @@ struct TimelineClipCard: View {
             Text("\(shot.modelTier.capitalized) · \(shot.durationSec ?? 0)s")
                 .font(CinefuseTokens.Typography.caption)
                 .foregroundStyle(CinefuseTokens.ColorRole.textSecondary)
+            if ["queued", "generating", "running"].contains(shot.status), let progressPct {
+                HStack(spacing: CinefuseTokens.Spacing.xxs) {
+                    ProgressView(value: Double(progressPct), total: 100)
+                    Text("\(progressPct)%")
+                        .font(CinefuseTokens.Typography.micro)
+                        .foregroundStyle(CinefuseTokens.ColorRole.textSecondary)
+                }
+            }
             if let trimRange {
                 Text("Trim \(trimRange.lowerBound.formatted(.number.precision(.fractionLength(0))))s-\(trimRange.upperBound.formatted(.number.precision(.fractionLength(0))))s")
                     .font(CinefuseTokens.Typography.micro)
@@ -2901,6 +3044,7 @@ struct EditorPreviewPanel: View {
     let shots: [Shot]
     @Binding var selectedShotId: String?
     let showTooltips: Bool
+    @Binding var isCollapsed: Bool
     @State private var queuePlayer = AVQueuePlayer()
 
     private var playableShots: [Shot] {
@@ -2917,7 +3061,7 @@ struct EditorPreviewPanel: View {
     var body: some View {
         SectionCard(
             title: "Preview",
-//            subtitle: "Playback queue follows timeline order."
+            isCollapsed: $isCollapsed
         ) {
             VStack(alignment: .leading, spacing: CinefuseTokens.Spacing.s) {
                 if playableShots.isEmpty {
@@ -3064,13 +3208,14 @@ struct StoryboardPanel: View {
     let scenes: [StoryScene]
     let onGenerateStoryboard: () -> Void
     let onReviseScene: (StoryScene, String) -> Void
+    @Binding var isCollapsed: Bool
 
     @State private var revisionDraftBySceneId: [String: String] = [:]
 
     var body: some View {
         SectionCard(
             title: "Storyboard",
-//            subtitle: "Generate and revise scene beats before creating detailed shots."
+            isCollapsed: $isCollapsed
         ) {
             VStack(alignment: .leading, spacing: CinefuseTokens.Spacing.s) {
                 Button("Generate Beat Sheet") {
@@ -3128,11 +3273,14 @@ struct CharacterPanel: View {
     let onCreateCharacter: () -> Void
     let onTrainCharacter: (String) -> Void
     let showTooltips: Bool
+    @Binding var isCollapsed: Bool
 
     var body: some View {
         SectionCard(
             title: "Characters",
             subtitle: "Create hero or supporting characters, then train and lock them to shots."
+            ,
+            isCollapsed: $isCollapsed
         ) {
             VStack(alignment: .leading, spacing: CinefuseTokens.Spacing.s) {
                 ViewThatFits(in: .horizontal) {
@@ -3231,20 +3379,36 @@ struct ShotsPanel: View {
     let onRetryShot: (String) -> Void
     let onDeleteShot: (String) -> Void
     let showTooltips: Bool
+    @Binding var isCollapsed: Bool
     @State private var pendingDeleteShotId: String?
+    @Environment(\.openURL) private var openURL
 
     private let inFlightStatuses: Set<String> = ["queued", "generating", "running"]
 
-    private func progressForShot(_ shotId: String) -> Int? {
-        let candidates = jobs.filter { $0.shotId == shotId }.compactMap(\.progressPct)
-        guard let latest = candidates.last else { return nil }
-        return max(0, min(100, latest))
+    private func renderProgress(for shot: Shot) -> Int? {
+        let candidates = jobs.filter { $0.shotId == shot.id }.compactMap(\.progressPct)
+        if let latest = candidates.last {
+            return max(0, min(100, latest))
+        }
+        switch shot.status {
+        case "queued":
+            return 5
+        case "generating", "running":
+            return 35
+        case "ready":
+            return 100
+        case "failed":
+            return 0
+        default:
+            return nil
+        }
     }
 
     var body: some View {
         SectionCard(
             title: "Shots",
-            subtitle: "1: Draft shot 2: Quote cost 3: Generate 4: Review"
+            subtitle: "1: Draft shot 2: Quote cost 3: Generate 4: Review",
+            isCollapsed: $isCollapsed
         ) {
             VStack(alignment: .leading, spacing: CinefuseTokens.Spacing.s) {
                 ViewThatFits(in: .horizontal) {
@@ -3370,14 +3534,25 @@ struct ShotsPanel: View {
                             .tooltip("Generate final clip for this shot", enabled: showTooltips)
                             .buttonStyle(SecondaryActionButtonStyle())
                             .disabled(inFlightStatuses.contains(shot.status) || shot.status == "ready")
-                            if let progress = progressForShot(shot.id) {
+                            if inFlightStatuses.contains(shot.status), let progress = renderProgress(for: shot) {
                                 HStack(spacing: CinefuseTokens.Spacing.xs) {
                                     ProgressView(value: Double(progress), total: 100)
                                         .frame(maxWidth: .infinity)
-                                    Text("\(progress)%")
+                                    Text("Rendering \(progress)%")
                                         .font(CinefuseTokens.Typography.caption)
                                         .foregroundStyle(CinefuseTokens.ColorRole.textSecondary)
                                 }
+                            }
+                            if let clipUrl = shot.clipUrl, let url = URL(string: clipUrl) {
+                                Button {
+                                    openURL(url)
+                                } label: {
+                                    Label("Play Render", systemImage: "play.circle")
+                                        .font(CinefuseTokens.Typography.caption.weight(.semibold))
+                                }
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .tooltip("Open rendered clip playback", enabled: showTooltips)
+                                .buttonStyle(SecondaryActionButtonStyle())
                             }
                             HStack(spacing: CinefuseTokens.Spacing.xs) {
                                 Button {
@@ -3437,12 +3612,13 @@ struct JobsPanel: View {
     let onRetryJob: (String) -> Void
     let onDeleteJob: (String) -> Void
     let showTooltips: Bool
+    @Binding var isCollapsed: Bool
     @State private var pendingDeleteJobId: String?
 
     var body: some View {
         SectionCard(
             title: "Jobs - Track render",
-//            subtitle: "Track render and processing work for this project."
+            isCollapsed: $isCollapsed
         ) {
             VStack(alignment: .leading, spacing: CinefuseTokens.Spacing.s) {
                 ViewThatFits(in: .horizontal) {

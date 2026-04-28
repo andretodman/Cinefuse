@@ -55,24 +55,46 @@ struct DestructiveActionButtonStyle: ButtonStyle {
 struct SectionCard<Content: View>: View {
     let title: String
     let subtitle: String?
+    let isCollapsed: Binding<Bool>?
     @ViewBuilder let content: Content
 
-    init(title: String, subtitle: String? = nil, @ViewBuilder content: () -> Content) {
+    init(
+        title: String,
+        subtitle: String? = nil,
+        isCollapsed: Binding<Bool>? = nil,
+        @ViewBuilder content: () -> Content
+    ) {
         self.title = title
         self.subtitle = subtitle
+        self.isCollapsed = isCollapsed
         self.content = content()
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: CinefuseTokens.Spacing.s) {
-            Text(title)
-                .font(CinefuseTokens.Typography.sectionTitle)
+            HStack(alignment: .center, spacing: CinefuseTokens.Spacing.s) {
+                Text(title)
+                    .font(CinefuseTokens.Typography.sectionTitle)
+                Spacer(minLength: CinefuseTokens.Spacing.s)
+                if let isCollapsed {
+                    Button {
+                        isCollapsed.wrappedValue.toggle()
+                    } label: {
+                        Image(systemName: isCollapsed.wrappedValue ? "rectangle.expand.vertical" : "rectangle.compress.vertical")
+                            .font(.system(size: CinefuseTokens.Control.iconSymbolSize, weight: .semibold))
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(isCollapsed.wrappedValue ? "Expand panel" : "Collapse panel")
+                }
+            }
             if let subtitle {
                 Text(subtitle)
                     .font(CinefuseTokens.Typography.caption)
                     .foregroundStyle(CinefuseTokens.ColorRole.textSecondary)
             }
-            content
+            if !(isCollapsed?.wrappedValue ?? false) {
+                content
+            }
         }
         .padding(CinefuseTokens.Spacing.m)
         .background(
