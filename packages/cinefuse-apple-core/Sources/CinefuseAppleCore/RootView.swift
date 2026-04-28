@@ -560,15 +560,19 @@ struct ProjectWorkspaceScreen: View {
     @State private var hasLiveEventsConnection = false
     @State private var editorSettings = EditorSettingsModel()
     @State private var showSettingsPanel = false
+    @State private var showDebugWindow = false
     @State private var showOnboardingSheet = false
     @State private var isCreatingSampleProject = false
     @State private var isCheckingServerHealth = false
     @State private var isServerReachable: Bool?
+    @State private var localFileRecordsByRemoteURL: [String: LocalFileRecord] = [:]
+    @State private var debugEventLog: [String] = []
     @AppStorage("cinefuse.server.mode") private var apiServerModeRaw = APIServerMode.local.rawValue
     @AppStorage("cinefuse.server.customBaseURL") private var customServerBaseURL = ""
     @AppStorage("cinefuse.onboarding.completed") private var onboardingCompleted = false
 
     private let inFlightStatuses: Set<String> = ["queued", "generating", "running", "processing"]
+    private let generatedFilesStore = GeneratedFilesStore()
     private var localServerBaseURL: String {
         ProcessInfo.processInfo.environment["CINEFUSE_API_BASE_URL"] ?? "http://localhost:4000"
     }
@@ -625,6 +629,65 @@ struct ProjectWorkspaceScreen: View {
         )
     }
 
+    private var projectDetailView: some View {
+        ProjectDetailScreen(
+            project: selectedProject,
+            isLoadingProjectDetails: isLoadingProjectDetails,
+            scenes: scenes,
+            characters: characters,
+            shots: shots,
+            audioTracks: audioTracks,
+            jobs: jobs,
+            localFileRecordsByRemoteURL: localFileRecordsByRemoteURL,
+            debugEventLog: debugEventLog,
+            showDebugWindow: $showDebugWindow,
+            shotPromptDraft: $shotPromptDraft,
+            shotModelTierDraft: $shotModelTierDraft,
+            selectedCharacterLockId: $selectedCharacterLockId,
+            audioTrackTitleDraft: $audioTrackTitleDraft,
+            exportResolution: $exportResolution,
+            exportCaptionsEnabled: $exportCaptionsEnabled,
+            transitionStyle: $transitionStyle,
+            exportIncludeArchive: $exportIncludeArchive,
+            exportPublishTarget: $exportPublishTarget,
+            timelineThemeMode: timelineThemeModeBinding,
+            quotedShotCost: quotedShotCost,
+            newCharacterName: $newCharacterName,
+            newCharacterDescription: $newCharacterDescription,
+            jobKindDraft: $jobKindDraft,
+            onCloseProject: closeProject,
+            onDeleteProject: { Task { await deleteSelectedProject() } },
+            onRenameProject: { title in Task { await renameSelectedProject(title: title) } },
+            onCreateCharacter: { Task { await createCharacter() } },
+            onTrainCharacter: { characterId in Task { await trainCharacter(characterId: characterId) } },
+            onGenerateStoryboard: { Task { await generateStoryboard() } },
+            onReviseScene: { scene, revision in Task { await reviseScene(scene: scene, revision: revision) } },
+            onQuote: { Task { await quoteShot() } },
+            onCreateShot: { Task { await createShot() } },
+            onGenerateShot: { shotId in Task { await generateShot(shotId: shotId) } },
+            onRetryShot: { shotId in Task { await retryShot(shotId: shotId) } },
+            onDeleteShot: { shotId in Task { await deleteShotFromProject(shotId: shotId) } },
+            onCreateJob: { Task { await createJob() } },
+            onRetryJob: { jobId in Task { await retryJob(jobId: jobId) } },
+            onDeleteJob: { jobId in Task { await deleteJobFromProject(jobId: jobId) } },
+            onReorderShots: { from, to in Task { await reorderShots(from: from, to: to) } },
+            onGenerateDialogue: { Task { await generateDialogueTrack() } },
+            onGenerateScore: { Task { await generateScoreTrack() } },
+            onGenerateSFX: { Task { await generateSFXTrack() } },
+            onMixAudio: { Task { await mixAudioTrack() } },
+            onLipSync: { Task { await generateLipSyncTrack() } },
+            onPreviewStitch: { Task { await previewStitchTimeline() } },
+            onApplyTransitions: { Task { await applyTimelineTransitions() } },
+            onColorMatch: { Task { await applyTimelineColorMatch() } },
+            onBakeCaptions: { Task { await bakeTimelineCaptions() } },
+            onNormalizeLoudness: { Task { await normalizeTimelineLoudness() } },
+            onFinalStitch: { Task { await finalStitchTimeline() } },
+            onExportFinal: { Task { await exportFinalTimeline() } },
+            onOpenDebugWindow: { showDebugWindow = true },
+            showTooltips: editorSettings.showTooltips
+        )
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: CinefuseTokens.Spacing.xxs) {
             header
@@ -640,58 +703,7 @@ struct ProjectWorkspaceScreen: View {
                     isLoading: model.isLoading
                 )
             } detail: {
-                ProjectDetailScreen(
-                    project: selectedProject,
-                    isLoadingProjectDetails: isLoadingProjectDetails,
-                    scenes: scenes,
-                    characters: characters,
-                    shots: shots,
-                    audioTracks: audioTracks,
-                    jobs: jobs,
-                    shotPromptDraft: $shotPromptDraft,
-                    shotModelTierDraft: $shotModelTierDraft,
-                    selectedCharacterLockId: $selectedCharacterLockId,
-                    audioTrackTitleDraft: $audioTrackTitleDraft,
-                    exportResolution: $exportResolution,
-                    exportCaptionsEnabled: $exportCaptionsEnabled,
-                    transitionStyle: $transitionStyle,
-                    exportIncludeArchive: $exportIncludeArchive,
-                    exportPublishTarget: $exportPublishTarget,
-                    timelineThemeMode: timelineThemeModeBinding,
-                    quotedShotCost: quotedShotCost,
-                    newCharacterName: $newCharacterName,
-                    newCharacterDescription: $newCharacterDescription,
-                    jobKindDraft: $jobKindDraft,
-                    onCloseProject: closeProject,
-                    onDeleteProject: { Task { await deleteSelectedProject() } },
-                    onRenameProject: { title in Task { await renameSelectedProject(title: title) } },
-                    onCreateCharacter: { Task { await createCharacter() } },
-                    onTrainCharacter: { characterId in Task { await trainCharacter(characterId: characterId) } },
-                    onGenerateStoryboard: { Task { await generateStoryboard() } },
-                    onReviseScene: { scene, revision in Task { await reviseScene(scene: scene, revision: revision) } },
-                    onQuote: { Task { await quoteShot() } },
-                    onCreateShot: { Task { await createShot() } },
-                    onGenerateShot: { shotId in Task { await generateShot(shotId: shotId) } },
-                    onRetryShot: { shotId in Task { await retryShot(shotId: shotId) } },
-                    onDeleteShot: { shotId in Task { await deleteShotFromProject(shotId: shotId) } },
-                    onCreateJob: { Task { await createJob() } },
-                    onRetryJob: { jobId in Task { await retryJob(jobId: jobId) } },
-                    onDeleteJob: { jobId in Task { await deleteJobFromProject(jobId: jobId) } },
-                    onReorderShots: { from, to in Task { await reorderShots(from: from, to: to) } },
-                    onGenerateDialogue: { Task { await generateDialogueTrack() } },
-                    onGenerateScore: { Task { await generateScoreTrack() } },
-                    onGenerateSFX: { Task { await generateSFXTrack() } },
-                    onMixAudio: { Task { await mixAudioTrack() } },
-                    onLipSync: { Task { await generateLipSyncTrack() } },
-                    onPreviewStitch: { Task { await previewStitchTimeline() } },
-                    onApplyTransitions: { Task { await applyTimelineTransitions() } },
-                    onColorMatch: { Task { await applyTimelineColorMatch() } },
-                    onBakeCaptions: { Task { await bakeTimelineCaptions() } },
-                    onNormalizeLoudness: { Task { await normalizeTimelineLoudness() } },
-                    onFinalStitch: { Task { await finalStitchTimeline() } },
-                    onExportFinal: { Task { await exportFinalTimeline() } },
-                    showTooltips: editorSettings.showTooltips
-                )
+                projectDetailView
             }
             .onChange(of: selectedProjectId) { _, _ in
                 if let selectedProjectId {
@@ -705,6 +717,9 @@ struct ProjectWorkspaceScreen: View {
         .padding(.top, CinefuseTokens.Spacing.xxs)
         .sheet(isPresented: $isCreateProjectSheetPresented) {
             createProjectSheet
+        }
+        .sheet(isPresented: $showDebugWindow) {
+            DebugGenerationWindow(logLines: debugEventLog)
         }
         .sheet(isPresented: $showOnboardingSheet) {
             onboardingSheet
@@ -1255,6 +1270,8 @@ struct ProjectWorkspaceScreen: View {
         shots = []
         audioTracks = []
         jobs = []
+        localFileRecordsByRemoteURL = [:]
+        debugEventLog = []
         if !editorSettings.restoreLastOpenWorkspace {
             lastProjectId = ""
         }
@@ -1280,6 +1297,44 @@ struct ProjectWorkspaceScreen: View {
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
             isCreateProjectTitleFocused = true
+        }
+    }
+
+    private func appendDebugEvent(_ message: String) {
+        let timestamp = ISO8601DateFormatter().string(from: Date())
+        let line = "[\(timestamp)] \(message)"
+        debugEventLog.append(line)
+        if debugEventLog.count > 200 {
+            debugEventLog.removeFirst(debugEventLog.count - 200)
+        }
+        DiagnosticsLogger.renderStatus(message: line)
+    }
+
+    private func syncGeneratedFiles(projectId: String, shots: [Shot], jobs: [Job]) async {
+        for shot in shots {
+            guard let clipUrl = shot.clipUrl, !clipUrl.isEmpty else { continue }
+            let localRecord = await generatedFilesStore.syncFile(
+                projectId: projectId,
+                remoteURLString: clipUrl,
+                preferredBaseName: "shot-\(shot.orderIndex ?? 0)-\(shot.id)"
+            )
+            await MainActor.run {
+                localFileRecordsByRemoteURL[clipUrl] = localRecord
+                appendDebugEvent("shot file sync \(localRecord.status.rawValue) shot=\(shot.id)")
+            }
+        }
+
+        for job in jobs where job.kind == "export" {
+            guard let outputUrl = job.outputUrl, !outputUrl.isEmpty else { continue }
+            let localRecord = await generatedFilesStore.syncFile(
+                projectId: projectId,
+                remoteURLString: outputUrl,
+                preferredBaseName: "export-\(job.id)"
+            )
+            await MainActor.run {
+                localFileRecordsByRemoteURL[outputUrl] = localRecord
+                appendDebugEvent("export file sync \(localRecord.status.rawValue) job=\(job.id)")
+            }
         }
     }
 
@@ -1325,8 +1380,15 @@ struct ProjectWorkspaceScreen: View {
                 audioTracks = latestTimeline.audioTracks
                 jobs = latestJobs.filter { $0.status != "deleted" }
             }
+            await syncGeneratedFiles(
+                projectId: selectedProjectId,
+                shots: latestTimeline.shots,
+                jobs: latestJobs
+            )
+            appendDebugEvent("project refresh complete shots=\(latestTimeline.shots.count) jobs=\(latestJobs.count)")
             model.errorMessage = nil
         } catch {
+            appendDebugEvent("project refresh failed reason=\(error.localizedDescription)")
             model.errorMessage = error.localizedDescription
         }
     }
@@ -1358,10 +1420,17 @@ struct ProjectWorkspaceScreen: View {
                     if event.type == "connected" {
                         continue
                     }
+                    DiagnosticsLogger.projectEventReceived(
+                        type: event.type,
+                        projectId: event.projectId,
+                        shotId: event.shotId,
+                        jobId: event.jobId
+                    )
                     applyProjectEvent(event)
                 }
             } catch {
                 // Background event stream failures should not block the editor flow.
+                appendDebugEvent("event stream error reason=\(error.localizedDescription)")
             }
 
             hasLiveEventsConnection = false
@@ -1370,6 +1439,7 @@ struct ProjectWorkspaceScreen: View {
     }
 
     private func applyProjectEvent(_ event: ProjectEvent) {
+        appendDebugEvent("event \(event.type) shot=\(event.shotId ?? "-") job=\(event.jobId ?? "-") status=\(event.status ?? "-")")
         switch event.type {
         case "shot_status_changed":
             guard let shotId = event.shotId else { return }
@@ -1389,6 +1459,11 @@ struct ProjectWorkspaceScreen: View {
                     characterLocks: shot.characterLocks
                 )
             }
+            if event.status == "ready" {
+                Task {
+                    await loadSelectedProjectDetails(showLoadingIndicator: false)
+                }
+            }
         case "job_status_changed":
             guard let jobId = event.jobId else { return }
             if event.status == "deleted" {
@@ -1405,6 +1480,10 @@ struct ProjectWorkspaceScreen: View {
                     status: event.status ?? job.status,
                     progressPct: event.progressPct ?? job.progressPct,
                     costToUsCents: job.costToUsCents,
+                    promptText: job.promptText,
+                    modelId: job.modelId,
+                    errorMessage: job.errorMessage,
+                    outputUrl: job.outputUrl,
                     updatedAt: event.timestamp
                 )
             } else if let shotId = event.shotId {
@@ -1417,9 +1496,18 @@ struct ProjectWorkspaceScreen: View {
                         status: event.status ?? "queued",
                         progressPct: event.progressPct,
                         costToUsCents: 0,
+                        promptText: nil,
+                        modelId: nil,
+                        errorMessage: nil,
+                        outputUrl: nil,
                         updatedAt: event.timestamp
                     )
                 )
+            }
+            if event.status == "done" {
+                Task {
+                    await loadSelectedProjectDetails(showLoadingIndicator: false)
+                }
             }
         case "shot_deleted":
             guard let shotId = event.shotId else { return }
@@ -1438,6 +1526,7 @@ struct ProjectWorkspaceScreen: View {
     private func createShot() async {
         guard let selectedProjectId else { return }
         model.errorMessage = nil
+        appendDebugEvent("create shot requested project=\(selectedProjectId)")
         do {
             let createdShot = try await api.createShot(
                 token: model.bearerToken,
@@ -1460,8 +1549,10 @@ struct ProjectWorkspaceScreen: View {
             }
             shotPromptDraft = ""
             quotedShotCost = nil
+            appendDebugEvent("create shot success shot=\(createdShot.id)")
             await loadSelectedProjectDetails(showLoadingIndicator: false)
         } catch {
+            appendDebugEvent("create shot failed reason=\(error.localizedDescription)")
             model.errorMessage = error.localizedDescription
         }
     }
@@ -1551,6 +1642,7 @@ struct ProjectWorkspaceScreen: View {
     private func generateShot(shotId: String) async {
         guard let selectedProjectId else { return }
         model.errorMessage = nil
+        appendDebugEvent("generate shot requested shot=\(shotId)")
         do {
             let generation = try await api.generateShot(
                 token: model.bearerToken,
@@ -1558,8 +1650,10 @@ struct ProjectWorkspaceScreen: View {
                 shotId: shotId
             )
             quotedShotCost = generation.quote
+            appendDebugEvent("generate shot queued shot=\(shotId) job=\(generation.job.id)")
             await loadSelectedProjectDetails(showLoadingIndicator: false)
         } catch {
+            appendDebugEvent("generate shot failed shot=\(shotId) reason=\(error.localizedDescription)")
             model.errorMessage = error.localizedDescription
         }
     }
@@ -1854,9 +1948,10 @@ struct ProjectWorkspaceScreen: View {
 
     private func exportFinalTimeline() async {
         guard let selectedProjectId else { return }
+        appendDebugEvent("export requested project=\(selectedProjectId) target=\(exportPublishTarget)")
         do {
             let effectivePublishTarget = exportPublishTarget == "pubfuse" ? "pubfuse" : "none"
-            _ = try await api.exportFinal(
+            let result = try await api.exportFinal(
                 token: model.bearerToken,
                 projectId: selectedProjectId,
                 resolution: exportResolution,
@@ -1864,8 +1959,10 @@ struct ProjectWorkspaceScreen: View {
                 includeArchive: exportIncludeArchive,
                 publishTarget: effectivePublishTarget
             )
+            appendDebugEvent("export queued job=\(result.id)")
             await loadSelectedProjectDetails(showLoadingIndicator: false)
         } catch {
+            appendDebugEvent("export failed reason=\(error.localizedDescription)")
             model.errorMessage = error.localizedDescription
         }
     }
@@ -1933,6 +2030,9 @@ struct ProjectDetailScreen: View {
     let shots: [Shot]
     let audioTracks: [AudioTrack]
     let jobs: [Job]
+    let localFileRecordsByRemoteURL: [String: LocalFileRecord]
+    let debugEventLog: [String]
+    @Binding var showDebugWindow: Bool
     @Binding var shotPromptDraft: String
     @Binding var shotModelTierDraft: String
     @Binding var selectedCharacterLockId: String
@@ -1976,6 +2076,7 @@ struct ProjectDetailScreen: View {
     let onNormalizeLoudness: () -> Void
     let onFinalStitch: () -> Void
     let onExportFinal: () -> Void
+    let onOpenDebugWindow: () -> Void
     let showTooltips: Bool
     @AppStorage("cinefuse.editor.leftPaneWidth") private var leftPaneWidth: Double = 460
     @AppStorage("cinefuse.editor.rightPaneWidth") private var rightPaneWidth: Double = 460
@@ -2002,6 +2103,21 @@ struct ProjectDetailScreen: View {
 
     private var isRenderWorkspace: Bool {
         (EditorWorkspacePreset(rawValue: workspacePresetRaw) ?? .editing) == .render
+    }
+
+    private var latestExportArtifactStatus: ArtifactStatusPresentation? {
+        guard let latestExportJob = jobs
+            .filter({ $0.kind == "export" })
+            .max(by: { parseDate($0.updatedAt) < parseDate($1.updatedAt) }) else {
+            return nil
+        }
+        let localRecord = latestExportJob.outputUrl.flatMap { localFileRecordsByRemoteURL[$0] }
+        return artifactStatusPresentation(job: latestExportJob, localRecord: localRecord)
+    }
+
+    private func parseDate(_ value: String?) -> Date {
+        guard let value else { return .distantPast }
+        return ISO8601DateFormatter().date(from: value) ?? .distantPast
     }
 
     var body: some View {
@@ -2249,6 +2365,7 @@ struct ProjectDetailScreen: View {
                 ShotsPanel(
                     shots: shots,
                     jobs: jobs,
+                    localFileRecordsByRemoteURL: localFileRecordsByRemoteURL,
                     characterOptions: characters,
                     shotPromptDraft: $shotPromptDraft,
                     shotModelTierDraft: $shotModelTierDraft,
@@ -2371,6 +2488,18 @@ struct ProjectDetailScreen: View {
                             }
                             .tooltip("Render and export the current timeline", enabled: showTooltips)
                                 .buttonStyle(PrimaryActionButtonStyle())
+                            if let exportStatus = latestExportArtifactStatus {
+                                GenerationStatusDot(status: exportStatus)
+                                    .tooltip(exportStatus.summary, enabled: showTooltips)
+                                    .onTapGesture {
+                                        showDebugWindow = true
+                                    }
+                            }
+                            Button("Debug Window") {
+                                onOpenDebugWindow()
+                            }
+                            .buttonStyle(SecondaryActionButtonStyle())
+                            .tooltip("Open prompt and file generation diagnostics", enabled: showTooltips)
                         }.padding(CinefuseTokens.Spacing.s)
                     }
                 }.padding(CinefuseTokens.Spacing.s)
@@ -2446,6 +2575,7 @@ struct ProjectDetailScreen: View {
     private var jobsPanelCard: some View {
         JobsPanel(
             jobs: jobs,
+            localFileRecordsByRemoteURL: localFileRecordsByRemoteURL,
             jobKindDraft: $jobKindDraft,
             onCreateJob: onCreateJob,
             onRetryJob: onRetryJob,
@@ -3398,6 +3528,7 @@ struct CharacterPanel: View {
 struct ShotsPanel: View {
     let shots: [Shot]
     let jobs: [Job]
+    let localFileRecordsByRemoteURL: [String: LocalFileRecord]
     let characterOptions: [CharacterProfile]
     @Binding var shotPromptDraft: String
     @Binding var shotModelTierDraft: String
@@ -3411,6 +3542,7 @@ struct ShotsPanel: View {
     let showTooltips: Bool
     @Binding var isCollapsed: Bool
     @State private var pendingDeleteShotId: String?
+    @State private var selectedDiagnostics: ArtifactStatusPresentation?
     @Environment(\.openURL) private var openURL
 
     private let inFlightStatuses: Set<String> = ["queued", "generating", "running", "processing"]
@@ -3465,6 +3597,16 @@ struct ShotsPanel: View {
             return "Render diagnostics: \(statusText) \(progressText) - no update in \(Int(age))s"
         }
         return "Render diagnostics: \(statusText) \(progressText) - \(updatedText)"
+    }
+
+    private func statusPresentation(for shot: Shot) -> ArtifactStatusPresentation {
+        let latest = latestJob(for: shot.id)
+        let localRecord = shot.clipUrl.flatMap { localFileRecordsByRemoteURL[$0] }
+        return shotArtifactStatusPresentation(
+            shot: shot,
+            job: latest,
+            localRecord: localRecord
+        )
     }
 
     var body: some View {
@@ -3572,7 +3714,15 @@ struct ShotsPanel: View {
                                 Text(shot.modelTier.capitalized)
                                     .font(CinefuseTokens.Typography.caption)
                                     .foregroundStyle(CinefuseTokens.ColorRole.textSecondary)
-                                StatusBadge(status: shot.status)
+                                HStack(spacing: CinefuseTokens.Spacing.xs) {
+                                    StatusBadge(status: shot.status)
+                                    let presentation = statusPresentation(for: shot)
+                                    GenerationStatusDot(status: presentation)
+                                        .tooltip(presentation.summary, enabled: showTooltips)
+                                        .onTapGesture {
+                                            selectedDiagnostics = presentation
+                                        }
+                                }
                                 if let lock = shot.characterLocks?.first, !lock.isEmpty {
                                     Text("Character lock")
                                         .font(CinefuseTokens.Typography.caption)
@@ -3670,11 +3820,15 @@ struct ShotsPanel: View {
         } message: {
             Text("This removes the shot and related render jobs from the project.")
         }
+        .sheet(item: $selectedDiagnostics) { details in
+            StatusDetailsSheet(details: details)
+        }
     }
 }
 
 struct JobsPanel: View {
     let jobs: [Job]
+    let localFileRecordsByRemoteURL: [String: LocalFileRecord]
     @Binding var jobKindDraft: String
     let onCreateJob: () -> Void
     let onRetryJob: (String) -> Void
@@ -3682,6 +3836,12 @@ struct JobsPanel: View {
     let showTooltips: Bool
     @Binding var isCollapsed: Bool
     @State private var pendingDeleteJobId: String?
+    @State private var selectedDiagnostics: ArtifactStatusPresentation?
+
+    private func statusPresentation(for job: Job) -> ArtifactStatusPresentation {
+        let localRecord = job.outputUrl.flatMap { localFileRecordsByRemoteURL[$0] }
+        return artifactStatusPresentation(job: job, localRecord: localRecord)
+    }
 
     var body: some View {
         SectionCard(
@@ -3740,6 +3900,12 @@ struct JobsPanel: View {
                                         Text(job.kind.capitalized)
                                             .font(CinefuseTokens.Typography.body)
                                         StatusBadge(status: job.status)
+                                        let presentation = statusPresentation(for: job)
+                                        GenerationStatusDot(status: presentation)
+                                            .tooltip(presentation.summary, enabled: showTooltips)
+                                            .onTapGesture {
+                                                selectedDiagnostics = presentation
+                                            }
                                         Spacer()
                                         Text("Cost to us: \(job.costToUsCents)c")
                                             .font(CinefuseTokens.Typography.caption)
@@ -3804,6 +3970,207 @@ struct JobsPanel: View {
         } message: {
             Text("This removes the job from the render track.")
         }
+        .sheet(item: $selectedDiagnostics) { details in
+            StatusDetailsSheet(details: details)
+        }
+    }
+}
+
+struct ArtifactStatusPresentation: Identifiable {
+    enum Level {
+        case success
+        case warning
+        case error
+    }
+
+    let id = UUID()
+    let level: Level
+    let summary: String
+    let details: String
+}
+
+private func artifactStatusPresentation(job: Job, localRecord: LocalFileRecord?) -> ArtifactStatusPresentation {
+    if job.status == "failed" || localRecord?.status == .downloadFailed || localRecord?.status == .writeFailed {
+        let details = [
+            "Job: \(job.kind) / \(job.status)",
+            "Model: \(job.modelId ?? "unknown")",
+            "Prompt: \(job.promptText ?? "n/a")",
+            "Remote URL: \(job.outputUrl ?? "n/a")",
+            "Local file: \(localRecord?.localPath ?? "not available")",
+            "Error: \(job.errorMessage ?? localRecord?.errorMessage ?? "unknown")"
+        ].joined(separator: "\n")
+        return ArtifactStatusPresentation(
+            level: .error,
+            summary: "File generation failed or file sync error",
+            details: details
+        )
+    }
+
+    if localRecord?.status == .synced || localRecord?.status == .alreadyPresent {
+        let details = [
+            "Job: \(job.kind) / \(job.status)",
+            "Model: \(job.modelId ?? "unknown")",
+            "Prompt: \(job.promptText ?? "n/a")",
+            "Remote URL: \(job.outputUrl ?? "n/a")",
+            "Local file: \(localRecord?.localPath ?? "n/a")",
+            "File sync: \(localRecord?.status.rawValue ?? "n/a")"
+        ].joined(separator: "\n")
+        return ArtifactStatusPresentation(
+            level: .success,
+            summary: "Local file created in Documents/Cinefuse Generated",
+            details: details
+        )
+    }
+
+    let waitingDetails = [
+        "Job: \(job.kind) / \(job.status)",
+        "Progress: \(job.progressPct.map(String.init) ?? "n/a")%",
+        "Prompt: \(job.promptText ?? "n/a")",
+        "Remote URL: \(job.outputUrl ?? "n/a")",
+        "Local file: pending"
+    ].joined(separator: "\n")
+    return ArtifactStatusPresentation(
+        level: .warning,
+        summary: "Generation or local file sync is still in progress",
+        details: waitingDetails
+    )
+}
+
+private func shotArtifactStatusPresentation(shot: Shot, job: Job?, localRecord: LocalFileRecord?) -> ArtifactStatusPresentation {
+    if shot.status == "failed" {
+        let details = [
+            "Shot: \(shot.id)",
+            "Status: \(shot.status)",
+            "Prompt: \(shot.prompt)",
+            "Model tier: \(shot.modelTier)",
+            "Error: \(job?.errorMessage ?? localRecord?.errorMessage ?? "unknown")"
+        ].joined(separator: "\n")
+        return ArtifactStatusPresentation(level: .error, summary: "Shot generation failed", details: details)
+    }
+
+    if localRecord?.status == .synced || localRecord?.status == .alreadyPresent {
+        let details = [
+            "Shot: \(shot.id)",
+            "Status: \(shot.status)",
+            "Prompt: \(shot.prompt)",
+            "Model tier: \(shot.modelTier)",
+            "Remote URL: \(shot.clipUrl ?? "n/a")",
+            "Local file: \(localRecord?.localPath ?? "n/a")",
+            "Model: \(job?.modelId ?? "unknown")"
+        ].joined(separator: "\n")
+        return ArtifactStatusPresentation(level: .success, summary: "Shot file is available locally", details: details)
+    }
+
+    if localRecord?.status == .downloadFailed || localRecord?.status == .writeFailed {
+        let details = [
+            "Shot: \(shot.id)",
+            "Status: \(shot.status)",
+            "Prompt: \(shot.prompt)",
+            "Remote URL: \(shot.clipUrl ?? "n/a")",
+            "Local file: unavailable",
+            "Error: \(localRecord?.errorMessage ?? "file sync failed")"
+        ].joined(separator: "\n")
+        return ArtifactStatusPresentation(level: .error, summary: "Shot rendered but local file sync failed", details: details)
+    }
+
+    let details = [
+        "Shot: \(shot.id)",
+        "Status: \(shot.status)",
+        "Prompt: \(shot.prompt)",
+        "Model tier: \(shot.modelTier)",
+        "Progress: \(job?.progressPct.map(String.init) ?? "n/a")%"
+    ].joined(separator: "\n")
+    return ArtifactStatusPresentation(level: .warning, summary: "Shot generation still in progress", details: details)
+}
+
+struct GenerationStatusDot: View {
+    let status: ArtifactStatusPresentation
+
+    private var color: Color {
+        switch status.level {
+        case .success:
+            return .green
+        case .warning:
+            return .yellow
+        case .error:
+            return .red
+        }
+    }
+
+    var body: some View {
+        Circle()
+            .fill(color)
+            .frame(width: 10, height: 10)
+            .overlay(
+                Circle()
+                    .stroke(CinefuseTokens.ColorRole.borderSubtle, lineWidth: 1)
+            )
+    }
+}
+
+struct StatusDetailsSheet: View {
+    let details: ArtifactStatusPresentation
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: CinefuseTokens.Spacing.s) {
+            HStack {
+                Text(details.summary)
+                    .font(CinefuseTokens.Typography.sectionTitle)
+                Spacer()
+                Button("Close") {
+                    dismiss()
+                }
+                .buttonStyle(SecondaryActionButtonStyle())
+            }
+            ScrollView {
+                Text(details.details)
+                    .font(CinefuseTokens.Typography.caption)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .textSelection(.enabled)
+            }
+        }
+        .padding(CinefuseTokens.Spacing.m)
+        .frame(minWidth: 520, minHeight: 320)
+    }
+}
+
+struct DebugGenerationWindow: View {
+    let logLines: [String]
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: CinefuseTokens.Spacing.s) {
+            HStack {
+                Text("Debug Generation Window")
+                    .font(CinefuseTokens.Typography.sectionTitle)
+                Spacer()
+                Button("Close") {
+                    dismiss()
+                }
+                .buttonStyle(SecondaryActionButtonStyle())
+            }
+
+            if logLines.isEmpty {
+                EmptyStateCard(
+                    title: "No diagnostics captured yet",
+                    message: "Generate a shot or export to see prompts, statuses, and file-sync events."
+                )
+            } else {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: CinefuseTokens.Spacing.xs) {
+                        ForEach(Array(logLines.enumerated()), id: \.offset) { _, line in
+                            Text(line)
+                                .font(CinefuseTokens.Typography.caption)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .textSelection(.enabled)
+                        }
+                    }
+                }
+            }
+        }
+        .padding(CinefuseTokens.Spacing.m)
+        .frame(minWidth: 680, minHeight: 420)
     }
 }
 

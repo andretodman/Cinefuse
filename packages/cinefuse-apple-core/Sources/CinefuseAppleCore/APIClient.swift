@@ -209,7 +209,7 @@ public struct APIClient {
         var request = URLRequest(url: buildURL(path: "\(Self.cinefusePrefix)/projects/\(projectId)/timeline"))
         request.httpMethod = "GET"
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let (data, response) = try await performDataRequest(request, context: "listTimeline")
         try validate(response: response, data: data)
         return try JSONDecoder().decode(TimelineResponse.self, from: data)
     }
@@ -507,7 +507,7 @@ public struct APIClient {
             "publishTarget": AnyEncodable(publishTarget),
             "publishToPubfuse": AnyEncodable(publishTarget == "pubfuse")
         ] as [String: AnyEncodable])
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let (data, response) = try await performDataRequest(request, context: "exportFinal")
         try validate(response: response, data: data)
         return try JSONDecoder().decode(CreateJobResponse.self, from: data).job
     }
@@ -593,7 +593,7 @@ public struct APIClient {
             "modelTier": AnyEncodable(modelTier),
             "characterLocks": AnyEncodable(characterLocks)
         ] as [String: AnyEncodable])
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let (data, response) = try await performDataRequest(request, context: "createShot")
         try validate(response: response, data: data)
         return try JSONDecoder().decode(CreateShotResponse.self, from: data).shot
     }
@@ -634,7 +634,7 @@ public struct APIClient {
         var request = URLRequest(url: buildURL(path: "\(Self.cinefusePrefix)/projects/\(projectId)/shots/\(shotId)/generate"))
         request.httpMethod = "POST"
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let (data, response) = try await performDataRequest(request, context: "generateShot")
         try validate(response: response, data: data)
         return try JSONDecoder().decode(GenerateShotResponse.self, from: data)
     }
@@ -660,7 +660,7 @@ public struct APIClient {
         var request = URLRequest(url: buildURL(path: "\(Self.cinefusePrefix)/projects/\(projectId)/jobs"))
         request.httpMethod = "GET"
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let (data, response) = try await performDataRequest(request, context: "listJobs")
         try validate(response: response, data: data)
         return try JSONDecoder().decode(ListJobsResponse.self, from: data).jobs
     }
@@ -721,9 +721,18 @@ public struct APIClient {
                     request.httpMethod = "GET"
                     request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
                     request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
+                    DiagnosticsLogger.apiRequestStart(method: "GET", url: request.url ?? baseURL, context: "streamProjectEvents")
 
                     let (bytes, response) = try await URLSession.shared.bytes(for: request)
                     try validateStatus(response: response)
+                    if let http = response as? HTTPURLResponse {
+                        DiagnosticsLogger.apiRequestSuccess(
+                            method: "GET",
+                            url: request.url ?? baseURL,
+                            statusCode: http.statusCode,
+                            context: "streamProjectEvents"
+                        )
+                    }
 
                     var dataLines: [String] = []
                     for try await line in bytes.lines {
@@ -754,6 +763,12 @@ public struct APIClient {
                     }
                     continuation.finish()
                 } catch {
+                    DiagnosticsLogger.apiRequestFailure(
+                        method: "GET",
+                        url: buildURL(path: "\(Self.cinefusePrefix)/projects/\(projectId)/events"),
+                        context: "streamProjectEvents",
+                        message: error.localizedDescription
+                    )
                     continuation.finish(throwing: error)
                 }
             }
@@ -782,6 +797,22 @@ public struct APIClient {
         }
 
         return components.url ?? baseURL
+    }
+
+    private func performDataRequest(_ request: URLRequest, context: String) async throws -> (Data, URLResponse) {
+        let method = request.httpMethod ?? "GET"
+        let url = request.url ?? baseURL
+        DiagnosticsLogger.apiRequestStart(method: method, url: url, context: context)
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            if let http = response as? HTTPURLResponse {
+                DiagnosticsLogger.apiRequestSuccess(method: method, url: url, statusCode: http.statusCode, context: context)
+            }
+            return (data, response)
+        } catch {
+            DiagnosticsLogger.apiRequestFailure(method: method, url: url, context: context, message: error.localizedDescription)
+            throw error
+        }
     }
 
     private func validateAuth(response: URLResponse, data: Data) throws {

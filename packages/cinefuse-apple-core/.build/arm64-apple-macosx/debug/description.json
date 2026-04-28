@@ -36,6 +36,14 @@
         },
         {
           "kind" : "file",
+          "name" : "/Users/atodman/Documents/GitHub/Cinefuse/packages/cinefuse-apple-core/Sources/CinefuseAppleCore/DiagnosticsLogger.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/atodman/Documents/GitHub/Cinefuse/packages/cinefuse-apple-core/Sources/CinefuseAppleCore/GeneratedFilesStore.swift"
+        },
+        {
+          "kind" : "file",
           "name" : "/Users/atodman/Documents/GitHub/Cinefuse/packages/cinefuse-apple-core/Sources/CinefuseAppleCore/Models.swift"
         },
         {
@@ -62,6 +70,8 @@
         "/Users/atodman/Documents/GitHub/Cinefuse/packages/cinefuse-apple-core/.build/arm64-apple-macosx/debug/CinefuseAppleCore.build/APIClient.swift.o",
         "/Users/atodman/Documents/GitHub/Cinefuse/packages/cinefuse-apple-core/.build/arm64-apple-macosx/debug/CinefuseAppleCore.build/AppComponents.swift.o",
         "/Users/atodman/Documents/GitHub/Cinefuse/packages/cinefuse-apple-core/.build/arm64-apple-macosx/debug/CinefuseAppleCore.build/DesignTokens.swift.o",
+        "/Users/atodman/Documents/GitHub/Cinefuse/packages/cinefuse-apple-core/.build/arm64-apple-macosx/debug/CinefuseAppleCore.build/DiagnosticsLogger.swift.o",
+        "/Users/atodman/Documents/GitHub/Cinefuse/packages/cinefuse-apple-core/.build/arm64-apple-macosx/debug/CinefuseAppleCore.build/GeneratedFilesStore.swift.o",
         "/Users/atodman/Documents/GitHub/Cinefuse/packages/cinefuse-apple-core/.build/arm64-apple-macosx/debug/CinefuseAppleCore.build/Models.swift.o",
         "/Users/atodman/Documents/GitHub/Cinefuse/packages/cinefuse-apple-core/.build/arm64-apple-macosx/debug/CinefuseAppleCore.build/RootView.swift.o",
         "/Users/atodman/Documents/GitHub/Cinefuse/packages/cinefuse-apple-core/.build/arm64-apple-macosx/debug/CinefuseAppleCore.build/StatusStyles.swift.o"
@@ -131,6 +141,14 @@
         },
         {
           "kind" : "file",
+          "name" : "/Users/atodman/Documents/GitHub/Cinefuse/packages/cinefuse-apple-core/.build/arm64-apple-macosx/debug/CinefuseAppleCore.build/DiagnosticsLogger.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/atodman/Documents/GitHub/Cinefuse/packages/cinefuse-apple-core/.build/arm64-apple-macosx/debug/CinefuseAppleCore.build/GeneratedFilesStore.swift.o"
+        },
+        {
+          "kind" : "file",
           "name" : "/Users/atodman/Documents/GitHub/Cinefuse/packages/cinefuse-apple-core/.build/arm64-apple-macosx/debug/CinefuseAppleCore.build/Models.swift.o"
         },
         {
@@ -151,6 +169,8 @@
         "/Users/atodman/Documents/GitHub/Cinefuse/packages/cinefuse-apple-core/Sources/CinefuseAppleCore/APIClient.swift",
         "/Users/atodman/Documents/GitHub/Cinefuse/packages/cinefuse-apple-core/Sources/CinefuseAppleCore/AppComponents.swift",
         "/Users/atodman/Documents/GitHub/Cinefuse/packages/cinefuse-apple-core/Sources/CinefuseAppleCore/DesignTokens.swift",
+        "/Users/atodman/Documents/GitHub/Cinefuse/packages/cinefuse-apple-core/Sources/CinefuseAppleCore/DiagnosticsLogger.swift",
+        "/Users/atodman/Documents/GitHub/Cinefuse/packages/cinefuse-apple-core/Sources/CinefuseAppleCore/GeneratedFilesStore.swift",
         "/Users/atodman/Documents/GitHub/Cinefuse/packages/cinefuse-apple-core/Sources/CinefuseAppleCore/Models.swift",
         "/Users/atodman/Documents/GitHub/Cinefuse/packages/cinefuse-apple-core/Sources/CinefuseAppleCore/RootView.swift",
         "/Users/atodman/Documents/GitHub/Cinefuse/packages/cinefuse-apple-core/Sources/CinefuseAppleCore/StatusStyles.swift"
@@ -173,6 +193,8 @@
       "/Users/atodman/Documents/GitHub/Cinefuse/packages/cinefuse-apple-core/Sources/CinefuseAppleCore/APIClient.swift",
       "/Users/atodman/Documents/GitHub/Cinefuse/packages/cinefuse-apple-core/Sources/CinefuseAppleCore/AppComponents.swift",
       "/Users/atodman/Documents/GitHub/Cinefuse/packages/cinefuse-apple-core/Sources/CinefuseAppleCore/DesignTokens.swift",
+      "/Users/atodman/Documents/GitHub/Cinefuse/packages/cinefuse-apple-core/Sources/CinefuseAppleCore/DiagnosticsLogger.swift",
+      "/Users/atodman/Documents/GitHub/Cinefuse/packages/cinefuse-apple-core/Sources/CinefuseAppleCore/GeneratedFilesStore.swift",
       "/Users/atodman/Documents/GitHub/Cinefuse/packages/cinefuse-apple-core/Sources/CinefuseAppleCore/Models.swift",
       "/Users/atodman/Documents/GitHub/Cinefuse/packages/cinefuse-apple-core/Sources/CinefuseAppleCore/RootView.swift",
       "/Users/atodman/Documents/GitHub/Cinefuse/packages/cinefuse-apple-core/Sources/CinefuseAppleCore/StatusStyles.swift",
@@ -264,6 +286,14 @@
         {
           "kind" : "file",
           "name" : "/Users/atodman/Documents/GitHub/Cinefuse/packages/cinefuse-apple-core/Sources/CinefuseAppleCore/DesignTokens.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/atodman/Documents/GitHub/Cinefuse/packages/cinefuse-apple-core/Sources/CinefuseAppleCore/DiagnosticsLogger.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/atodman/Documents/GitHub/Cinefuse/packages/cinefuse-apple-core/Sources/CinefuseAppleCore/GeneratedFilesStore.swift"
         },
         {
           "kind" : "file",

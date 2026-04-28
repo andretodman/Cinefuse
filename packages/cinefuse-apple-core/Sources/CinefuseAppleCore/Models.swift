@@ -130,6 +130,10 @@ public struct Job: Codable, Identifiable {
     public let status: String
     public let progressPct: Int?
     public let costToUsCents: Int
+    public let promptText: String?
+    public let modelId: String?
+    public let errorMessage: String?
+    public let outputUrl: String?
     public let updatedAt: String?
 }
 

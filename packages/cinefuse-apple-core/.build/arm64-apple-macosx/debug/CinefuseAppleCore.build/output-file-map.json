@@ -23,6 +23,20 @@
     "swift-dependencies": "/Users/atodman/Documents/GitHub/Cinefuse/packages/cinefuse-apple-core/.build/arm64-apple-macosx/debug/CinefuseAppleCore.build/DesignTokens.swiftdeps",
     "diagnostics": "/Users/atodman/Documents/GitHub/Cinefuse/packages/cinefuse-apple-core/.build/arm64-apple-macosx/debug/CinefuseAppleCore.build/DesignTokens.dia"
   },
+  "/Users/atodman/Documents/GitHub/Cinefuse/packages/cinefuse-apple-core/Sources/CinefuseAppleCore/DiagnosticsLogger.swift": {
+    "dependencies": "/Users/atodman/Documents/GitHub/Cinefuse/packages/cinefuse-apple-core/.build/arm64-apple-macosx/debug/CinefuseAppleCore.build/DiagnosticsLogger.d",
+    "object": "/Users/atodman/Documents/GitHub/Cinefuse/packages/cinefuse-apple-core/.build/arm64-apple-macosx/debug/CinefuseAppleCore.build/DiagnosticsLogger.swift.o",
+    "swiftmodule": "/Users/atodman/Documents/GitHub/Cinefuse/packages/cinefuse-apple-core/.build/arm64-apple-macosx/debug/CinefuseAppleCore.build/DiagnosticsLogger~partial.swiftmodule",
+    "swift-dependencies": "/Users/atodman/Documents/GitHub/Cinefuse/packages/cinefuse-apple-core/.build/arm64-apple-macosx/debug/CinefuseAppleCore.build/DiagnosticsLogger.swiftdeps",
+    "diagnostics": "/Users/atodman/Documents/GitHub/Cinefuse/packages/cinefuse-apple-core/.build/arm64-apple-macosx/debug/CinefuseAppleCore.build/DiagnosticsLogger.dia"
+  },
+  "/Users/atodman/Documents/GitHub/Cinefuse/packages/cinefuse-apple-core/Sources/CinefuseAppleCore/GeneratedFilesStore.swift": {
+    "dependencies": "/Users/atodman/Documents/GitHub/Cinefuse/packages/cinefuse-apple-core/.build/arm64-apple-macosx/debug/CinefuseAppleCore.build/GeneratedFilesStore.d",
+    "object": "/Users/atodman/Documents/GitHub/Cinefuse/packages/cinefuse-apple-core/.build/arm64-apple-macosx/debug/CinefuseAppleCore.build/GeneratedFilesStore.swift.o",
+    "swiftmodule": "/Users/atodman/Documents/GitHub/Cinefuse/packages/cinefuse-apple-core/.build/arm64-apple-macosx/debug/CinefuseAppleCore.build/GeneratedFilesStore~partial.swiftmodule",
+    "swift-dependencies": "/Users/atodman/Documents/GitHub/Cinefuse/packages/cinefuse-apple-core/.build/arm64-apple-macosx/debug/CinefuseAppleCore.build/GeneratedFilesStore.swiftdeps",
+    "diagnostics": "/Users/atodman/Documents/GitHub/Cinefuse/packages/cinefuse-apple-core/.build/arm64-apple-macosx/debug/CinefuseAppleCore.build/GeneratedFilesStore.dia"
+  },
   "/Users/atodman/Documents/GitHub/Cinefuse/packages/cinefuse-apple-core/Sources/CinefuseAppleCore/Models.swift": {
     "dependencies": "/Users/atodman/Documents/GitHub/Cinefuse/packages/cinefuse-apple-core/.build/arm64-apple-macosx/debug/CinefuseAppleCore.build/Models.d",
     "object": "/Users/atodman/Documents/GitHub/Cinefuse/packages/cinefuse-apple-core/.build/arm64-apple-macosx/debug/CinefuseAppleCore.build/Models.swift.o",

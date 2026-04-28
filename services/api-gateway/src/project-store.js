@@ -211,20 +211,31 @@ function mapSceneRow(row) {
 }
 
 function mapJobRow(row) {
+  const inputPayload = row.input_payload ?? {};
   const outputPayload = row.output_payload ?? {};
   const progressPct = normalizeProgressPct(
     row.progress_pct ?? outputPayload.progressPct ?? outputPayload.progress_pct
   );
+  const outputUrl = outputPayload.clipUrl
+    ?? outputPayload.fileUrl
+    ?? outputPayload.stitchedUrl
+    ?? outputPayload.exportUrl
+    ?? outputPayload.outputUrl
+    ?? null;
   return {
     id: row.id,
     projectId: row.project_id,
     shotId: row.shot_id,
     kind: row.kind,
     status: row.status,
-    inputPayload: row.input_payload ?? {},
+    inputPayload,
     outputPayload,
     progressPct,
     costToUsCents: row.cost_to_us_cents ?? 0,
+    promptText: typeof inputPayload.prompt === "string" ? inputPayload.prompt : null,
+    modelId: typeof outputPayload.modelId === "string" ? outputPayload.modelId : null,
+    errorMessage: typeof outputPayload.error === "string" ? outputPayload.error : null,
+    outputUrl: typeof outputUrl === "string" ? outputUrl : null,
     createdAt: row.created_at,
     updatedAt: row.updated_at
   };
