@@ -3892,8 +3892,11 @@ struct JobsPanel: View {
                         message: "Jobs appear when you queue rendering, audio, stitch, or export tasks."
                     )
                 } else {
+                    let gridColumns = [
+                        GridItem(.adaptive(minimum: 360, maximum: 520), spacing: CinefuseTokens.Spacing.s, alignment: .top)
+                    ]
                     ScrollView {
-                        VStack(alignment: .leading, spacing: CinefuseTokens.Spacing.s) {
+                        LazyVGrid(columns: gridColumns, alignment: .leading, spacing: CinefuseTokens.Spacing.s) {
                             ForEach(jobs) { job in
                                 VStack(alignment: .leading, spacing: CinefuseTokens.Spacing.xs) {
                                     HStack(spacing: CinefuseTokens.Spacing.s) {
@@ -3939,6 +3942,7 @@ struct JobsPanel: View {
                                         .tooltip("Delete job", enabled: showTooltips)
                                     }
                                 }
+                                .frame(maxWidth: .infinity, alignment: .leading)
                                 .padding(CinefuseTokens.Spacing.s)
                                 .background(
                                     RoundedRectangle(cornerRadius: CinefuseTokens.Radius.medium)
