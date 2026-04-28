@@ -567,6 +567,8 @@ struct ProjectWorkspaceScreen: View {
     @State private var isServerReachable: Bool?
     @State private var localFileRecordsByRemoteURL: [String: LocalFileRecord] = [:]
     @State private var debugEventLog: [String] = []
+    @State private var shotRequestStateById: [String: RenderRequestState] = [:]
+    @State private var jobRequestStateById: [String: RenderRequestState] = [:]
     @AppStorage("cinefuse.server.mode") private var apiServerModeRaw = APIServerMode.local.rawValue
     @AppStorage("cinefuse.server.customBaseURL") private var customServerBaseURL = ""
     @AppStorage("cinefuse.onboarding.completed") private var onboardingCompleted = false
@@ -640,6 +642,8 @@ struct ProjectWorkspaceScreen: View {
             jobs: jobs,
             localFileRecordsByRemoteURL: localFileRecordsByRemoteURL,
             debugEventLog: debugEventLog,
+            shotRequestStateById: shotRequestStateById,
+            jobRequestStateById: jobRequestStateById,
             showDebugWindow: $showDebugWindow,
             shotPromptDraft: $shotPromptDraft,
             shotModelTierDraft: $shotModelTierDraft,
@@ -1272,6 +1276,8 @@ struct ProjectWorkspaceScreen: View {
         jobs = []
         localFileRecordsByRemoteURL = [:]
         debugEventLog = []
+        shotRequestStateById = [:]
+        jobRequestStateById = [:]
         if !editorSettings.restoreLastOpenWorkspace {
             lastProjectId = ""
         }
@@ -1308,6 +1314,53 @@ struct ProjectWorkspaceScreen: View {
             debugEventLog.removeFirst(debugEventLog.count - 200)
         }
         DiagnosticsLogger.renderStatus(message: line)
+    }
+
+    private func parseISODate(_ value: String) -> Date {
+        ISO8601DateFormatter().date(from: value) ?? Date()
+    }
+
+    private func upsertShotRequestState(_ shotId: String, _ update: (inout RenderRequestState) -> Void) {
+        var state = shotRequestStateById[shotId] ?? RenderRequestState()
+        update(&state)
+        shotRequestStateById[shotId] = state
+    }
+
+    private func upsertJobRequestState(_ jobId: String, _ update: (inout RenderRequestState) -> Void) {
+        var state = jobRequestStateById[jobId] ?? RenderRequestState()
+        update(&state)
+        jobRequestStateById[jobId] = state
+    }
+
+    private func updateLifecycleTimeouts() {
+        let now = Date()
+        let timeoutSeconds: TimeInterval = 45
+
+        for (shotId, state) in shotRequestStateById {
+            guard state.stage.isTimeoutCandidate else { continue }
+            let reference = state.lastEventAt ?? state.responseReceivedAt ?? state.requestSentAt
+            guard let reference else { continue }
+            let age = now.timeIntervalSince(reference)
+            if age > timeoutSeconds {
+                var updated = state
+                updated.stage = .timedOut
+                updated.errorMessage = "No update for \(Int(age))s after request."
+                shotRequestStateById[shotId] = updated
+            }
+        }
+
+        for (jobId, state) in jobRequestStateById {
+            guard state.stage.isTimeoutCandidate else { continue }
+            let reference = state.lastEventAt ?? state.responseReceivedAt ?? state.requestSentAt
+            guard let reference else { continue }
+            let age = now.timeIntervalSince(reference)
+            if age > timeoutSeconds {
+                var updated = state
+                updated.stage = .timedOut
+                updated.errorMessage = "No update for \(Int(age))s after request."
+                jobRequestStateById[jobId] = updated
+            }
+        }
     }
 
     private func syncGeneratedFiles(projectId: String, shots: [Shot], jobs: [Job]) async {
@@ -1396,6 +1449,9 @@ struct ProjectWorkspaceScreen: View {
     private func monitorInFlightJobs() async {
         guard selectedProjectId != nil else { return }
         while !Task.isCancelled && selectedProjectId != nil {
+            await MainActor.run {
+                updateLifecycleTimeouts()
+            }
             if scenePhase == .active && hasInFlightWork && !hasLiveEventsConnection {
                 await loadSelectedProjectDetails(showLoadingIndicator: false)
             }
@@ -1443,6 +1499,21 @@ struct ProjectWorkspaceScreen: View {
         switch event.type {
         case "shot_status_changed":
             guard let shotId = event.shotId else { return }
+            upsertShotRequestState(shotId) { state in
+                state.lastEventAt = parseISODate(event.timestamp)
+                state.lastKnownStatus = event.status ?? state.lastKnownStatus
+                switch event.status {
+                case "queued", "generating", "running", "processing":
+                    state.stage = .waiting
+                case "ready":
+                    state.stage = .received
+                case "failed":
+                    state.stage = .failed
+                    state.errorMessage = state.errorMessage ?? "Shot generation failed."
+                default:
+                    break
+                }
+            }
             if let index = shots.firstIndex(where: { $0.id == shotId }) {
                 let shot = shots[index]
                 shots[index] = Shot(
@@ -1469,6 +1540,21 @@ struct ProjectWorkspaceScreen: View {
             if event.status == "deleted" {
                 jobs.removeAll { $0.id == jobId }
                 return
+            }
+            upsertJobRequestState(jobId) { state in
+                state.lastEventAt = parseISODate(event.timestamp)
+                state.lastKnownStatus = event.status ?? state.lastKnownStatus
+                switch event.status {
+                case "queued", "running", "processing":
+                    state.stage = .waiting
+                case "done":
+                    state.stage = .received
+                case "failed":
+                    state.stage = .failed
+                    state.errorMessage = state.errorMessage ?? "Render job failed."
+                default:
+                    break
+                }
             }
             if let index = jobs.firstIndex(where: { $0.id == jobId }) {
                 let job = jobs[index]
@@ -1642,6 +1728,11 @@ struct ProjectWorkspaceScreen: View {
     private func generateShot(shotId: String) async {
         guard let selectedProjectId else { return }
         model.errorMessage = nil
+        upsertShotRequestState(shotId) { state in
+            state.stage = .requestSent
+            state.requestSentAt = Date()
+            state.errorMessage = nil
+        }
         appendDebugEvent("generate shot requested shot=\(shotId)")
         do {
             let generation = try await api.generateShot(
@@ -1650,9 +1741,25 @@ struct ProjectWorkspaceScreen: View {
                 shotId: shotId
             )
             quotedShotCost = generation.quote
+            upsertShotRequestState(shotId) { state in
+                state.stage = .waiting
+                state.responseReceivedAt = Date()
+                state.lastKnownStatus = generation.shot.status
+            }
+            upsertJobRequestState(generation.job.id) { state in
+                state.stage = .waiting
+                state.requestSentAt = state.requestSentAt ?? Date()
+                state.responseReceivedAt = Date()
+                state.lastKnownStatus = generation.job.status
+            }
             appendDebugEvent("generate shot queued shot=\(shotId) job=\(generation.job.id)")
             await loadSelectedProjectDetails(showLoadingIndicator: false)
         } catch {
+            upsertShotRequestState(shotId) { state in
+                state.stage = .failed
+                state.responseReceivedAt = Date()
+                state.errorMessage = error.localizedDescription
+            }
             appendDebugEvent("generate shot failed shot=\(shotId) reason=\(error.localizedDescription)")
             model.errorMessage = error.localizedDescription
         }
@@ -1661,6 +1768,11 @@ struct ProjectWorkspaceScreen: View {
     private func retryShot(shotId: String) async {
         guard let selectedProjectId else { return }
         model.errorMessage = nil
+        upsertShotRequestState(shotId) { state in
+            state.stage = .requestSent
+            state.requestSentAt = Date()
+            state.errorMessage = nil
+        }
         do {
             let generation = try await api.retryShot(
                 token: model.bearerToken,
@@ -1668,8 +1780,24 @@ struct ProjectWorkspaceScreen: View {
                 shotId: shotId
             )
             quotedShotCost = generation.quote
+            upsertShotRequestState(shotId) { state in
+                state.stage = .waiting
+                state.responseReceivedAt = Date()
+                state.lastKnownStatus = generation.shot.status
+            }
+            upsertJobRequestState(generation.job.id) { state in
+                state.stage = .waiting
+                state.requestSentAt = state.requestSentAt ?? Date()
+                state.responseReceivedAt = Date()
+                state.lastKnownStatus = generation.job.status
+            }
             await loadSelectedProjectDetails(showLoadingIndicator: false)
         } catch {
+            upsertShotRequestState(shotId) { state in
+                state.stage = .failed
+                state.responseReceivedAt = Date()
+                state.errorMessage = error.localizedDescription
+            }
             model.errorMessage = error.localizedDescription
         }
     }
@@ -1694,11 +1822,17 @@ struct ProjectWorkspaceScreen: View {
         guard let selectedProjectId else { return }
         model.errorMessage = nil
         do {
-            _ = try await api.createJob(
+            let createdJob = try await api.createJob(
                 token: model.bearerToken,
                 projectId: selectedProjectId,
                 kind: jobKindDraft
             )
+            upsertJobRequestState(createdJob.id) { state in
+                state.stage = .waiting
+                state.requestSentAt = Date()
+                state.responseReceivedAt = Date()
+                state.lastKnownStatus = createdJob.status
+            }
             await loadSelectedProjectDetails(showLoadingIndicator: false)
         } catch {
             model.errorMessage = error.localizedDescription
@@ -1948,6 +2082,7 @@ struct ProjectWorkspaceScreen: View {
 
     private func exportFinalTimeline() async {
         guard let selectedProjectId else { return }
+        let requestSentAt = Date()
         appendDebugEvent("export requested project=\(selectedProjectId) target=\(exportPublishTarget)")
         do {
             let effectivePublishTarget = exportPublishTarget == "pubfuse" ? "pubfuse" : "none"
@@ -1959,6 +2094,12 @@ struct ProjectWorkspaceScreen: View {
                 includeArchive: exportIncludeArchive,
                 publishTarget: effectivePublishTarget
             )
+            upsertJobRequestState(result.id) { state in
+                state.stage = .waiting
+                state.requestSentAt = requestSentAt
+                state.responseReceivedAt = Date()
+                state.lastKnownStatus = result.status
+            }
             appendDebugEvent("export queued job=\(result.id)")
             await loadSelectedProjectDetails(showLoadingIndicator: false)
         } catch {
@@ -2032,6 +2173,8 @@ struct ProjectDetailScreen: View {
     let jobs: [Job]
     let localFileRecordsByRemoteURL: [String: LocalFileRecord]
     let debugEventLog: [String]
+    let shotRequestStateById: [String: RenderRequestState]
+    let jobRequestStateById: [String: RenderRequestState]
     @Binding var showDebugWindow: Bool
     @Binding var shotPromptDraft: String
     @Binding var shotModelTierDraft: String
@@ -2112,7 +2255,11 @@ struct ProjectDetailScreen: View {
             return nil
         }
         let localRecord = latestExportJob.outputUrl.flatMap { localFileRecordsByRemoteURL[$0] }
-        return artifactStatusPresentation(job: latestExportJob, localRecord: localRecord)
+        return artifactStatusPresentation(
+            job: latestExportJob,
+            localRecord: localRecord,
+            requestState: jobRequestStateById[latestExportJob.id]
+        )
     }
 
     private func parseDate(_ value: String?) -> Date {
@@ -2366,6 +2513,7 @@ struct ProjectDetailScreen: View {
                     shots: shots,
                     jobs: jobs,
                     localFileRecordsByRemoteURL: localFileRecordsByRemoteURL,
+                    shotRequestStateById: shotRequestStateById,
                     characterOptions: characters,
                     shotPromptDraft: $shotPromptDraft,
                     shotModelTierDraft: $shotModelTierDraft,
@@ -2576,6 +2724,7 @@ struct ProjectDetailScreen: View {
         JobsPanel(
             jobs: jobs,
             localFileRecordsByRemoteURL: localFileRecordsByRemoteURL,
+            jobRequestStateById: jobRequestStateById,
             jobKindDraft: $jobKindDraft,
             onCreateJob: onCreateJob,
             onRetryJob: onRetryJob,
@@ -3529,6 +3678,7 @@ struct ShotsPanel: View {
     let shots: [Shot]
     let jobs: [Job]
     let localFileRecordsByRemoteURL: [String: LocalFileRecord]
+    let shotRequestStateById: [String: RenderRequestState]
     let characterOptions: [CharacterProfile]
     @Binding var shotPromptDraft: String
     @Binding var shotModelTierDraft: String
@@ -3605,7 +3755,8 @@ struct ShotsPanel: View {
         return shotArtifactStatusPresentation(
             shot: shot,
             job: latest,
-            localRecord: localRecord
+            localRecord: localRecord,
+            requestState: shotRequestStateById[shot.id]
         )
     }
 
@@ -3829,6 +3980,7 @@ struct ShotsPanel: View {
 struct JobsPanel: View {
     let jobs: [Job]
     let localFileRecordsByRemoteURL: [String: LocalFileRecord]
+    let jobRequestStateById: [String: RenderRequestState]
     @Binding var jobKindDraft: String
     let onCreateJob: () -> Void
     let onRetryJob: (String) -> Void
@@ -3840,7 +3992,11 @@ struct JobsPanel: View {
 
     private func statusPresentation(for job: Job) -> ArtifactStatusPresentation {
         let localRecord = job.outputUrl.flatMap { localFileRecordsByRemoteURL[$0] }
-        return artifactStatusPresentation(job: job, localRecord: localRecord)
+        return artifactStatusPresentation(
+            job: job,
+            localRecord: localRecord,
+            requestState: jobRequestStateById[job.id]
+        )
     }
 
     var body: some View {
@@ -3893,7 +4049,7 @@ struct JobsPanel: View {
                     )
                 } else {
                     let gridColumns = [
-                        GridItem(.adaptive(minimum: 360, maximum: 520), spacing: CinefuseTokens.Spacing.s, alignment: .top)
+                        GridItem(.adaptive(minimum: 300, maximum: 420), spacing: CinefuseTokens.Spacing.s, alignment: .top)
                     ]
                     ScrollView {
                         LazyVGrid(columns: gridColumns, alignment: .leading, spacing: CinefuseTokens.Spacing.s) {
@@ -3993,7 +4149,80 @@ struct ArtifactStatusPresentation: Identifiable {
     let details: String
 }
 
-private func artifactStatusPresentation(job: Job, localRecord: LocalFileRecord?) -> ArtifactStatusPresentation {
+struct RenderRequestState {
+    enum Stage: String {
+        case requestSent
+        case waiting
+        case received
+        case failed
+        case timedOut
+
+        var isTimeoutCandidate: Bool {
+            switch self {
+            case .requestSent, .waiting:
+                return true
+            case .received, .failed, .timedOut:
+                return false
+            }
+        }
+    }
+
+    var stage: Stage = .waiting
+    var requestSentAt: Date?
+    var responseReceivedAt: Date?
+    var lastEventAt: Date?
+    var lastKnownStatus: String?
+    var errorMessage: String?
+}
+
+private func requestTimelineLines(_ requestState: RenderRequestState?) -> [String] {
+    guard let requestState else {
+        return ["Request: unavailable"]
+    }
+
+    var lines = ["Request stage: \(requestState.stage.rawValue)"]
+    if let sent = requestState.requestSentAt {
+        lines.append("Time sent: \(sent.formatted(date: .abbreviated, time: .standard))")
+    } else {
+        lines.append("Time sent: unknown")
+    }
+    if let received = requestState.responseReceivedAt {
+        lines.append("Response received: \(received.formatted(date: .abbreviated, time: .standard))")
+    } else {
+        lines.append("Response received: waiting")
+    }
+    if let lastEvent = requestState.lastEventAt {
+        lines.append("Last event: \(lastEvent.formatted(date: .abbreviated, time: .standard))")
+    } else {
+        lines.append("Last event: none yet")
+    }
+
+    if let sent = requestState.requestSentAt {
+        let durationSeconds: Int
+        if let received = requestState.responseReceivedAt {
+            durationSeconds = max(0, Int(received.timeIntervalSince(sent)))
+        } else {
+            durationSeconds = max(0, Int(Date().timeIntervalSince(sent)))
+        }
+        lines.append("Duration waiting: \(durationSeconds)s")
+    } else {
+        lines.append("Duration waiting: unknown")
+    }
+    if let status = requestState.lastKnownStatus {
+        lines.append("API status: \(status)")
+    }
+    if let error = requestState.errorMessage {
+        lines.append("Request error: \(error)")
+    }
+    return lines
+}
+
+private func artifactStatusPresentation(
+    job: Job,
+    localRecord: LocalFileRecord?,
+    requestState: RenderRequestState?
+) -> ArtifactStatusPresentation {
+    let requestLines = requestTimelineLines(requestState)
     if job.status == "failed" || localRecord?.status == .downloadFailed || localRecord?.status == .writeFailed {
         let details = [
             "Job: \(job.kind) / \(job.status)",
@@ -4002,11 +4231,12 @@ private func artifactStatusPresentation(job: Job, localRecord: LocalFileRecord?)
             "Remote URL: \(job.outputUrl ?? "n/a")",
             "Local file: \(localRecord?.localPath ?? "not available")",
             "Error: \(job.errorMessage ?? localRecord?.errorMessage ?? "unknown")"
-        ].joined(separator: "\n")
+        ] + requestLines
+        let detailText = details.joined(separator: "\n")
         return ArtifactStatusPresentation(
             level: .error,
             summary: "File generation failed or file sync error",
-            details: details
+            details: detailText
         )
     }
 
@@ -4018,11 +4248,12 @@ private func artifactStatusPresentation(job: Job, localRecord: LocalFileRecord?)
             "Remote URL: \(job.outputUrl ?? "n/a")",
             "Local file: \(localRecord?.localPath ?? "n/a")",
             "File sync: \(localRecord?.status.rawValue ?? "n/a")"
-        ].joined(separator: "\n")
+        ] + requestLines
+        let detailText = details.joined(separator: "\n")
         return ArtifactStatusPresentation(
             level: .success,
             summary: "Local file created in Documents/Cinefuse Generated",
-            details: details
+            details: detailText
         )
     }
 
@@ -4032,15 +4263,22 @@ private func artifactStatusPresentation(job: Job, localRecord: LocalFileRecord?)
         "Prompt: \(job.promptText ?? "n/a")",
         "Remote URL: \(job.outputUrl ?? "n/a")",
         "Local file: pending"
-    ].joined(separator: "\n")
+    ] + requestLines
+    let waitingDetailText = waitingDetails.joined(separator: "\n")
     return ArtifactStatusPresentation(
         level: .warning,
         summary: "Generation or local file sync is still in progress",
-        details: waitingDetails
+        details: waitingDetailText
     )
 }
 
-private func shotArtifactStatusPresentation(shot: Shot, job: Job?, localRecord: LocalFileRecord?) -> ArtifactStatusPresentation {
+private func shotArtifactStatusPresentation(
+    shot: Shot,
+    job: Job?,
+    localRecord: LocalFileRecord?,
+    requestState: RenderRequestState?
+) -> ArtifactStatusPresentation {
+    let requestLines = requestTimelineLines(requestState)
     if shot.status == "failed" {
         let details = [
             "Shot: \(shot.id)",
@@ -4048,8 +4286,8 @@ private func shotArtifactStatusPresentation(shot: Shot, job: Job?, localRecord: 
             "Prompt: \(shot.prompt)",
             "Model tier: \(shot.modelTier)",
             "Error: \(job?.errorMessage ?? localRecord?.errorMessage ?? "unknown")"
-        ].joined(separator: "\n")
-        return ArtifactStatusPresentation(level: .error, summary: "Shot generation failed", details: details)
+        ] + requestLines
+        return ArtifactStatusPresentation(level: .error, summary: "Shot generation failed", details: details.joined(separator: "\n"))
     }
 
     if localRecord?.status == .synced || localRecord?.status == .alreadyPresent {
@@ -4061,8 +4299,8 @@ private func shotArtifactStatusPresentation(shot: Shot, job: Job?, localRecord: 
             "Remote URL: \(shot.clipUrl ?? "n/a")",
             "Local file: \(localRecord?.localPath ?? "n/a")",
             "Model: \(job?.modelId ?? "unknown")"
-        ].joined(separator: "\n")
-        return ArtifactStatusPresentation(level: .success, summary: "Shot file is available locally", details: details)
+        ] + requestLines
+        return ArtifactStatusPresentation(level: .success, summary: "Shot file is available locally", details: details.joined(separator: "\n"))
     }
 
     if localRecord?.status == .downloadFailed || localRecord?.status == .writeFailed {
@@ -4073,8 +4311,8 @@ private func shotArtifactStatusPresentation(shot: Shot, job: Job?, localRecord: 
             "Remote URL: \(shot.clipUrl ?? "n/a")",
             "Local file: unavailable",
             "Error: \(localRecord?.errorMessage ?? "file sync failed")"
-        ].joined(separator: "\n")
-        return ArtifactStatusPresentation(level: .error, summary: "Shot rendered but local file sync failed", details: details)
+        ] + requestLines
+        return ArtifactStatusPresentation(level: .error, summary: "Shot rendered but local file sync failed", details: details.joined(separator: "\n"))
     }
 
     let details = [
@@ -4083,8 +4321,8 @@ private func shotArtifactStatusPresentation(shot: Shot, job: Job?, localRecord: 
         "Prompt: \(shot.prompt)",
         "Model tier: \(shot.modelTier)",
         "Progress: \(job?.progressPct.map(String.init) ?? "n/a")%"
-    ].joined(separator: "\n")
-    return ArtifactStatusPresentation(level: .warning, summary: "Shot generation still in progress", details: details)
+    ] + requestLines
+    return ArtifactStatusPresentation(level: .warning, summary: "Shot generation still in progress", details: details.joined(separator: "\n"))
 }
 
 struct GenerationStatusDot: View {
