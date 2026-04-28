@@ -568,7 +568,7 @@ struct ProjectWorkspaceScreen: View {
     @AppStorage("cinefuse.server.customBaseURL") private var customServerBaseURL = ""
     @AppStorage("cinefuse.onboarding.completed") private var onboardingCompleted = false
 
-    private let inFlightStatuses: Set<String> = ["queued", "generating", "running"]
+    private let inFlightStatuses: Set<String> = ["queued", "generating", "running", "processing"]
     private var localServerBaseURL: String {
         ProcessInfo.processInfo.environment["CINEFUSE_API_BASE_URL"] ?? "http://localhost:4000"
     }
@@ -2878,7 +2878,7 @@ struct HorizontalTimelineTrack: View {
         switch shot.status {
         case "queued":
             return 5
-        case "generating", "running":
+        case "generating", "running", "processing":
             return 35
         case "ready":
             return 100
@@ -2924,7 +2924,7 @@ struct TimelineClipCard: View {
             Text("\(shot.modelTier.capitalized) · \(shot.durationSec ?? 0)s")
                 .font(CinefuseTokens.Typography.caption)
                 .foregroundStyle(CinefuseTokens.ColorRole.textSecondary)
-            if ["queued", "generating", "running"].contains(shot.status), let progressPct {
+            if ["queued", "generating", "running", "processing"].contains(shot.status), let progressPct {
                 HStack(spacing: CinefuseTokens.Spacing.xxs) {
                     ProgressView(value: Double(progressPct), total: 100)
                     Text("\(progressPct)%")
@@ -3383,7 +3383,7 @@ struct ShotsPanel: View {
     @State private var pendingDeleteShotId: String?
     @Environment(\.openURL) private var openURL
 
-    private let inFlightStatuses: Set<String> = ["queued", "generating", "running"]
+    private let inFlightStatuses: Set<String> = ["queued", "generating", "running", "processing"]
 
     private func renderProgress(for shot: Shot) -> Int? {
         let candidates = jobs.filter { $0.shotId == shot.id }.compactMap(\.progressPct)
@@ -3393,7 +3393,7 @@ struct ShotsPanel: View {
         switch shot.status {
         case "queued":
             return 5
-        case "generating", "running":
+        case "generating", "running", "processing":
             return 35
         case "ready":
             return 100

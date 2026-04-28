@@ -116,6 +116,21 @@ export function createHttpServer() {
     }
   }
 
+  async function updateRenderJobProgress({ projectId, jobId, shotId, status = "running", progressPct }) {
+    await saveJob({
+      id: jobId,
+      status,
+      progressPct
+    });
+    publishProjectEvent(projectId, {
+      type: "job_status_changed",
+      jobId,
+      shotId,
+      status,
+      progressPct
+    });
+  }
+
   async function processRenderTask(task) {
     const currentShot = await getShot(task.shotId, task.projectId);
     if (!currentShot) {
@@ -157,6 +172,21 @@ export function createHttpServer() {
       progressPct: 15
     });
 
+    let runningProgress = 15;
+    const progressTimer = setInterval(() => {
+      if (runningProgress >= 90) {
+        return;
+      }
+      runningProgress = Math.min(90, runningProgress + 10);
+      void updateRenderJobProgress({
+        projectId: task.projectId,
+        jobId: task.jobId,
+        shotId: task.shotId,
+        status: "running",
+        progressPct: runningProgress
+      });
+    }, 4000);
+
     try {
       const generation = await mcpHost.invoke("clip", "generate_clip", {
         shotId: task.shotId,
@@ -165,18 +195,17 @@ export function createHttpServer() {
         modelTier: currentShot.modelTier,
         userId: task.userId
       });
+      clearInterval(progressTimer);
 
       await saveShot({
         ...currentShot,
-        status: generation.status ?? "ready",
+        status: "ready",
         clipUrl: generation.clipUrl ?? null,
         thumbnailUrl: deriveThumbnailUrl(generation.clipUrl ?? null),
         durationSec: generation.durationSec ?? currentShot.durationSec ?? 5
       });
       await saveJob({
         id: task.jobId,
-        status: "done",
-        progressPct: 100,
         outputPayload: {
           modelId: generation.modelId ?? null,
           clipUrl: generation.clipUrl ?? null,
@@ -184,42 +213,41 @@ export function createHttpServer() {
         },
         costToUsCents: generation.costToUsCents ?? 0
       });
-      publishProjectEvent(task.projectId, {
-        type: "shot_status_changed",
-        shotId: task.shotId,
-        status: generation.status ?? "ready"
-      });
-      publishProjectEvent(task.projectId, {
-        type: "job_status_changed",
+      await updateRenderJobProgress({
+        projectId: task.projectId,
         jobId: task.jobId,
         shotId: task.shotId,
         status: "done",
         progressPct: 100
       });
+      publishProjectEvent(task.projectId, {
+        type: "shot_status_changed",
+        shotId: task.shotId,
+        status: "ready"
+      });
     } catch (error) {
+      clearInterval(progressTimer);
       await saveShot({
         ...currentShot,
         status: "failed"
       });
       await saveJob({
         id: task.jobId,
-        status: "failed",
-        progressPct: 0,
         outputPayload: {
           error: error instanceof Error ? error.message : "generation failed"
         }
+      });
+      await updateRenderJobProgress({
+        projectId: task.projectId,
+        jobId: task.jobId,
+        shotId: task.shotId,
+        status: "failed",
+        progressPct: 0
       });
       publishProjectEvent(task.projectId, {
         type: "shot_status_changed",
         shotId: task.shotId,
         status: "failed"
-      });
-      publishProjectEvent(task.projectId, {
-        type: "job_status_changed",
-        jobId: task.jobId,
-        shotId: task.shotId,
-        status: "failed",
-        progressPct: 0
       });
       await mcpHost.invoke("billing", "credit", {
         userId: task.userId,
