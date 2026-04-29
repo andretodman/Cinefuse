@@ -1998,6 +1998,9 @@ struct ProjectWorkspaceScreen: View {
                 shots: latestTimeline.shots,
                 jobs: latestJobs.filter { $0.status != "deleted" }
             )
+            // `syncGeneratedFiles` can await a long time; do not hold the refresh gate across it
+            // or the in-flight monitor drops polls and misses job completion until timeout.
+            isRefreshingProjectDetails = false
             await syncGeneratedFiles(
                 projectId: selectedProjectId,
                 shots: latestTimeline.shots,
