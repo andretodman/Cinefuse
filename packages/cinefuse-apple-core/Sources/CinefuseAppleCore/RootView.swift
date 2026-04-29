@@ -3833,6 +3833,7 @@ struct ProjectDetailScreen: View {
     private var jobsPanelCard: some View {
         JobsPanel(
             jobs: jobs,
+            shots: shots,
             localFileRecordsByRemoteURL: localFileRecordsByRemoteURL,
             localThumbnailURLByShotId: localThumbnailURLByShotId,
             localThumbnailURLByJobId: localThumbnailURLByJobId,
@@ -6658,6 +6659,7 @@ struct ShotsPanel: View {
 
 struct JobsPanel: View {
     let jobs: [Job]
+    let shots: [Shot]
     let localFileRecordsByRemoteURL: [String: LocalFileRecord]
     let localThumbnailURLByShotId: [String: URL]
     let localThumbnailURLByJobId: [String: URL]
@@ -6673,6 +6675,9 @@ struct JobsPanel: View {
     @State private var selectedDiagnostics: ArtifactStatusPresentation?
 
     private let completedJobStatuses: Set<String> = ["done", "ready", "completed", "success"]
+    private let terminalJobStatusesForProgress: Set<String> = [
+        "done", "ready", "completed", "success", "failed", "timedout", "timed_out"
+    ]
 
     private var visibleJobs: [Job] {
         if showCompletedJobs {
@@ -6683,12 +6688,25 @@ struct JobsPanel: View {
         }
     }
 
+    /// Shot-generate audio/video artifacts often live on `Shot.clipUrl` while `Job.outputUrl` is empty; sync keys `localFileRecordsByRemoteURL` by the same URL as the shot sync path.
+    private func artifactRemoteURL(for job: Job) -> String? {
+        if let u = job.outputUrl?.trimmingCharacters(in: .whitespacesAndNewlines), !u.isEmpty {
+            return u
+        }
+        guard let shotId = job.shotId else { return nil }
+        guard let shot = shots.first(where: { $0.id == shotId }) else { return nil }
+        let c = shot.clipUrl?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return c.isEmpty ? nil : c
+    }
+
     private func statusPresentation(for job: Job) -> ArtifactStatusPresentation {
-        let localRecord = job.outputUrl.flatMap { localFileRecordsByRemoteURL[$0] }
+        let urlKey = artifactRemoteURL(for: job)
+        let localRecord = urlKey.flatMap { localFileRecordsByRemoteURL[$0] }
         return artifactStatusPresentation(
             job: job,
             localRecord: localRecord,
-            requestState: jobRequestStateById[job.id]
+            requestState: jobRequestStateById[job.id],
+            remoteURLDisplay: urlKey
         )
     }
 
@@ -6797,7 +6815,8 @@ struct JobsPanel: View {
                                                 .font(CinefuseTokens.Typography.caption)
                                                 .foregroundStyle(CinefuseTokens.ColorRole.textSecondary)
                                         }
-                                        if let progress = job.progressPct {
+                                        if let progress = job.progressPct,
+                                           !terminalJobStatusesForProgress.contains(job.status.lowercased()) {
                                             HStack(spacing: CinefuseTokens.Spacing.xs) {
                                                 ProgressView(value: Double(progress), total: 100)
                                                     .frame(maxWidth: .infinity)
