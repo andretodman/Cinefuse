@@ -1081,6 +1081,8 @@ test("api contract: project file upload stores bytes and GET returns same payloa
 });
 
 test("api contract: sound generation uses audio MCP stub (wav url on shot)", async () => {
+  const prevStubMode = process.env.CINEFUSE_ALLOW_STUB_MEDIA;
+  process.env.CINEFUSE_ALLOW_STUB_MEDIA = "true";
   const headers = authHeaders("usr_contract_sound_gen");
   await clearProjects();
   const server = createHttpServer();
@@ -1162,7 +1164,7 @@ test("api contract: sound generation uses audio MCP stub (wav url on shot)", asy
   assert.equal(audioJob.costToUsCents > 0, true);
   assert.equal(audioJob.providerAdapter, "stub");
   assert.equal(audioJob.modelId, "music_v1");
-  assert.ok(typeof audioJob.providerEndpoint === "string" && audioJob.providerEndpoint.length > 0);
+  assert.equal(audioJob.providerEndpoint, "stub://media");
   assert.equal(audioJob.outputPayload?.providerAdapter, "stub");
   assert.equal(audioJob.outputUrl ?? audioJob.outputPayload?.sourceUrl, shotClipUrl);
 
@@ -1175,6 +1177,11 @@ test("api contract: sound generation uses audio MCP stub (wav url on shot)", asy
       resolve();
     });
   });
+  if (typeof prevStubMode === "string") {
+    process.env.CINEFUSE_ALLOW_STUB_MEDIA = prevStubMode;
+  } else {
+    delete process.env.CINEFUSE_ALLOW_STUB_MEDIA;
+  }
 });
 
 test(

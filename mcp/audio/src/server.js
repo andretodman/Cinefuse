@@ -25,8 +25,7 @@ function resolveSoundTierConfig(modelTier) {
 }
 
 function isTestMode() {
-  return process.env.NODE_ENV === "test"
-    || process.env.CINEFUSE_ALLOW_STUB_MEDIA === "true"
+  return process.env.CINEFUSE_ALLOW_STUB_MEDIA === "true"
     || process.argv.includes("--test");
 }
 
