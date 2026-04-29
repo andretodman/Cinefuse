@@ -1689,7 +1689,10 @@ struct ProjectWorkspaceScreen: View {
                     state.stage = .done
                 case "failed":
                     state.stage = .failed
-                    state.errorMessage = state.errorMessage ?? "\(generationNoun) generation failed."
+                    let backendDetail = latestJobByShotId[shot.id]?.errorMessage?
+                        .trimmingCharacters(in: .whitespacesAndNewlines)
+                    let backendError = (backendDetail?.isEmpty == false) ? backendDetail : nil
+                    state.errorMessage = backendError ?? state.errorMessage ?? "\(generationNoun) generation failed."
                 default:
                     break
                 }
@@ -1738,7 +1741,9 @@ struct ProjectWorkspaceScreen: View {
                     state.stage = .done
                 case "failed":
                     state.stage = .failed
-                    state.errorMessage = state.errorMessage ?? job.errorMessage ?? "Render job failed."
+                    let trimmedJobErr = job.errorMessage?.trimmingCharacters(in: .whitespacesAndNewlines)
+                    let jobErr = (trimmedJobErr?.isEmpty == false) ? trimmedJobErr : nil
+                    state.errorMessage = jobErr ?? state.errorMessage ?? "Render job failed."
                 default:
                     break
                 }
@@ -2069,7 +2074,10 @@ struct ProjectWorkspaceScreen: View {
                     state.stage = .done
                 case "failed":
                     state.stage = .failed
-                    state.errorMessage = state.errorMessage ?? "\(generationNoun) generation failed."
+                    let backendDetail = latestShotJob?.errorMessage?
+                        .trimmingCharacters(in: .whitespacesAndNewlines)
+                    let backendError = (backendDetail?.isEmpty == false) ? backendDetail : nil
+                    state.errorMessage = backendError ?? state.errorMessage ?? "\(generationNoun) generation failed."
                 default:
                     break
                 }
@@ -2131,7 +2139,9 @@ struct ProjectWorkspaceScreen: View {
                     state.stage = .done
                 case "failed":
                     state.stage = .failed
-                    state.errorMessage = state.errorMessage ?? "Render job failed."
+                    let trimmedPriorErr = priorJob?.errorMessage?.trimmingCharacters(in: .whitespacesAndNewlines)
+                    let priorErr = (trimmedPriorErr?.isEmpty == false) ? trimmedPriorErr : nil
+                    state.errorMessage = priorErr ?? state.errorMessage ?? "Render job failed."
                 default:
                     break
                 }
@@ -7172,7 +7182,24 @@ struct RenderRequestState {
     var source: String?
 }
 
-private func requestTimelineLines(_ requestState: RenderRequestState?) -> [String] {
+/// Prefer gateway-reported job errors over locally inferred client copy (snapshot may set a generic shot failure string first).
+private func primaryArtifactFailureMessage(
+    job: Job?,
+    requestState: RenderRequestState?,
+    localRecord: LocalFileRecord?,
+    fallback: String
+) -> String {
+    func trimmedNonEmpty(_ text: String?) -> String? {
+        guard let t = text?.trimmingCharacters(in: .whitespacesAndNewlines), !t.isEmpty else { return nil }
+        return t
+    }
+    return trimmedNonEmpty(job?.errorMessage)
+        ?? trimmedNonEmpty(requestState?.errorMessage)
+        ?? trimmedNonEmpty(localRecord?.errorMessage)
+        ?? fallback
+}
+
+private func requestTimelineLines(_ requestState: RenderRequestState?, job: Job? = nil) -> [String] {
     guard let requestState else {
         return ["Request: unavailable"]
     }
@@ -7222,7 +7249,11 @@ private func requestTimelineLines(_ requestState: RenderRequestState?) -> [Strin
     if let source = requestState.source {
         lines.append("Lifecycle source: \(source)")
     }
-    if let error = requestState.errorMessage {
+    let trimmedJobErr = job?.errorMessage?.trimmingCharacters(in: .whitespacesAndNewlines)
+    let jobErr = (trimmedJobErr?.isEmpty == false) ? trimmedJobErr : nil
+    let trimmedReqErr = requestState.errorMessage?.trimmingCharacters(in: .whitespacesAndNewlines)
+    let reqErr = (trimmedReqErr?.isEmpty == false) ? trimmedReqErr : nil
+    if let error = jobErr ?? reqErr {
         let label = requestState.stage == .timedOut ? "Timeout reason" : "Request error"
         lines.append("\(label): \(error)")
     }
@@ -7256,7 +7287,7 @@ private func artifactStatusPresentation(
     }
 
     let remoteURLForDetails = remoteURLDisplay ?? job.outputUrl
-    let requestLines = requestTimelineLines(requestState)
+    let requestLines = requestTimelineLines(requestState, job: job)
     if job.skippedFeature == true {
         let reason = job.featureError?.detail
             ?? job.featureError?.reason
@@ -7386,7 +7417,7 @@ private func shotArtifactStatusPresentation(
         return String(value)
     }
 
-    let requestLines = requestTimelineLines(requestState)
+    let requestLines = requestTimelineLines(requestState, job: job)
     let artifactNoun = job?.kind == "audio" ? "Sound" : "Shot"
     let isStubFailure = (job?.providerAdapter == "stub")
         || ((job?.providerEndpoint ?? "").hasPrefix("stub://"))
@@ -7442,7 +7473,7 @@ private func shotArtifactStatusPresentation(
             "Provider endpoint: \(displayValue(job?.providerEndpoint ?? job?.falEndpoint, missing: "provider not started yet"))",
             "Provider status URL: \(displayValue(job?.falStatusUrl, missing: "not available"))",
             "Provider status code: \(displayCode(job?.providerStatusCode, missing: "not available"))",
-            "Error: \(requestState?.errorMessage ?? job?.errorMessage ?? localRecord?.errorMessage ?? "request timed out or failed")"
+            "Error: \(primaryArtifactFailureMessage(job: job, requestState: requestState, localRecord: localRecord, fallback: "request timed out or failed"))"
         ] + (stubGuidance.map { ["Hint: \($0)"] } ?? []) + queueStuckHint + requestLines
         return ArtifactStatusPresentation(
             level: .error,
