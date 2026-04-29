@@ -599,6 +599,9 @@ struct ProjectWorkspaceScreen: View {
     @State private var debugEventLog: [String] = []
     @State private var shotRequestStateById: [String: RenderRequestState] = [:]
     @State private var jobRequestStateById: [String: RenderRequestState] = [:]
+    /// Tracks clip-job progress per shot so long-running `generating` work doesn’t false-timeout when only `progressPct` moves.
+    @State private var lastSyncedClipJobProgressByShotId: [String: Int] = [:]
+    @State private var lastSyncedProgressByJobId: [String: Int] = [:]
     @AppStorage("cinefuse.server.mode") private var apiServerModeRaw = APIServerMode.local.rawValue
     @AppStorage("cinefuse.server.customBaseURL") private var customServerBaseURL = ""
     @AppStorage("cinefuse.onboarding.completed") private var onboardingCompleted = false
@@ -1568,7 +1571,7 @@ struct ProjectWorkspaceScreen: View {
 
     private func updateLifecycleTimeouts() {
         let now = Date()
-        let timeoutSeconds: TimeInterval = 45
+        let timeoutSeconds: TimeInterval = 120
 
         for (shotId, state) in shotRequestStateById {
             guard state.stage.isTimeoutCandidate else { continue }
@@ -1601,6 +1604,12 @@ struct ProjectWorkspaceScreen: View {
 
     private func syncRequestStatesFromSnapshot(shots: [Shot], jobs: [Job]) {
         for shot in shots {
+            let clipJob = jobs.first { $0.shotId == shot.id && $0.kind == "clip" }
+            let progressNow = clipJob?.progressPct
+            let prevProgress = lastSyncedClipJobProgressByShotId[shot.id]
+            let progressAdvanced = progressNow != nil && progressNow != prevProgress
+                && inFlightStatuses.contains(shot.status.lowercased())
+
             upsertShotRequestState(shot.id) { state in
                 let previousStatus = state.lastKnownStatus
                 state.lastKnownStatus = shot.status
@@ -1627,12 +1636,25 @@ struct ProjectWorkspaceScreen: View {
                     if shot.status == "ready" || shot.status == "failed" {
                         appendDebugEvent("snapshot shot final shot=\(shot.id) status=\(shot.status)")
                     }
+                } else if progressAdvanced {
+                    state.lastMeaningfulTransitionAt = Date()
+                    state.lastEventAt = Date()
                 }
+            }
+
+            if shot.status == "ready" || shot.status == "failed" {
+                lastSyncedClipJobProgressByShotId.removeValue(forKey: shot.id)
+            } else if let progressNow {
+                lastSyncedClipJobProgressByShotId[shot.id] = progressNow
             }
         }
 
         for job in jobs {
             let stateDate = parseOptionalISODate(job.updatedAt)
+            let prevJobProgress = lastSyncedProgressByJobId[job.id]
+            let currProgress = job.progressPct
+            let progressMoved = currProgress != nil && currProgress != prevJobProgress
+
             upsertJobRequestState(job.id) { state in
                 let previousStatus = state.lastKnownStatus
                 state.lastKnownStatus = job.status
@@ -1658,7 +1680,7 @@ struct ProjectWorkspaceScreen: View {
                 default:
                     break
                 }
-                if changed {
+                if changed || progressMoved {
                     state.lastMeaningfulTransitionAt = stateDate ?? Date()
                     state.lastEventAt = stateDate ?? state.lastEventAt
                     if job.status == "done" || job.status == "failed" {
@@ -1668,6 +1690,12 @@ struct ProjectWorkspaceScreen: View {
                 if state.stage == .running, state.responseReceivedAt == nil {
                     state.responseReceivedAt = stateDate ?? Date()
                 }
+            }
+
+            if job.status == "done" || job.status == "failed" {
+                lastSyncedProgressByJobId.removeValue(forKey: job.id)
+            } else if let currProgress {
+                lastSyncedProgressByJobId[job.id] = currProgress
             }
         }
     }
@@ -1997,6 +2025,9 @@ struct ProjectWorkspaceScreen: View {
                 jobs.removeAll { $0.id == jobId }
                 return
             }
+            let priorJob = jobs.first(where: { $0.id == jobId })
+            let priorJobStatus = priorJob?.status
+            let priorJobProgress = priorJob?.progressPct
             upsertJobRequestState(jobId) { state in
                 let eventDate = parseISODate(event.timestamp)
                 let previousStatus = state.lastKnownStatus
@@ -2019,9 +2050,26 @@ struct ProjectWorkspaceScreen: View {
                 default:
                     break
                 }
-                if previousStatus != state.lastKnownStatus {
+                let newStatus = event.status ?? previousStatus
+                let statusMoved = newStatus != previousStatus
+                let progressMoved = event.progressPct != nil && event.progressPct != priorJobProgress
+                if statusMoved || progressMoved {
                     state.lastEventAt = eventDate
                     state.lastMeaningfulTransitionAt = eventDate
+                }
+            }
+            let clipKind = priorJob?.kind ?? "clip"
+            if clipKind == "clip",
+               let shotIdForClip = event.shotId ?? priorJob?.shotId {
+                let statusMoved = (event.status ?? priorJobStatus) != priorJobStatus
+                let progressMoved = event.progressPct != nil && event.progressPct != priorJobProgress
+                if statusMoved || progressMoved {
+                    let eventDate = parseISODate(event.timestamp)
+                    upsertShotRequestState(shotIdForClip) { s in
+                        s.lastMeaningfulTransitionAt = eventDate
+                        s.lastEventAt = eventDate
+                        s.source = "events"
+                    }
                 }
             }
             if let index = jobs.firstIndex(where: { $0.id == jobId }) {
@@ -6127,6 +6175,41 @@ struct ShotsPanel: View {
         }
     }
 
+    /// Audio: Quote Cost left of Create Sound on one row. Video: stacked vertically.
+    @ViewBuilder
+    private func quoteAndCreateButtons() -> some View {
+        let quote = Button {
+            onQuote()
+        } label: {
+            Label("Quote Cost", systemImage: "tag")
+        }
+        .tooltip("Estimate sparks before generation", enabled: showTooltips)
+        .buttonStyle(SecondaryActionButtonStyle())
+
+        let create = Button {
+            onCreateShot()
+        } label: {
+            Label(createButtonTitle, systemImage: "plus.rectangle.on.rectangle")
+        }
+        .tooltip(
+            panelMode == .audioSounds ? "Create sound draft in timeline" : "Create shot draft in timeline",
+            enabled: showTooltips
+        )
+        .buttonStyle(PrimaryActionButtonStyle())
+
+        if panelMode == .audioSounds {
+            HStack(alignment: .center, spacing: CinefuseTokens.Spacing.s) {
+                quote
+                create
+            }
+        } else {
+            VStack(alignment: .leading, spacing: CinefuseTokens.Spacing.xs) {
+                quote
+                create
+            }
+        }
+    }
+
     var body: some View {
         SectionCard(
             title: panelMode == .audioSounds ? "Sounds" : "Shots",
@@ -6160,22 +6243,7 @@ struct ShotsPanel: View {
                         if panelMode == .audioSounds {
                             soundBlueprintsInlineMenu()
                         }
-                        VStack(alignment: .leading, spacing: CinefuseTokens.Spacing.xs) {
-                            Button {
-                                onQuote()
-                            } label: {
-                                Label("Quote Cost", systemImage: "tag")
-                            }
-                            .tooltip("Estimate sparks before generation", enabled: showTooltips)
-                            .buttonStyle(SecondaryActionButtonStyle())
-                            Button {
-                                onCreateShot()
-                            } label: {
-                                Label(createButtonTitle, systemImage: "plus.rectangle.on.rectangle")
-                            }
-                            .tooltip("Create shot draft in timeline", enabled: showTooltips)
-                            .buttonStyle(PrimaryActionButtonStyle())
-                        }
+                        quoteAndCreateButtons()
                     }
                     VStack(alignment: .leading, spacing: CinefuseTokens.Spacing.s) {
                         TextField(promptFieldTitle, text: $shotPromptDraft)
@@ -6202,22 +6270,7 @@ struct ShotsPanel: View {
                                 soundBlueprintsInlineMenu()
                             }
                         }
-                        VStack(alignment: .leading, spacing: CinefuseTokens.Spacing.xs) {
-                            Button {
-                                onQuote()
-                            } label: {
-                                Label("Quote Cost", systemImage: "tag")
-                            }
-                            .tooltip("Estimate sparks before generation", enabled: showTooltips)
-                            .buttonStyle(SecondaryActionButtonStyle())
-                            Button {
-                                onCreateShot()
-                            } label: {
-                                Label(createButtonTitle, systemImage: "plus.rectangle.on.rectangle")
-                            }
-                            .tooltip("Create shot draft in timeline", enabled: showTooltips)
-                            .buttonStyle(PrimaryActionButtonStyle())
-                        }
+                        quoteAndCreateButtons()
                     }
                 }
 
@@ -6255,7 +6308,9 @@ struct ShotsPanel: View {
                 } else {
                     ForEach(shots) { shot in
                         let presentation = statusPresentation(for: shot)
-                        let backgroundThumbnailURL = localThumbnailURLByShotId[shot.id]
+                        let backgroundThumbnailURL = panelMode == .audioSounds
+                            ? nil
+                            : localThumbnailURLByShotId[shot.id]
                         VStack(alignment: .leading, spacing: CinefuseTokens.Spacing.s) {
                             VStack(alignment: .leading, spacing: CinefuseTokens.Spacing.xxs) {
                                 HStack(spacing: CinefuseTokens.Spacing.xs) {
@@ -6329,7 +6384,7 @@ struct ShotsPanel: View {
                                         .foregroundStyle(CinefuseTokens.ColorRole.textSecondary)
                                 }
                             }
-                            .cinefuseReadableOnMediaBackground()
+                            .modifier(ConditionalReadableVideoLabelBackdrop(useFrostedPlate: panelMode != .audioSounds))
                             Button {
                                 onGenerateShot(shot.id)
                             } label: {
@@ -6653,6 +6708,19 @@ private struct ReadableVideoLabelBackdrop: ViewModifier {
                             .stroke(CinefuseTokens.ColorRole.borderSubtle.opacity(0.45), lineWidth: 1)
                     )
             }
+    }
+}
+
+private struct ConditionalReadableVideoLabelBackdrop: ViewModifier {
+    let useFrostedPlate: Bool
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if useFrostedPlate {
+            content.modifier(ReadableVideoLabelBackdrop())
+        } else {
+            content
+        }
     }
 }
 
