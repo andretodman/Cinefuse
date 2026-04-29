@@ -897,6 +897,11 @@ struct ProjectWorkspaceScreen: View {
                     selectedProjectId: $selectedProjectId,
                     isLoading: model.isLoading
                 )
+                .navigationSplitViewColumnWidth(
+                    min: 200,
+                    ideal: 280,
+                    max: 520
+                )
             } detail: {
                 projectDetailView
             }
@@ -3172,6 +3177,8 @@ struct ProjectDetailScreen: View {
     @AppStorage("cinefuse.editor.collapse.audio") private var collapseAudioPanel = false
     @AppStorage("cinefuse.editor.collapse.jobs") private var collapseJobsPanel = false
     @AppStorage("cinefuse.editor.collapse.soundBlueprints") private var collapseSoundBlueprintsPanel = false
+    /// Allocated height for the timeline strip when expanded (drag the handle under the timeline to resize).
+    @AppStorage("cinefuse.editor.timelineStripHeight") private var timelineStripHeight: Double = 220
     @State private var selectedTimelineShotId: String?
     @State private var trackSyncModes: [Int: AudioTrackSyncMode] = [:]
     @State private var laneVolumeByIndex: [Int: Float] = [:]
@@ -3232,23 +3239,50 @@ struct ProjectDetailScreen: View {
                     }
 
                     if !isRenderWorkspace {
-                        HorizontalTimelineTrack(
-                            shots: shotsForSoundOrVideoTimeline,
-                            jobs: jobs,
-                            localThumbnailURLByShotId: localThumbnailURLByShotId,
-                            localFileRecordsByRemoteURL: localFileRecordsByRemoteURL,
-                            shotRequestStateById: shotRequestStateById,
-                            selectedShotId: $selectedTimelineShotId,
-                            onPreviewShot: { shotId in
-                                selectedTimelineShotId = shotId
-                                previewPlaybackRequestToken += 1
-                            },
-                            onMoveShot: onReorderShots,
-                            showTooltips: showTooltips,
-                            themePalette: timelineThemeMode.palette,
-                            isCollapsed: $collapseTimelinePanel,
-                            clipVisualStyle: isAudioCreationMode ? .audioWaveform : .videoThumbnail
-                        )
+                        if collapseTimelinePanel {
+                            HorizontalTimelineTrack(
+                                shots: shotsForSoundOrVideoTimeline,
+                                jobs: jobs,
+                                localThumbnailURLByShotId: localThumbnailURLByShotId,
+                                localFileRecordsByRemoteURL: localFileRecordsByRemoteURL,
+                                shotRequestStateById: shotRequestStateById,
+                                selectedShotId: $selectedTimelineShotId,
+                                onPreviewShot: { shotId in
+                                    selectedTimelineShotId = shotId
+                                    previewPlaybackRequestToken += 1
+                                },
+                                onMoveShot: onReorderShots,
+                                showTooltips: showTooltips,
+                                themePalette: timelineThemeMode.palette,
+                                isCollapsed: $collapseTimelinePanel,
+                                clipVisualStyle: isAudioCreationMode ? .audioWaveform : .videoThumbnail
+                            )
+                        } else {
+                            VStack(spacing: 0) {
+                                HorizontalTimelineTrack(
+                                    shots: shotsForSoundOrVideoTimeline,
+                                    jobs: jobs,
+                                    localThumbnailURLByShotId: localThumbnailURLByShotId,
+                                    localFileRecordsByRemoteURL: localFileRecordsByRemoteURL,
+                                    shotRequestStateById: shotRequestStateById,
+                                    selectedShotId: $selectedTimelineShotId,
+                                    onPreviewShot: { shotId in
+                                        selectedTimelineShotId = shotId
+                                        previewPlaybackRequestToken += 1
+                                    },
+                                    onMoveShot: onReorderShots,
+                                    showTooltips: showTooltips,
+                                    themePalette: timelineThemeMode.palette,
+                                    isCollapsed: $collapseTimelinePanel,
+                                    clipVisualStyle: isAudioCreationMode ? .audioWaveform : .videoThumbnail
+                                )
+                                .frame(height: CGFloat(clampedTimelineStripHeight(timelineStripHeight)), alignment: .top)
+                                .clipped()
+                                HorizontalPanelHandle(accessibilityLabel: "Resize timeline height") { delta in
+                                    timelineStripHeight = clampedTimelineStripHeight(timelineStripHeight - delta)
+                                }
+                            }
+                        }
                     }
 
                     GeometryReader { geometry in
@@ -3326,7 +3360,9 @@ struct ProjectDetailScreen: View {
                                         .frame(maxWidth: isPreviewPoppedOut ? .infinity : nil)
                                         .frame(minWidth: 0, maxHeight: .infinity)
                                         if !isPreviewPoppedOut {
-                                            VerticalPanelHandle { delta in
+                                            VerticalPanelHandle(
+                                                accessibilityLabel: "Resize left and center panels"
+                                            ) { delta in
                                                 leftPaneWidth = clampedLeftPaneWidth(
                                                     leftPaneWidth + delta,
                                                     totalWidth: totalWidth,
@@ -3343,7 +3379,9 @@ struct ProjectDetailScreen: View {
 
                                     if showsRightPanel {
                                         if !isPreviewPoppedOut {
-                                            VerticalPanelHandle { delta in
+                                            VerticalPanelHandle(
+                                                accessibilityLabel: "Resize center and right panels"
+                                            ) { delta in
                                                 rightPaneWidth = clampedRightPaneWidth(
                                                     rightPaneWidth - delta,
                                                     totalWidth: totalWidth,
@@ -3368,7 +3406,7 @@ struct ProjectDetailScreen: View {
                                 }
 
                                 if showsBottomRegion {
-                                    HorizontalPanelHandle { delta in
+                                    HorizontalPanelHandle(accessibilityLabel: "Resize jobs and main workspace") { delta in
                                         bottomPaneHeight = clampedBottomPaneHeight(
                                             bottomPaneHeight - delta,
                                             totalHeight: totalHeight
@@ -4055,6 +4093,11 @@ struct ProjectDetailScreen: View {
             Double(CinefuseTokens.Control.maxSidePanelWidth)
         )
         bottomPaneHeight = max(bottomPaneHeight, Double(CinefuseTokens.Control.minBottomPanelHeight))
+        timelineStripHeight = clampedTimelineStripHeight(timelineStripHeight)
+    }
+
+    private func clampedTimelineStripHeight(_ height: Double) -> Double {
+        min(max(height, 132), 560)
     }
 
     private func header(project: Project) -> some View {
@@ -5635,55 +5678,120 @@ private final class PreviewPopoutWindowController: NSWindowController, NSWindowD
 }
 #endif
 
+#if canImport(AppKit) && !targetEnvironment(macCatalyst)
+private struct ResizeSplitCursorModifier: ViewModifier {
+    enum Axis {
+        case horizontalDrag
+        case verticalDrag
+    }
+
+    let axis: Axis
+
+    func body(content: Content) -> some View {
+        content.onHover { hovering in
+            if hovering {
+                switch axis {
+                case .horizontalDrag:
+                    NSCursor.resizeLeftRight.push()
+                case .verticalDrag:
+                    NSCursor.resizeUpDown.push()
+                }
+            } else {
+                NSCursor.pop()
+            }
+        }
+    }
+}
+#else
+private struct ResizeSplitCursorModifier: ViewModifier {
+    enum Axis {
+        case horizontalDrag
+        case verticalDrag
+    }
+
+    let axis: Axis
+
+    func body(content: Content) -> some View {
+        content
+    }
+}
+#endif
+
 struct VerticalPanelHandle: View {
+    var accessibilityLabel: String = "Drag to resize panels"
     let onDrag: (Double) -> Void
     @State private var lastTranslation: Double = 0
+    @State private var isHovering = false
 
     var body: some View {
-        Rectangle()
-            .fill(CinefuseTokens.ColorRole.borderSubtle)
-            .frame(width: CinefuseTokens.Control.splitterThickness)
-            .contentShape(Rectangle())
-            .gesture(
-                DragGesture(minimumDistance: 1)
-                    .onChanged { value in
-                        let next = Double(value.translation.width)
-                        onDrag(next - lastTranslation)
-                        lastTranslation = next
-                    }
-                    .onEnded { value in
-                        let next = Double(value.translation.width)
-                        onDrag(next - lastTranslation)
-                        lastTranslation = 0
-                    }
-            )
-            .padding(.horizontal, (CinefuseTokens.Control.splitterHitArea - CinefuseTokens.Control.splitterThickness) / 2)
+        ZStack {
+            RoundedRectangle(cornerRadius: 4, style: .continuous)
+                .fill(CinefuseTokens.ColorRole.accent.opacity(isHovering ? 0.22 : 0))
+            Rectangle()
+                .fill(CinefuseTokens.ColorRole.borderSubtle.opacity(isHovering ? 0.95 : 0.65))
+                .frame(width: max(2, CinefuseTokens.Control.splitterThickness - 1))
+            Capsule()
+                .fill(CinefuseTokens.ColorRole.textSecondary.opacity(isHovering ? 0.55 : 0.3))
+                .frame(width: 2, height: 36)
+        }
+        .frame(width: CinefuseTokens.Control.splitterThickness)
+        .contentShape(Rectangle())
+        .onHover { isHovering = $0 }
+        .modifier(ResizeSplitCursorModifier(axis: .horizontalDrag))
+        .accessibilityLabel(accessibilityLabel)
+        .gesture(
+            DragGesture(minimumDistance: 1)
+                .onChanged { value in
+                    let next = Double(value.translation.width)
+                    onDrag(next - lastTranslation)
+                    lastTranslation = next
+                }
+                .onEnded { value in
+                    let next = Double(value.translation.width)
+                    onDrag(next - lastTranslation)
+                    lastTranslation = 0
+                }
+        )
+        .padding(.horizontal, (CinefuseTokens.Control.splitterHitArea - CinefuseTokens.Control.splitterThickness) / 2)
     }
 }
 
 struct HorizontalPanelHandle: View {
+    var accessibilityLabel: String = "Drag to resize panels"
     let onDrag: (Double) -> Void
     @State private var lastTranslation: Double = 0
+    @State private var isHovering = false
 
     var body: some View {
-        Rectangle()
-            .fill(CinefuseTokens.ColorRole.borderSubtle)
-            .frame(height: CinefuseTokens.Control.splitterThickness)
-            .contentShape(Rectangle())
-            .gesture(
-                DragGesture(minimumDistance: 1)
-                    .onChanged { value in
-                        let next = Double(value.translation.height)
-                        onDrag(next - lastTranslation)
-                        lastTranslation = next
-                    }
-                    .onEnded { value in
-                        let next = Double(value.translation.height)
-                        onDrag(next - lastTranslation)
-                        lastTranslation = 0
-                    }
-            )
-            .padding(.vertical, (CinefuseTokens.Control.splitterHitArea - CinefuseTokens.Control.splitterThickness) / 2)
+        ZStack {
+            RoundedRectangle(cornerRadius: 4, style: .continuous)
+                .fill(CinefuseTokens.ColorRole.accent.opacity(isHovering ? 0.22 : 0))
+            Rectangle()
+                .fill(CinefuseTokens.ColorRole.borderSubtle.opacity(isHovering ? 0.95 : 0.65))
+                .frame(height: max(2, CinefuseTokens.Control.splitterThickness - 1))
+            Capsule()
+                .fill(CinefuseTokens.ColorRole.textSecondary.opacity(isHovering ? 0.55 : 0.3))
+                .frame(width: 36, height: 2)
+        }
+        .frame(height: CinefuseTokens.Control.splitterThickness)
+        .contentShape(Rectangle())
+        .onHover { isHovering = $0 }
+        .modifier(ResizeSplitCursorModifier(axis: .verticalDrag))
+        .accessibilityLabel(accessibilityLabel)
+        .gesture(
+            DragGesture(minimumDistance: 1)
+                .onChanged { value in
+                    let next = Double(value.translation.height)
+                    onDrag(next - lastTranslation)
+                    lastTranslation = next
+                }
+                .onEnded { value in
+                    let next = Double(value.translation.height)
+                    onDrag(next - lastTranslation)
+                    lastTranslation = 0
+                }
+        )
+        .padding(.vertical, (CinefuseTokens.Control.splitterHitArea - CinefuseTokens.Control.splitterThickness) / 2)
     }
 }
 
