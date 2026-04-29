@@ -1665,9 +1665,11 @@ struct ProjectWorkspaceScreen: View {
         }
 
         for shot in shots {
-            let clipJob = jobs.first { $0.shotId == shot.id && $0.kind == "clip" }
             let generationNoun = latestJobByShotId[shot.id]?.kind == "audio" ? "Sound" : "Shot"
-            let progressNow = clipJob?.progressPct
+            // Sound uses `kind == "audio"` jobs; only reading `clip` progress never advanced
+            // `lastMeaningfulTransitionAt`, so the 120s shot timeout fired while the worker was healthy.
+            let progressJob = latestJobByShotId[shot.id]
+            let progressNow = progressJob?.progressPct
             let prevProgress = lastSyncedClipJobProgressByShotId[shot.id]
             let progressAdvanced = progressNow != nil && progressNow != prevProgress
                 && inFlightStatuses.contains(shot.status.lowercased())
@@ -1704,6 +1706,16 @@ struct ProjectWorkspaceScreen: View {
                 } else if progressAdvanced {
                     state.lastMeaningfulTransitionAt = Date()
                     state.lastEventAt = Date()
+                }
+
+                let lj = latestJobByShotId[shot.id]
+                let invokeDone = (lj?.invokeState ?? "")
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                    .lowercased() == "done"
+                if shot.status != "failed", lj?.status == "done" || invokeDone {
+                    state.stage = .done
+                    state.errorMessage = nil
+                    state.lastMeaningfulTransitionAt = parseOptionalISODate(lj?.updatedAt) ?? Date()
                 }
             }
 
@@ -7323,7 +7335,11 @@ private func artifactStatusPresentation(
         "Output file created: \(job.outputCreated == true ? "yes" : (job.outputCreated == false ? "no" : "unknown"))",
         "Provider response: \(displayValue(job.providerResponseSnippet, missing: "no provider response captured"))"
     ]
-    if requestState?.stage == .timedOut || requestState?.stage == .failed {
+    let jobInvokeDone = (job.invokeState ?? "")
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+        .lowercased() == "done"
+    if (requestState?.stage == .timedOut || requestState?.stage == .failed),
+       job.status != "done", !jobInvokeDone {
         let details = [
             "Job: \(job.kind) / \(job.status)",
             "Model: \(job.modelId ?? "unknown")",
@@ -7444,7 +7460,11 @@ private func shotArtifactStatusPresentation(
             details: details.joined(separator: "\n")
         )
     }
-    if requestState?.stage == .timedOut || requestState?.stage == .failed {
+    let shotJobInvokeDone = (job?.invokeState ?? "")
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+        .lowercased() == "done"
+    let shotJobCompleted = job?.status == "done" || shotJobInvokeDone || shot.status == "ready"
+    if (requestState?.stage == .timedOut || requestState?.stage == .failed), !shotJobCompleted {
         let providerNeverReached: Bool
         if job?.kind == "audio" {
             let pe = (job?.providerEndpoint ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
