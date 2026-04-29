@@ -10,11 +10,14 @@ const TOOLS = [
   "lipsync"
 ];
 
-/** Match clip tier sparks for UX parity; cost curve targets instrumental/score generation. */
+/**
+ * Sounds / score tier: sparks aligned with clip tiers for UX parity.
+ * `modelId` is ElevenLabs Music (`music_v1`) — see https://elevenlabs.io/docs/api-reference/music/compose
+ */
 const SOUND_TIER_CONFIG = {
-  budget: { sparks: 50, modelId: "audio-score-budget", estimatedDurationSec: 5, costToUsCents: 28 },
-  standard: { sparks: 70, modelId: "audio-score-standard", estimatedDurationSec: 5, costToUsCents: 40 },
-  premium: { sparks: 250, modelId: "audio-score-premium", estimatedDurationSec: 5, costToUsCents: 120 }
+  budget: { sparks: 50, modelId: "music_v1", estimatedDurationSec: 5, costToUsCents: 28 },
+  standard: { sparks: 70, modelId: "music_v1", estimatedDurationSec: 5, costToUsCents: 40 },
+  premium: { sparks: 250, modelId: "music_v1", estimatedDurationSec: 5, costToUsCents: 120 }
 };
 
 function resolveSoundTierConfig(modelTier) {
@@ -140,6 +143,56 @@ function extractDialogueText(input = {}) {
     }
   }
   return "";
+}
+
+/** Prompt for ElevenLabs Music compose (`generate_score`). */
+function extractMusicPrompt(input = {}) {
+  if (typeof input.prompt === "string" && input.prompt.trim().length > 0) {
+    return input.prompt.trim();
+  }
+  if (typeof input.mood === "string" && input.mood.trim().length > 0) {
+    return `Instrumental ${input.mood.trim()} mood music for picture`;
+  }
+  return "";
+}
+
+/**
+ * ElevenLabs Music: instrumental (or prompt-led) generation via Compose API.
+ * Returns raw MP3 (or chosen output_format) bytes.
+ */
+async function elevenLabsComposeMusic({ prompt, musicLengthMs, forceInstrumental = true }) {
+  const apiKey = process.env.ELEVENLABS_API_KEY ?? "";
+  if (!apiKey) {
+    throw new Error("elevenlabs_missing_api_key");
+  }
+  const length = Math.min(600_000, Math.max(3000, Number(musicLengthMs ?? 30_000)));
+  const promptText =
+    typeof prompt === "string" && prompt.trim().length > 0
+      ? prompt.trim()
+      : "instrumental cinematic underscore";
+  const outputFormat = process.env.ELEVENLABS_MUSIC_OUTPUT_FORMAT ?? "mp3_44100_128";
+  const url = new URL("https://api.elevenlabs.io/v1/music");
+  url.searchParams.set("output_format", outputFormat);
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      "xi-api-key": apiKey,
+      accept: "audio/mpeg",
+      "content-type": "application/json"
+    },
+    body: JSON.stringify({
+      prompt: promptText,
+      music_length_ms: length,
+      model_id: "music_v1",
+      force_instrumental: forceInstrumental
+    }),
+    signal: AbortSignal.timeout(300_000)
+  });
+  if (!response.ok) {
+    const errBody = await response.text();
+    throw new Error(`elevenlabs_music_http_${response.status}: ${errBody.slice(0, 800)}`);
+  }
+  return Buffer.from(await response.arrayBuffer());
 }
 
 async function elevenLabsTextToSpeech(text) {
@@ -337,6 +390,127 @@ async function runGenerateDialogue(tool, kind, input) {
   }
 }
 
+async function runGenerateScore(tool, kind, input) {
+  const httpUrl = resolveProviderUrl(tool);
+  if (httpUrl) {
+    try {
+      const track = await callAudioProvider(tool, kind, input);
+      return {
+        ok: true,
+        skipped: false,
+        outputCreated: true,
+        providerAdapter: resolveAudioAdapterKind(),
+        track: {
+          ...track,
+          providerAdapter: resolveAudioAdapterKind()
+        }
+      };
+    } catch (err) {
+      return skipResult({
+        tool,
+        input,
+        provider: "http_adapter",
+        reason: "provider_call_failed",
+        detail: err instanceof Error ? err.message : String(err),
+        outputCreated: false
+      });
+    }
+  }
+
+  if (isTestMode()) {
+    const track = fallbackTrack(kind, input);
+    return {
+      ok: true,
+      skipped: false,
+      outputCreated: true,
+      providerAdapter: "stub",
+      track: { ...track, providerAdapter: "stub", modelId: "music_v1" }
+    };
+  }
+
+  const promptText = extractMusicPrompt(input);
+  if (!promptText) {
+    return skipResult({
+      tool,
+      input,
+      provider: "elevenlabs_music",
+      reason: "missing_music_prompt",
+      detail: "Provide prompt or mood for score/music generation.",
+      outputCreated: false
+    });
+  }
+
+  if (!process.env.ELEVENLABS_API_KEY) {
+    return skipResult({
+      tool,
+      input,
+      provider: "none",
+      reason: "no_music_provider",
+      detail:
+        "Set ELEVENLABS_API_KEY for ElevenLabs Music (compose API) or CINEFUSE_AUDIO_SCORE_PROVIDER_URL for a custom bridge (and CINEFUSE_AUDIO_UPLOAD_URL to persist audio).",
+      outputCreated: false
+    });
+  }
+
+  const tierCfg = resolveSoundTierConfig(input.modelTier ?? "budget");
+  const musicLengthMs = Math.min(
+    600_000,
+    Math.max(3000, Number(input.durationMs ?? input.musicLengthMs ?? 30_000))
+  );
+
+  try {
+    const buffer = await elevenLabsComposeMusic({
+      prompt: promptText,
+      musicLengthMs,
+      forceInstrumental: input.forceInstrumental !== false
+    });
+    const uploadedUrl = await uploadAudioBuffer(buffer, "audio/mpeg");
+    if (!uploadedUrl) {
+      return skipResult({
+        tool,
+        input,
+        provider: "elevenlabs_music",
+        reason: "elevenlabs_music_requires_upload_url",
+        detail:
+          "ElevenLabs Music returned audio but CINEFUSE_AUDIO_UPLOAD_URL is not set to persist a public URL.",
+        outputCreated: false
+      });
+    }
+    const track = normalizeTrack(
+      {
+        sourceUrl: uploadedUrl,
+        durationMs: musicLengthMs,
+        laneIndex: input.laneIndex,
+        startMs: input.startMs,
+        costToUsCents: tierCfg.costToUsCents,
+        sparksCost: tierCfg.sparks
+      },
+      kind,
+      input
+    );
+    return {
+      ok: true,
+      skipped: false,
+      outputCreated: true,
+      providerAdapter: "elevenlabs_music",
+      track: {
+        ...track,
+        providerAdapter: "elevenlabs_music",
+        modelId: "music_v1"
+      }
+    };
+  } catch (err) {
+    return skipResult({
+      tool,
+      input,
+      provider: "elevenlabs_music",
+      reason: "elevenlabs_music_failed",
+      detail: err instanceof Error ? err.message : String(err),
+      outputCreated: false
+    });
+  }
+}
+
 async function runHttpOrStubTool(tool, kind, input) {
   const httpUrl = resolveProviderUrl(tool);
   if (httpUrl) {
@@ -443,6 +617,8 @@ export function createServer() {
       let result;
       if (tool === "generate_dialogue") {
         result = await runGenerateDialogue(tool, kind, input);
+      } else if (tool === "generate_score") {
+        result = await runGenerateScore(tool, kind, input);
       } else {
         result = await runHttpOrStubTool(tool, kind, input);
       }

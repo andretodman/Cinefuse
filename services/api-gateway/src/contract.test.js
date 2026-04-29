@@ -1109,7 +1109,7 @@ test("api contract: sound generation uses audio MCP stub (wav url on shot)", asy
   assert.equal(quoteResponse.status, 200);
   const quoteBody = await quoteResponse.json();
   assert.equal(quoteBody.quote.sparksCost, 70);
-  assert.match(quoteBody.quote.modelId, /audio-score/);
+  assert.equal(quoteBody.quote.modelId, "music_v1");
 
   const shotCreateResponse = await fetch(`${baseUrl}/api/v1/cinefuse/projects/${projectId}/shots`, {
     method: "POST",

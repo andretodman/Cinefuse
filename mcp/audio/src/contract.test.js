@@ -11,6 +11,7 @@ test("audio contract: list_tools and invoke", async () => {
   const quote = await server.invoke("quote_sound", { modelTier: "standard" });
   assert.equal(quote.ok, true);
   assert.equal(quote.sparksCost, 70);
+  assert.equal(quote.modelId, "music_v1");
   const result = await server.invoke("generate_score", { mood: "tense" });
   assert.equal(result.ok, true);
 });

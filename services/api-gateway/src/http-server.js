@@ -513,7 +513,7 @@ export function createHttpServer() {
           prompt: currentShot.prompt,
           mood: "neutral",
           modelTier: currentShot.modelTier,
-          durationMs: Math.max(2000, Math.round((currentShot.durationSec ?? 5) * 1000)),
+          durationMs: Math.max(3000, Math.round((currentShot.durationSec ?? 5) * 1000)),
           shotId: task.shotId,
           userId: task.userId
         });
