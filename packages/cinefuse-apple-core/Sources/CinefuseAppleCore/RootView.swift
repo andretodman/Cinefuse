@@ -670,6 +670,15 @@ struct ProjectWorkspaceScreen: View {
 
     private var shotsForEditorDisplay: [Shot] {
         shots.map { shot in
+            if let clipUrl = shot.clipUrl,
+               let record = localFileRecordsByRemoteURL[clipUrl],
+               record.status == .synced || record.status == .alreadyPresent,
+               let path = record.localPath,
+               !path.isEmpty,
+               FileManager.default.fileExists(atPath: path) {
+                let fileURL = URL(fileURLWithPath: path)
+                return shot.withClipUrl(fileURL.absoluteString)
+            }
             if let local = shotPlaybackClipURLByShotId[shot.id] {
                 return shot.withClipUrl(local.absoluteString)
             }
@@ -2685,11 +2694,13 @@ struct ProjectWorkspaceScreen: View {
             }
             return leftIndex < rightIndex
         }
-        var audible = sorted.filter { $0.hasSoundContent(audioTracks: audioTracks) }
+        var audible = sorted.filter {
+            $0.qualifiesForAudioModeLists(audioTracks: audioTracks, syncedLocalRecords: localFileRecordsByRemoteURL)
+        }
         audible.move(fromOffsets: from, toOffset: to)
         var qi = 0
         let merged = sorted.map { shot -> Shot in
-            if shot.hasSoundContent(audioTracks: audioTracks) {
+            if shot.qualifiesForAudioModeLists(audioTracks: audioTracks, syncedLocalRecords: localFileRecordsByRemoteURL) {
                 let next = audible[qi]
                 qi += 1
                 return next
@@ -3424,21 +3435,29 @@ struct ProjectDetailScreen: View {
     /// In Audio creation mode, the horizontal timeline and audio preview only include shots that have linked audio metadata or an audio lane with a source.
     private var shotsForSoundOrVideoTimeline: [Shot] {
         if isAudioCreationMode {
-            return sortedShots.filter { $0.hasSoundContent(audioTracks: audioTracks) }
+            return sortedShots.filter { shotQualifiesForAudioTimeline($0) }
         }
         return sortedShots
     }
 
-    /// Sounds panel in audio mode: same “audible” signal as the timeline, plus drafts and in-flight rows (no `clipUrl` yet). Hides finished silent video (`clipUrl` set, no sound linkage).
+    /// Sounds panel in audio mode: same rows as the sound timeline, plus drafts and in-flight rows (no `clipUrl` yet). Hides finished silent video (`clipUrl` set, no sound linkage).
     private var shotsForSoundsPanelIfNeeded: [Shot] {
         guard isAudioCreationMode else { return sortedShots }
-        return sortedShots.filter { shot in
-            if shot.hasSoundContent(audioTracks: audioTracks) {
-                return true
-            }
-            let clip = shot.clipUrl?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            return clip.isEmpty
+        return sortedShots.filter { shotQualifiesForSoundsPanel($0) }
+    }
+
+    /// Timeline + preview: shot has API/audio linkage **or** synced local audio on disk for `clipUrl`.
+    private func shotQualifiesForAudioTimeline(_ shot: Shot) -> Bool {
+        shot.qualifiesForAudioModeLists(audioTracks: audioTracks, syncedLocalRecords: localFileRecordsByRemoteURL)
+    }
+
+    /// Sounds panel: include timeline-qualified shots **or** drafts / queued rows with no `clipUrl` yet.
+    private func shotQualifiesForSoundsPanel(_ shot: Shot) -> Bool {
+        if shotQualifiesForAudioTimeline(shot) {
+            return true
         }
+        let clip = shot.clipUrl?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return clip.isEmpty
     }
 
     private var timelineShotBoundaries: [TimelineShotBoundary] {
@@ -3457,7 +3476,7 @@ struct ProjectDetailScreen: View {
 
     private var shotBoundarySource: [Shot] {
         if isAudioCreationMode {
-            return sortedShots.filter { $0.hasSoundContent(audioTracks: audioTracks) }
+            return sortedShots.filter { shotQualifiesForAudioTimeline($0) }
         }
         return sortedShots
     }
@@ -3491,6 +3510,7 @@ struct ProjectDetailScreen: View {
             EditorAudioPreviewPanel(
                 shots: shotsForSoundOrVideoTimeline,
                 audioTracks: audioTracks,
+                localFileRecordsByRemoteURL: localFileRecordsByRemoteURL,
                 selectedShotId: $selectedTimelineShotId,
                 playbackRequestToken: previewPlaybackRequestToken,
                 showTooltips: showTooltips,
@@ -3517,6 +3537,7 @@ struct ProjectDetailScreen: View {
             EditorAudioPreviewPanel(
                 shots: shotsForSoundOrVideoTimeline,
                 audioTracks: audioTracks,
+                localFileRecordsByRemoteURL: localFileRecordsByRemoteURL,
                 selectedShotId: $selectedTimelineShotId,
                 playbackRequestToken: previewPlaybackRequestToken,
                 showTooltips: showTooltips,
@@ -4881,6 +4902,7 @@ struct EditorPreviewPanel: View {
 struct EditorAudioPreviewPanel: View {
     let shots: [Shot]
     let audioTracks: [AudioTrack]
+    let localFileRecordsByRemoteURL: [String: LocalFileRecord]
     @Binding var selectedShotId: String?
     let playbackRequestToken: Int
     let showTooltips: Bool
@@ -4895,7 +4917,7 @@ struct EditorAudioPreviewPanel: View {
     private static let playbackRates: [Double] = [0.5, 0.75, 1.0, 1.25, 1.5, 2.0]
 
     private func shotMayPlayClipUrl(_ shot: Shot) -> Bool {
-        shot.hasSoundContent(audioTracks: audioTracks)
+        shot.qualifiesForAudioModeLists(audioTracks: audioTracks, syncedLocalRecords: localFileRecordsByRemoteURL)
     }
 
     private var playableMediaURLs: [URL] {

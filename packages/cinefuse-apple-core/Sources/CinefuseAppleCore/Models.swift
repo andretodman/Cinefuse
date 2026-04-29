@@ -134,16 +134,61 @@ extension Shot {
         )
     }
 
-    /// Shots that participate in the sound timeline and audio preview: linked `audioRefs` and/or an audio lane with a source URL scoped to this shot.
+    /// Shots that participate in the sound timeline and audio preview: linked `audioRefs`, an audio lane with a source URL scoped to this shot, **or** a generated audio artifact on `clipUrl` (score/dialogue/SFX with no lane row yet).
     public func hasSoundContent(audioTracks: [AudioTrack]) -> Bool {
         if let refs = audioRefs, !refs.isEmpty {
             return true
         }
-        return audioTracks.contains { track in
+        if audioTracks.contains(where: { track in
             guard track.shotId == id else { return false }
             guard let url = track.sourceUrl else { return false }
             return !url.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }) {
+            return true
         }
+        let clip = clipUrl?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !clip.isEmpty else { return false }
+        return Self.clipUrlLikelyAudioArtifact(clip)
+    }
+
+    /// Same as ``hasSoundContent`` plus: synced local file under `clipUrl` looks like audio (covers API URL quirks and manifest-only proof).
+    public func qualifiesForAudioModeLists(audioTracks: [AudioTrack], syncedLocalRecords: [String: LocalFileRecord]) -> Bool {
+        if hasSoundContent(audioTracks: audioTracks) {
+            return true
+        }
+        guard let clip = clipUrl?.trimmingCharacters(in: .whitespacesAndNewlines), !clip.isEmpty else {
+            return false
+        }
+        guard let record = syncedLocalRecords[clip],
+              record.status == .synced || record.status == .alreadyPresent,
+              let path = record.localPath?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !path.isEmpty
+        else {
+            return false
+        }
+        let lower = path.lowercased()
+        return [".wav", ".mp3", ".m4a", ".aac", ".flac", ".ogg"].contains { lower.hasSuffix($0) }
+    }
+
+    /// True when `clipUrl` points at an audio file (generated sound pipeline) vs video.
+    private static func clipUrlLikelyAudioArtifact(_ urlString: String) -> Bool {
+        let lower = urlString.lowercased()
+        if lower.contains("/audio/") {
+            return true
+        }
+        // Strip query/fragment so `…/take.wav?sig=1` still matches `.wav`.
+        let pathOnly = lower.split(separator: "?").first.map(String.init) ?? lower
+        let pathNoHash = pathOnly.split(separator: "#").first.map(String.init) ?? pathOnly
+        if [".wav", ".mp3", ".m4a", ".aac", ".flac", ".ogg"].contains(where: { pathNoHash.hasSuffix($0) }) {
+            return true
+        }
+        // Common API path segments without relying on `/audio/` prefix.
+        if pathNoHash.contains("/score/") || pathNoHash.contains("/dialogue/")
+            || pathNoHash.contains("/sfx/") || pathNoHash.contains("/mix/")
+            || pathNoHash.contains("/lipsync/") {
+            return true
+        }
+        return false
     }
 }
 

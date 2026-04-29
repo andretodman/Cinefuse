@@ -101,12 +101,12 @@ function coerceProviderStatusCode(value) {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
-/** Minimal valid PCM WAV (~0.25s silence) for dev stub URLs (`files.cinefuse.test` replacement via gateway). */
+/** Minimal valid PCM WAV (~0.35s) for dev stub URLs — quiet tone so files are audibly non-empty (not silent zeros mistaken for corruption). */
 function minimalSilentWavBuffer() {
   const sampleRate = 44100;
   const channels = 1;
   const bitsPerSample = 16;
-  const durationSec = 0.25;
+  const durationSec = 0.35;
   const numSamples = Math.floor(sampleRate * durationSec);
   const blockAlign = (channels * bitsPerSample) / 8;
   const byteRate = sampleRate * blockAlign;
@@ -125,6 +125,14 @@ function minimalSilentWavBuffer() {
   buffer.writeUInt16LE(bitsPerSample, 34);
   buffer.write("data", 36);
   buffer.writeUInt32LE(dataSize, 40);
+  const freqHz = 440;
+  const amplitude = 1200;
+  for (let i = 0; i < numSamples; i += 1) {
+    const t = i / sampleRate;
+    const sample = Math.round(amplitude * Math.sin(2 * Math.PI * freqHz * t));
+    const clamped = Math.max(-32768, Math.min(32767, sample));
+    buffer.writeInt16LE(clamped, 44 + i * 2);
+  }
   return buffer;
 }
 
