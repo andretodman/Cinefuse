@@ -1029,3 +1029,53 @@ test("api contract: shot generate merges soundBlueprintIds into shot audioRefs",
     });
   });
 });
+
+test("api contract: project file upload stores bytes and GET returns same payload", async () => {
+  const headersAuth = authHeaders("usr_file_roundtrip");
+  await clearProjects();
+  const server = createHttpServer();
+  await new Promise((resolve) => server.listen(0, resolve));
+  const address = server.address();
+  const port = typeof address === "object" && address ? address.port : 0;
+  const baseUrl = `http://127.0.0.1:${port}`;
+
+  const createResponse = await fetch(`${baseUrl}/api/v1/cinefuse/projects`, {
+    method: "POST",
+    headers: headersAuth,
+    body: JSON.stringify({ title: "File bytes roundtrip" })
+  });
+  assert.equal(createResponse.status, 201);
+  const projectId = (await createResponse.json()).project.id;
+
+  const payload = new TextEncoder().encode("roundtrip-test-bytes");
+  const uploadHeaders = {
+    authorization: headersAuth.authorization,
+    "content-type": "application/octet-stream",
+    "x-filename": "clip.wav"
+  };
+  const uploadResponse = await fetch(`${baseUrl}/api/v1/cinefuse/projects/${projectId}/files`, {
+    method: "POST",
+    headers: uploadHeaders,
+    body: payload
+  });
+  assert.equal(uploadResponse.status, 201);
+  const fileId = (await uploadResponse.json()).file.id;
+
+  const downloadResponse = await fetch(`${baseUrl}/api/v1/cinefuse/projects/${projectId}/files/${fileId}`, {
+    headers: { authorization: headersAuth.authorization }
+  });
+  assert.equal(downloadResponse.status, 200);
+  assert.equal(downloadResponse.headers.get("content-type"), "audio/wav");
+  const downloaded = Buffer.from(await downloadResponse.arrayBuffer());
+  assert.equal(downloaded.toString(), "roundtrip-test-bytes");
+
+  await new Promise((resolve, reject) => {
+    server.close((error) => {
+      if (error) {
+        reject(error);
+        return;
+      }
+      resolve();
+    });
+  });
+});

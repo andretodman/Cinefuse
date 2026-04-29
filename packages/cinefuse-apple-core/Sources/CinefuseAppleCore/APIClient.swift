@@ -642,20 +642,57 @@ public struct APIClient {
         projectId: String,
         prompt: String,
         modelTier: String,
-        characterLocks: [String] = []
+        characterLocks: [String] = [],
+        status: String? = nil,
+        clipUrl: String? = nil,
+        audioRefs: [String]? = nil,
+        durationSec: Int? = nil
     ) async throws -> Shot {
+        var body: [String: Any] = [
+            "prompt": prompt,
+            "modelTier": modelTier,
+            "characterLocks": characterLocks
+        ]
+        if let status {
+            body["status"] = status
+        }
+        if let clipUrl {
+            body["clipUrl"] = clipUrl
+        }
+        if let audioRefs {
+            body["audioRefs"] = audioRefs
+        }
+        if let durationSec {
+            body["durationSec"] = durationSec
+        }
         var request = URLRequest(url: buildURL(path: "\(Self.cinefusePrefix)/projects/\(projectId)/shots"))
         request.httpMethod = "POST"
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = try JSONEncoder().encode([
-            "prompt": AnyEncodable(prompt),
-            "modelTier": AnyEncodable(modelTier),
-            "characterLocks": AnyEncodable(characterLocks)
-        ] as [String: AnyEncodable])
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
         let (data, response) = try await performDataRequest(request, context: "createShot")
         try validate(response: response, data: data)
         return try JSONDecoder().decode(CreateShotResponse.self, from: data).shot
+    }
+
+    /// Downloads bytes from `GET …/projects/:id/files/:fileId` (Bearer auth) into a temp file for local playback.
+    public func downloadProjectFileForPlayback(
+        token: String,
+        projectId: String,
+        fileId: String,
+        filenameHint: String?
+    ) async throws -> URL {
+        var request = URLRequest(url: buildURL(path: "\(Self.cinefusePrefix)/projects/\(projectId)/files/\(fileId)"))
+        request.httpMethod = "GET"
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        let (data, response) = try await URLSession.shared.data(for: request)
+        try validate(response: response, data: data)
+        let baseName = filenameHint.flatMap { URL(fileURLWithPath: $0).lastPathComponent }.flatMap { $0.isEmpty ? nil : $0 } ?? "audio.bin"
+        let safeName = "cinefuse-play-\(fileId.prefix(8))-\(baseName)"
+        let temp = FileManager.default.temporaryDirectory.appendingPathComponent(safeName)
+        try? FileManager.default.removeItem(at: temp)
+        try data.write(to: temp, options: .atomic)
+        return temp
     }
 
     public func listCharacters(token: String, projectId: String) async throws -> [CharacterProfile] {

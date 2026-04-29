@@ -117,6 +117,23 @@ public struct ListAudioTracksResponse: Codable {
 }
 
 extension Shot {
+    /// Returns a copy with `clipUrl` replaced (e.g. local `file://` override for uploaded-preview playback).
+    public func withClipUrl(_ clipUrl: String?) -> Shot {
+        Shot(
+            id: id,
+            projectId: projectId,
+            prompt: prompt,
+            modelTier: modelTier,
+            status: status,
+            clipUrl: clipUrl,
+            orderIndex: orderIndex,
+            durationSec: durationSec,
+            thumbnailUrl: thumbnailUrl,
+            audioRefs: audioRefs,
+            characterLocks: characterLocks
+        )
+    }
+
     /// Shots that participate in the sound timeline and audio preview: linked `audioRefs` and/or an audio lane with a source URL scoped to this shot.
     public func hasSoundContent(audioTracks: [AudioTrack]) -> Bool {
         if let refs = audioRefs, !refs.isEmpty {

@@ -18,6 +18,7 @@ import {
   listShots,
   listSoundBlueprints,
   registerUploadedProjectFile,
+  getUploadedProjectFileForDownload,
   saveJob,
   saveProject,
   saveScene,
@@ -36,6 +37,19 @@ function json(response, status, payload) {
 function html(response, status, payload) {
   response.writeHead(status, { "content-type": "text/html; charset=utf-8" });
   response.end(payload);
+}
+
+function contentTypeForUploadedFilename(filename) {
+  const lower = String(filename).toLowerCase();
+  if (lower.endsWith(".wav")) return "audio/wav";
+  if (lower.endsWith(".mp3")) return "audio/mpeg";
+  if (lower.endsWith(".aac")) return "audio/aac";
+  if (lower.endsWith(".m4a")) return "audio/mp4";
+  if (lower.endsWith(".flac")) return "audio/flac";
+  if (lower.endsWith(".ogg")) return "audio/ogg";
+  if (lower.endsWith(".mp4") || lower.endsWith(".m4v")) return "video/mp4";
+  if (lower.endsWith(".mov")) return "video/quicktime";
+  return "application/octet-stream";
 }
 
 async function readBody(request) {
@@ -762,9 +776,32 @@ export function createHttpServer() {
       const file = registerUploadedProjectFile({
         projectId,
         filename,
-        byteSize: buffer.length
+        byteSize: buffer.length,
+        buffer
       });
       return json(response, 201, { file });
+    }
+
+    const projectFileGetMatch = url.pathname.match(/^\/api\/v1\/cinefuse\/projects\/([^/]+)\/files\/([^/]+)$/);
+    if (projectFileGetMatch && method === "GET") {
+      const projectId = decodeURIComponent(projectFileGetMatch[1]);
+      const fileId = decodeURIComponent(projectFileGetMatch[2]);
+      const project = await getProject(projectId, auth.userId);
+      if (!project) {
+        return writeError(response, 404, "project not found", "PROJECT_NOT_FOUND");
+      }
+      const payload = getUploadedProjectFileForDownload(projectId, fileId);
+      if (!payload) {
+        return writeError(response, 404, "file not found", "FILE_NOT_FOUND");
+      }
+      const contentType = contentTypeForUploadedFilename(payload.meta.filename);
+      response.writeHead(200, {
+        "content-type": contentType,
+        "content-length": String(payload.buffer.length),
+        "cache-control": "private, max-age=3600"
+      });
+      response.end(payload.buffer);
+      return;
     }
 
     const projectEventsMatch = url.pathname.match(/^\/api\/v1\/cinefuse\/projects\/([^/]+)\/events$/);

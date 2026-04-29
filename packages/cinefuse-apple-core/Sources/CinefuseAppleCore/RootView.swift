@@ -12,6 +12,16 @@ import AppKit
 #if canImport(UIKit)
 import UIKit
 #endif
+#if canImport(PhotosUI)
+import PhotosUI
+#endif
+
+#if canImport(AVFoundation)
+@MainActor
+private enum BlueprintReferenceHold {
+    static var lastPlayer: AVAudioPlayer?
+}
+#endif
 
 public struct CinefuseRootView: View {
     @Environment(AppModel.self) private var model
@@ -539,7 +549,9 @@ struct ProjectWorkspaceScreen: View {
     @State private var shots: [Shot] = []
     @State private var audioTracks: [AudioTrack] = []
     @State private var jobs: [Job] = []
-    @State private var shotPromptDraft = "Establishing shot of the location"
+    @State private var shotPromptDraft = ""
+    /// Local `file://` playback for freshly uploaded sounds (API clip URLs require Bearer; preview uses these copies).
+    @State private var shotPlaybackClipURLByShotId: [String: URL] = [:]
     @State private var shotModelTierDraft = "standard"
     @State private var quotedShotCost: ShotQuote?
     @State private var newCharacterName = ""
@@ -653,13 +665,22 @@ struct ProjectWorkspaceScreen: View {
         CreationMode(rawValue: creationModeRaw) == .audio
     }
 
+    private var shotsForEditorDisplay: [Shot] {
+        shots.map { shot in
+            if let local = shotPlaybackClipURLByShotId[shot.id] {
+                return shot.withClipUrl(local.absoluteString)
+            }
+            return shot
+        }
+    }
+
     private var projectDetailView: some View {
         ProjectDetailScreen(
             project: selectedProject,
             isLoadingProjectDetails: isLoadingProjectDetails,
             scenes: scenes,
             characters: characters,
-            shots: shots,
+            shots: shotsForEditorDisplay,
             audioTracks: audioTracks,
             jobs: jobs,
             localFileRecordsByRemoteURL: localFileRecordsByRemoteURL,
@@ -731,14 +752,8 @@ struct ProjectWorkspaceScreen: View {
             soundSourceLabel: soundSourceLabel(for:),
             soundTagsDraft: $soundTagsDraft,
             onCreateSoundBlueprint: { request in Task { await createSoundBlueprint(request: request) } },
-            onImportSoundBlueprintRefs: { shotId, urls in
-                Task {
-                    if let shotId {
-                        await addBlueprintFromReferencesForShot(shotId: shotId, urls: urls)
-                    } else {
-                        await addBlueprintFromReferencesDraft(urls: urls)
-                    }
-                }
+            onPlayBlueprintReferenceFile: { fileId in
+                Task { await playBlueprintReferenceFile(fileId: fileId) }
             },
             onExportAudioMix: { Task { await exportLayeredAudioMix() } },
             onAddAudioTrack: { Task { await addEmptyAudioLane() } }
@@ -759,61 +774,29 @@ struct ProjectWorkspaceScreen: View {
         }
     }
 
-    /// Uploads files, creates a sound blueprint, refreshes the project, and selects it for this shot’s Generate flow.
-    private func addBlueprintFromReferencesForShot(shotId: String, urls: [URL]) async {
+    private func playBlueprintReferenceFile(fileId: String) async {
         guard let selectedProjectId else { return }
-        guard !urls.isEmpty else { return }
         model.errorMessage = nil
         do {
-            let fileIds = try await performUploadProjectFiles(urls: urls)
-            guard !fileIds.isEmpty else { return }
-            let shot = shots.first(where: { $0.id == shotId })
-            let raw = shot?.prompt.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            let titleBase = raw.isEmpty ? "Sound references" : String(raw.prefix(40))
-            let blueprint = try await api.createSoundBlueprint(
+            let url = try await api.downloadProjectFileForPlayback(
                 token: model.bearerToken,
                 projectId: selectedProjectId,
-                body: CreateSoundBlueprintRequest(
-                    name: titleBase,
-                    templateId: "neutral",
-                    referenceFileIds: fileIds
-                )
+                fileId: fileId,
+                filenameHint: nil
             )
-            await loadSelectedProjectDetails(showLoadingIndicator: false)
-            var map = selectedSoundBlueprintIdsByShotId
-            var set = map[shotId] ?? []
-            set.insert(blueprint.id)
-            map[shotId] = set
-            selectedSoundBlueprintIdsByShotId = map
+            await MainActor.run {
+                do {
+                    let player = try AVAudioPlayer(contentsOf: url)
+                    BlueprintReferenceHold.lastPlayer = player
+                    player.play()
+                } catch {
+                    model.errorMessage = error.localizedDescription
+                }
+            }
         } catch {
-            model.errorMessage = error.localizedDescription
-        }
-    }
-
-    /// Import on toolbar when no shot is targeted — adds blueprint IDs to draft selection for the next Create Sound.
-    private func addBlueprintFromReferencesDraft(urls: [URL]) async {
-        guard let selectedProjectId else { return }
-        guard !urls.isEmpty else { return }
-        model.errorMessage = nil
-        do {
-            let fileIds = try await performUploadProjectFiles(urls: urls)
-            guard !fileIds.isEmpty else { return }
-            let titleBase = shotPromptDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                ? "Sound references"
-                : String(shotPromptDraft.prefix(40))
-            let blueprint = try await api.createSoundBlueprint(
-                token: model.bearerToken,
-                projectId: selectedProjectId,
-                body: CreateSoundBlueprintRequest(
-                    name: titleBase,
-                    templateId: "neutral",
-                    referenceFileIds: fileIds
-                )
-            )
-            await loadSelectedProjectDetails(showLoadingIndicator: false)
-            draftSoundBlueprintIds.insert(blueprint.id)
-        } catch {
-            model.errorMessage = error.localizedDescription
+            await MainActor.run {
+                model.errorMessage = error.localizedDescription
+            }
         }
     }
 
@@ -865,6 +848,7 @@ struct ProjectWorkspaceScreen: View {
                 projectDetailView
             }
             .onChange(of: selectedProjectId) { _, _ in
+                shotPlaybackClipURLByShotId = [:]
                 if let selectedProjectId {
                     lastProjectId = selectedProjectId
                 }
@@ -2996,8 +2980,8 @@ struct ProjectDetailScreen: View {
     let soundSourceLabel: (Shot) -> String
     @Binding var soundTagsDraft: String
     let onCreateSoundBlueprint: (CreateSoundBlueprintRequest) -> Void
-    /// `shotId` nil = add imported blueprint to draft selection (next Create Sound).
-    let onImportSoundBlueprintRefs: (String?, [URL]) -> Void
+    /// Downloads and plays a project file used as a blueprint reference.
+    let onPlayBlueprintReferenceFile: (String) -> Void
     let onExportAudioMix: () -> Void
     let onAddAudioTrack: () -> Void
     @AppStorage("cinefuse.editor.leftPaneWidth") private var leftPaneWidth: Double = 460
@@ -3478,7 +3462,8 @@ struct ProjectDetailScreen: View {
                         showTooltips: showTooltips,
                         isCollapsed: $collapseSoundBlueprintsPanel,
                         uploadProjectFiles: uploadProjectFiles,
-                        onCreate: onCreateSoundBlueprint
+                        onCreate: onCreateSoundBlueprint,
+                        onPlayReferenceFile: onPlayBlueprintReferenceFile
                     )
                     CharacterPanel(
                         characters: characters,
@@ -3545,7 +3530,6 @@ struct ProjectDetailScreen: View {
                     selectedSoundBlueprintIdsByShotId: $selectedSoundBlueprintIdsByShotId,
                     draftSoundBlueprintIds: $draftSoundBlueprintIds,
                     selectedTimelineShotId: $selectedTimelineShotId,
-                    onImportSoundBlueprintRefs: onImportSoundBlueprintRefs,
                     soundSourceLabel: soundSourceLabel,
                     soundTagsDraft: $soundTagsDraft
                 )
@@ -4394,54 +4378,51 @@ struct TimelineClipCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: CinefuseTokens.Spacing.xxs) {
-            VStack(alignment: .leading, spacing: CinefuseTokens.Spacing.xxs) {
-                HStack {
-                    GenerationStatusDot(status: statusPresentation)
-                    Text("#\(index + 1)")
-                        .font(CinefuseTokens.Typography.caption.weight(.semibold))
-                    Spacer()
-                    if shot.status.lowercased() != "ready" {
-                        StatusBadge(status: shot.status)
-                    }
+            HStack {
+                GenerationStatusDot(status: statusPresentation)
+                Text("#\(index + 1)")
+                    .font(CinefuseTokens.Typography.caption.weight(.semibold))
+                Spacer()
+                if shot.status.lowercased() != "ready" {
+                    StatusBadge(status: shot.status)
                 }
-                Text(shot.prompt.isEmpty ? "Untitled clip" : shot.prompt)
-                    .font(CinefuseTokens.Typography.label)
-                    .lineLimit(2)
-                Text("\(shot.modelTier.capitalized) · \(shot.durationSec ?? 0)s")
-                    .font(CinefuseTokens.Typography.caption)
-                    .foregroundStyle(CinefuseTokens.ColorRole.textSecondary)
-                if ["queued", "generating", "running", "processing"].contains(shot.status), let progressPct {
-                    HStack(spacing: CinefuseTokens.Spacing.xxs) {
-                        ProgressView(value: Double(progressPct), total: 100)
-                        Text("\(progressPct)%")
-                            .font(CinefuseTokens.Typography.micro)
-                            .foregroundStyle(CinefuseTokens.ColorRole.textSecondary)
-                    }
-                }
-                if let trimRange {
-                    Text("Trim \(trimRange.lowerBound.formatted(.number.precision(.fractionLength(0))))s-\(trimRange.upperBound.formatted(.number.precision(.fractionLength(0))))s")
+            }
+            Text(shot.prompt.isEmpty ? "Untitled clip" : shot.prompt)
+                .font(CinefuseTokens.Typography.label)
+                .lineLimit(2)
+            Text("\(shot.modelTier.capitalized) · \(shot.durationSec ?? 0)s")
+                .font(CinefuseTokens.Typography.caption)
+                .foregroundStyle(CinefuseTokens.ColorRole.textSecondary)
+            if ["queued", "generating", "running", "processing"].contains(shot.status), let progressPct {
+                HStack(spacing: CinefuseTokens.Spacing.xxs) {
+                    ProgressView(value: Double(progressPct), total: 100)
+                    Text("\(progressPct)%")
                         .font(CinefuseTokens.Typography.micro)
                         .foregroundStyle(CinefuseTokens.ColorRole.textSecondary)
                 }
-                HStack(spacing: CinefuseTokens.Spacing.xxs) {
-                    IconCommandButton(
-                        systemName: "arrow.left",
-                        label: "Move clip left",
-                        action: onMoveLeft,
-                        tooltipEnabled: showTooltips
-                    )
-                    .disabled(!canMoveLeft)
-
-                    IconCommandButton(
-                        systemName: "arrow.right",
-                        label: "Move clip right",
-                        action: onMoveRight,
-                        tooltipEnabled: showTooltips
-                    )
-                    .disabled(!canMoveRight)
-                }
             }
-            .cinefuseReadableOnMediaBackground()
+            if let trimRange {
+                Text("Trim \(trimRange.lowerBound.formatted(.number.precision(.fractionLength(0))))s-\(trimRange.upperBound.formatted(.number.precision(.fractionLength(0))))s")
+                    .font(CinefuseTokens.Typography.micro)
+                    .foregroundStyle(CinefuseTokens.ColorRole.textSecondary)
+            }
+            HStack(spacing: CinefuseTokens.Spacing.xxs) {
+                IconCommandButton(
+                    systemName: "arrow.left",
+                    label: "Move clip left",
+                    action: onMoveLeft,
+                    tooltipEnabled: showTooltips
+                )
+                .disabled(!canMoveLeft)
+
+                IconCommandButton(
+                    systemName: "arrow.right",
+                    label: "Move clip right",
+                    action: onMoveRight,
+                    tooltipEnabled: showTooltips
+                )
+                .disabled(!canMoveRight)
+            }
         }
         .padding(CinefuseTokens.Spacing.s)
         .frame(
@@ -5027,10 +5008,14 @@ struct SoundBlueprintsPanel: View {
     @Binding var isCollapsed: Bool
     let uploadProjectFiles: ([URL]) async throws -> [String]
     let onCreate: (CreateSoundBlueprintRequest) -> Void
+    let onPlayReferenceFile: (String) -> Void
     @State private var draftName = "Ambient blueprint"
     @State private var draftTemplate = "neutral"
     @State private var draftReferenceURLs: [URL] = []
     @State private var isImporterPresented = false
+#if canImport(PhotosUI)
+    @State private var draftPhotoPickerItems: [PhotosPickerItem] = []
+#endif
     @State private var isSavingBlueprint = false
     @State private var blueprintError: String?
 
@@ -5081,9 +5066,26 @@ struct SoundBlueprintsPanel: View {
         .disabled(isSavingBlueprint)
     }
 
+#if canImport(PhotosUI)
+    private var chooseFromPhotosButton: some View {
+        PhotosPicker(
+            selection: $draftPhotoPickerItems,
+            maxSelectionCount: 25,
+            matching: .any(of: [.images, .videos])
+        ) {
+            Label("Choose from Photos…", systemImage: "photo.on.rectangle.angled")
+        }
+        .buttonStyle(SecondaryActionButtonStyle())
+        .tooltip("Pick stills or videos from your library as references", enabled: showTooltips)
+    }
+#endif
+
     private var blueprintActionButtonsHorizontal: some View {
         HStack(spacing: CinefuseTokens.Spacing.s) {
             addReferencesButton
+#if canImport(PhotosUI)
+            chooseFromPhotosButton
+#endif
             saveBlueprintButton
         }
     }
@@ -5092,6 +5094,10 @@ struct SoundBlueprintsPanel: View {
         VStack(alignment: .leading, spacing: CinefuseTokens.Spacing.xs) {
             addReferencesButton
                 .frame(maxWidth: .infinity, alignment: .leading)
+#if canImport(PhotosUI)
+            chooseFromPhotosButton
+                .frame(maxWidth: .infinity, alignment: .leading)
+#endif
             saveBlueprintButton
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
@@ -5100,7 +5106,7 @@ struct SoundBlueprintsPanel: View {
     var body: some View {
         SectionCard(
             title: "Sound blueprints",
-            subtitle: "Add one or more reference audio files (or video for muxed audio), then Save — uploads register file IDs sent as referenceFileIds on the API.",
+            subtitle: "Add references from Files or Photos (still, video, or audio files), then Save — uploads register file IDs sent as referenceFileIds on the API.",
             isCollapsed: $isCollapsed
         ) {
             VStack(alignment: .leading, spacing: CinefuseTokens.Spacing.s) {
@@ -5163,9 +5169,27 @@ struct SoundBlueprintsPanel: View {
                                     .foregroundStyle(CinefuseTokens.ColorRole.textSecondary)
                             }
                             if !blueprint.referenceFileIds.isEmpty {
-                                Text("\(blueprint.referenceFileIds.count) reference file id(s) on server")
-                                    .font(CinefuseTokens.Typography.micro)
-                                    .foregroundStyle(CinefuseTokens.ColorRole.textSecondary)
+                                VStack(alignment: .leading, spacing: CinefuseTokens.Spacing.xxs) {
+                                    Text("Reference files")
+                                        .font(CinefuseTokens.Typography.micro.weight(.semibold))
+                                        .foregroundStyle(CinefuseTokens.ColorRole.textSecondary)
+                                    ForEach(blueprint.referenceFileIds, id: \.self) { fileId in
+                                        HStack(spacing: CinefuseTokens.Spacing.xs) {
+                                            Text(fileId)
+                                                .font(CinefuseTokens.Typography.micro)
+                                                .lineLimit(1)
+                                                .truncationMode(.middle)
+                                            Button {
+                                                onPlayReferenceFile(fileId)
+                                            } label: {
+                                                Image(systemName: "play.circle.fill")
+                                            }
+                                            .buttonStyle(.plain)
+                                            .foregroundStyle(CinefuseTokens.ColorRole.accent)
+                                            .tooltip("Play reference audio", enabled: showTooltips)
+                                        }
+                                    }
+                                }
                             }
                         }
                         .padding(CinefuseTokens.Spacing.s)
@@ -5180,7 +5204,7 @@ struct SoundBlueprintsPanel: View {
         }
         .fileImporter(
             isPresented: $isImporterPresented,
-            allowedContentTypes: [.audio, .movie, .mpeg4Movie, UTType(filenameExtension: "wav") ?? .audio],
+            allowedContentTypes: [.image, .audio, .movie, .mpeg4Movie, UTType(filenameExtension: "wav") ?? .audio],
             allowsMultipleSelection: true
         ) { result in
             switch result {
@@ -5190,7 +5214,37 @@ struct SoundBlueprintsPanel: View {
                 break
             }
         }
+#if canImport(PhotosUI)
+        .onChange(of: draftPhotoPickerItems) { _, newItems in
+            guard !newItems.isEmpty else { return }
+            Task {
+                await appendDraftURLsFromPhotoPickerItems(newItems)
+                draftPhotoPickerItems = []
+            }
+        }
+#endif
     }
+
+#if canImport(PhotosUI)
+    @MainActor
+    private func appendDraftURLsFromPhotoPickerItems(_ items: [PhotosPickerItem]) async {
+        for item in items {
+            do {
+                guard let data = try await item.loadTransferable(type: Data.self) else {
+                    blueprintError = "Could not load one or more items from your photo library."
+                    continue
+                }
+                let ext = item.supportedContentTypes.first?.preferredFilenameExtension ?? "dat"
+                let dest = FileManager.default.temporaryDirectory
+                    .appendingPathComponent("cinefuse-blueprint-\(UUID().uuidString).\(ext)")
+                try data.write(to: dest)
+                draftReferenceURLs.append(dest)
+            } catch {
+                blueprintError = error.localizedDescription
+            }
+        }
+    }
+#endif
 }
 
 private struct InlinePreviewPlayerSurface: View {
@@ -5395,6 +5449,93 @@ struct StoryboardPanel: View {
     }
 }
 
+private struct CharacterTrainingReferenceButtons: View {
+    @Binding var trainingURLs: [URL]
+    let showTooltips: Bool
+    @State private var isImporterPresented = false
+#if canImport(PhotosUI)
+    @State private var photoPickerItems: [PhotosPickerItem] = []
+#endif
+    @State private var photoLoadError: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: CinefuseTokens.Spacing.xxs) {
+            HStack(spacing: CinefuseTokens.Spacing.xs) {
+                Button {
+                    isImporterPresented = true
+                } label: {
+                    Label("Add reference", systemImage: "paperclip")
+                }
+                .buttonStyle(SecondaryActionButtonStyle())
+                .tooltip("Attach reference media from Files (image, video, or audio). Multiple files allowed.", enabled: showTooltips)
+#if canImport(PhotosUI)
+                PhotosPicker(
+                    selection: $photoPickerItems,
+                    maxSelectionCount: 25,
+                    matching: .any(of: [.images, .videos])
+                ) {
+                    Label("From Photos…", systemImage: "photo.on.rectangle.angled")
+                }
+                .buttonStyle(SecondaryActionButtonStyle())
+                .tooltip("Choose reference stills or videos from your library", enabled: showTooltips)
+#endif
+            }
+            if let photoLoadError {
+                Text(photoLoadError)
+                    .font(CinefuseTokens.Typography.micro)
+                    .foregroundStyle(CinefuseTokens.ColorRole.danger)
+            }
+        }
+        .fileImporter(
+            isPresented: $isImporterPresented,
+            allowedContentTypes: [.image, .movie, .audio],
+            allowsMultipleSelection: true
+        ) { result in
+            switch result {
+            case .success(let urls):
+                var list = trainingURLs
+                list.append(contentsOf: urls)
+                trainingURLs = list
+            case .failure:
+                break
+            }
+        }
+#if canImport(PhotosUI)
+        .onChange(of: photoPickerItems) { _, newItems in
+            guard !newItems.isEmpty else { return }
+            Task {
+                await appendFromPhotoLibrary(newItems)
+                photoPickerItems = []
+            }
+        }
+#endif
+    }
+
+#if canImport(PhotosUI)
+    @MainActor
+    private func appendFromPhotoLibrary(_ items: [PhotosPickerItem]) async {
+        photoLoadError = nil
+        var list = trainingURLs
+        for item in items {
+            do {
+                guard let data = try await item.loadTransferable(type: Data.self) else {
+                    photoLoadError = "Could not load one or more items from your photo library."
+                    continue
+                }
+                let ext = item.supportedContentTypes.first?.preferredFilenameExtension ?? "dat"
+                let dest = FileManager.default.temporaryDirectory
+                    .appendingPathComponent("cinefuse-char-\(UUID().uuidString).\(ext)")
+                try data.write(to: dest)
+                list.append(dest)
+            } catch {
+                photoLoadError = error.localizedDescription
+            }
+        }
+        trainingURLs = list
+    }
+#endif
+}
+
 struct CharacterPanel: View {
     let characters: [CharacterProfile]
     @Binding var newCharacterName: String
@@ -5405,15 +5546,13 @@ struct CharacterPanel: View {
     let showTooltips: Bool
     @Binding var isCollapsed: Bool
     @State private var trainingRefsByCharacterId: [String: [URL]] = [:]
-    @State private var isImporterPresented = false
-    @State private var importerCharacterId: String?
     @State private var trainBusyCharacterId: String?
     @State private var trainError: String?
 
     var body: some View {
         SectionCard(
             title: "Characters",
-            subtitle: "Add reference images, video, or audio, then Train — files upload to the API as referenceFileIds for identity training."
+            subtitle: "Add reference images, video, or audio from Files or Photos, then Train — uploads register as referenceFileIds for identity training."
             ,
             isCollapsed: $isCollapsed
         ) {
@@ -5518,15 +5657,14 @@ struct CharacterPanel: View {
                                     }
                                 }
                             }
-                            HStack(spacing: CinefuseTokens.Spacing.xs) {
-                                Button {
-                                    importerCharacterId = character.id
-                                    isImporterPresented = true
-                                } label: {
-                                    Label("Add reference", systemImage: "paperclip")
-                                }
-                                .buttonStyle(SecondaryActionButtonStyle())
-                                .tooltip("Attach reference media (image, video, or audio). Multiple files allowed.", enabled: showTooltips)
+                            HStack(alignment: .top, spacing: CinefuseTokens.Spacing.xs) {
+                                CharacterTrainingReferenceButtons(
+                                    trainingURLs: Binding(
+                                        get: { trainingRefsByCharacterId[character.id] ?? [] },
+                                        set: { trainingRefsByCharacterId[character.id] = $0 }
+                                    ),
+                                    showTooltips: showTooltips
+                                )
                                 if character.status.lowercased() != "trained" {
                                     Button {
                                         trainError = nil
@@ -5581,22 +5719,6 @@ struct CharacterPanel: View {
                 }
             }
         }
-        .fileImporter(
-            isPresented: $isImporterPresented,
-            allowedContentTypes: [.image, .movie, .audio],
-            allowsMultipleSelection: true
-        ) { result in
-            switch result {
-            case .success(let urls):
-                guard let characterId = importerCharacterId else { return }
-                var list = trainingRefsByCharacterId[characterId] ?? []
-                list.append(contentsOf: urls)
-                trainingRefsByCharacterId[characterId] = list
-            case .failure:
-                break
-            }
-            importerCharacterId = nil
-        }
     }
 }
 
@@ -5624,15 +5746,8 @@ struct ShotsPanel: View {
     @Binding var selectedSoundBlueprintIdsByShotId: [String: Set<String>]
     @Binding var draftSoundBlueprintIds: Set<String>
     @Binding var selectedTimelineShotId: String?
-    let onImportSoundBlueprintRefs: (String?, [URL]) -> Void
     let soundSourceLabel: (Shot) -> String
     @Binding var soundTagsDraft: String
-    private enum PendingBlueprintImport {
-        case draft
-        case shot(String)
-    }
-
-    @State private var pendingBlueprintImport: PendingBlueprintImport?
     @State private var pendingDeleteShotId: String?
     @State private var selectedDiagnostics: ArtifactStatusPresentation?
     @State private var soundTagsByShotId: [String: String] = [:]
@@ -5716,7 +5831,7 @@ struct ShotsPanel: View {
 
     private var promptFieldTitle: String {
         panelMode == .audioSounds
-            ? "Describe the sound, ambience, or dialogue line"
+            ? "Ambience, room tone, SFX, score, or a line of dialogue to generate"
             : "Describe the shot action or camera movement"
     }
 
@@ -5781,90 +5896,60 @@ struct ShotsPanel: View {
         toolbarBlueprintBinding().wrappedValue = next
     }
 
-    /// Below Budget / Standard / Premium; edits timeline shot’s refs or draft defaults.
+    /// Inline Sound blueprints control on the tier row (audio mode), matching Character Lock width.
     @ViewBuilder
-    private func soundBlueprintToolbarSection() -> some View {
-        VStack(alignment: .leading, spacing: CinefuseTokens.Spacing.xs) {
-            Text("Sound blueprints")
-                .font(CinefuseTokens.Typography.caption.weight(.semibold))
-                .foregroundStyle(CinefuseTokens.ColorRole.textPrimary)
-            Text(
-                toolbarBlueprintShotId == nil
-                    ? "No timeline clip selected — choices apply to the next sound you create."
-                    : "Editing the highlighted timeline sound. Generate uses these references."
-            )
-            .font(CinefuseTokens.Typography.micro)
-            .foregroundStyle(CinefuseTokens.ColorRole.textSecondary)
-            .fixedSize(horizontal: false, vertical: true)
-            if soundBlueprints.isEmpty {
-                Text("None yet — import files or use Sound blueprints on the left.")
-                    .font(CinefuseTokens.Typography.micro)
+    private func soundBlueprintsInlineMenu() -> some View {
+        if soundBlueprints.isEmpty {
+            HStack(spacing: CinefuseTokens.Spacing.xs) {
+                Text("Sound blueprints")
+                Spacer(minLength: 4)
+                Text("None")
                     .foregroundStyle(CinefuseTokens.ColorRole.textSecondary)
-                Button {
-                    pendingBlueprintImport = toolbarBlueprintShotId.map { .shot($0) } ?? .draft
-                } label: {
-                    Label("Import reference files…", systemImage: "square.and.arrow.down")
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                }
-                .buttonStyle(SecondaryActionButtonStyle())
-                .tooltip("Creates a blueprint from files and adds it to the selection.", enabled: showTooltips)
-            } else {
-                Menu {
-                    ForEach(soundBlueprints) { blueprint in
-                        Button {
-                            toggleToolbarBlueprint(blueprint.id)
-                        } label: {
-                            HStack {
-                                Text(blueprint.name)
-                                Spacer(minLength: 12)
-                                if toolbarBlueprintSelection.contains(blueprint.id) {
-                                    Image(systemName: "checkmark")
-                                }
+                    .lineLimit(1)
+                Image(systemName: "chevron.up.chevron.down")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(CinefuseTokens.ColorRole.textSecondary.opacity(0.5))
+            }
+            .font(CinefuseTokens.Typography.body)
+            .frame(width: CinefuseTokens.Control.secondaryPickerWidth, alignment: .leading)
+            .opacity(0.55)
+            .help("Add references on the left Sound blueprints panel, then Save.")
+        } else {
+            Menu {
+                ForEach(soundBlueprints) { blueprint in
+                    Button {
+                        toggleToolbarBlueprint(blueprint.id)
+                    } label: {
+                        HStack {
+                            Text(blueprint.name)
+                            Spacer(minLength: 12)
+                            if toolbarBlueprintSelection.contains(blueprint.id) {
+                                Image(systemName: "checkmark")
                             }
                         }
                     }
-                } label: {
-                    HStack(spacing: CinefuseTokens.Spacing.xs) {
-                        Image(systemName: "list.bullet.rectangle.portrait")
-                        Text(blueprintPickerSummary(selection: toolbarBlueprintSelection))
-                            .lineLimit(1)
-                        Spacer(minLength: 4)
-                        Image(systemName: "chevron.up.chevron.down")
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(CinefuseTokens.ColorRole.textSecondary)
-                    }
-                    .font(CinefuseTokens.Typography.body)
-                    .padding(.horizontal, CinefuseTokens.Spacing.s)
-                    .padding(.vertical, 8)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(
-                        RoundedRectangle(cornerRadius: CinefuseTokens.Radius.small)
-                            .fill(CinefuseTokens.ColorRole.surfacePrimary.opacity(0.95))
-                    )
                 }
-                Button {
-                    pendingBlueprintImport = toolbarBlueprintShotId.map { .shot($0) } ?? .draft
-                } label: {
-                    Label("Import reference files…", systemImage: "plus.circle")
-                        .frame(maxWidth: .infinity, alignment: .leading)
+            } label: {
+                HStack(spacing: CinefuseTokens.Spacing.xs) {
+                    Text("Sound blueprints")
+                    Spacer(minLength: 4)
+                    Text(blueprintPickerSummary(selection: toolbarBlueprintSelection))
+                        .foregroundStyle(CinefuseTokens.ColorRole.textSecondary)
+                        .lineLimit(1)
+                    Image(systemName: "chevron.up.chevron.down")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(CinefuseTokens.ColorRole.textSecondary)
                 }
-                .buttonStyle(SecondaryActionButtonStyle())
-                .tooltip("Adds a blueprint from files and selects it.", enabled: showTooltips)
             }
+            .frame(width: CinefuseTokens.Control.secondaryPickerWidth, alignment: .leading)
         }
-        .padding(CinefuseTokens.Spacing.s)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(
-            RoundedRectangle(cornerRadius: CinefuseTokens.Radius.small)
-                .strokeBorder(CinefuseTokens.ColorRole.textSecondary.opacity(0.25), lineWidth: 1)
-        )
     }
 
     var body: some View {
         SectionCard(
             title: panelMode == .audioSounds ? "Sounds" : "Shots",
             subtitle: panelMode == .audioSounds
-                ? "Tier row → Sound blueprints → tags. Timeline selects which sound the blueprint row edits."
+                ? "Tier row includes Sound blueprints (menu). Add reference files on the left panel only. Timeline selection scopes which sound’s blueprint set you edit."
                 : "1: Draft shot 2: Quote cost 3: Generate 4: Review",
             isCollapsed: $isCollapsed
         ) {
@@ -5889,6 +5974,9 @@ struct ShotsPanel: View {
                             }
                             .pickerStyle(.menu)
                             .frame(width: CinefuseTokens.Control.secondaryPickerWidth)
+                        }
+                        if panelMode == .audioSounds {
+                            soundBlueprintsInlineMenu()
                         }
                         VStack(alignment: .leading, spacing: CinefuseTokens.Spacing.xs) {
                             Button {
@@ -5928,6 +6016,9 @@ struct ShotsPanel: View {
                                 .pickerStyle(.menu)
                                 .frame(width: CinefuseTokens.Control.secondaryPickerWidth)
                             }
+                            if panelMode == .audioSounds {
+                                soundBlueprintsInlineMenu()
+                            }
                         }
                         VStack(alignment: .leading, spacing: CinefuseTokens.Spacing.xs) {
                             Button {
@@ -5949,7 +6040,14 @@ struct ShotsPanel: View {
                 }
 
                 if panelMode == .audioSounds {
-                    soundBlueprintToolbarSection()
+                    Text(
+                        toolbarBlueprintShotId == nil
+                            ? "No timeline clip selected — blueprint choices apply to the next sound you create."
+                            : "Editing the highlighted timeline sound. Generate uses these blueprint associations."
+                    )
+                    .font(CinefuseTokens.Typography.micro)
+                    .foregroundStyle(CinefuseTokens.ColorRole.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
                 }
 
                 if panelMode == .audioSounds {
@@ -6118,30 +6216,6 @@ struct ShotsPanel: View {
         }
         .padding(CinefuseTokens.Spacing.s)
         .animation(CinefuseTokens.Motion.standard, value: shots.map(\.id))
-        .fileImporter(
-            isPresented: Binding(
-                get: { panelMode == .audioSounds && pendingBlueprintImport != nil },
-                set: { if !$0 { pendingBlueprintImport = nil } }
-            ),
-            allowedContentTypes: [.audio, .movie, .mpeg4Movie, UTType(filenameExtension: "wav") ?? .audio],
-            allowsMultipleSelection: true
-        ) { result in
-            let session = pendingBlueprintImport
-            pendingBlueprintImport = nil
-            guard let session else { return }
-            switch result {
-            case .success(let urls):
-                guard !urls.isEmpty else { return }
-                switch session {
-                case .draft:
-                    onImportSoundBlueprintRefs(nil, urls)
-                case .shot(let shotId):
-                    onImportSoundBlueprintRefs(shotId, urls)
-                }
-            case .failure:
-                break
-            }
-        }
         .onChange(of: shots.map(\.id)) { _, ids in
             let allowed = Set(ids)
             soundTagsByShotId = soundTagsByShotId.filter { allowed.contains($0.key) }

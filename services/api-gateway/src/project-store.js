@@ -11,10 +11,12 @@ const soundBlueprints = new Map();
 const jobs = new Map();
 /** Staging registry for client uploads (Pubfuse Files IDs in production). Maps file id → owning project. */
 const uploadedProjectFiles = new Map();
+/** Raw bytes for uploads served back via GET …/files/:fileId (in-memory; replace with object storage in prod). */
+const uploadedProjectFileBuffers = new Map();
 
 let pool;
 
-export function registerUploadedProjectFile({ projectId, filename, byteSize }) {
+export function registerUploadedProjectFile({ projectId, filename, byteSize, buffer }) {
   const id = randomUUID();
   const safeName = typeof filename === "string" && filename.length > 0 ? filename : "upload.bin";
   uploadedProjectFiles.set(id, {
@@ -23,7 +25,25 @@ export function registerUploadedProjectFile({ projectId, filename, byteSize }) {
     byteSize: Number(byteSize) || 0,
     createdAt: new Date().toISOString()
   });
+  if (buffer != null && Buffer.isBuffer(buffer)) {
+    uploadedProjectFileBuffers.set(id, buffer);
+  }
   return { id, filename: safeName, byteSize: Number(byteSize) || 0 };
+}
+
+/**
+ * @returns {{ meta: object, buffer: Buffer } | null}
+ */
+export function getUploadedProjectFileForDownload(projectId, fileId) {
+  const meta = uploadedProjectFiles.get(fileId);
+  if (!meta || meta.projectId !== projectId) {
+    return null;
+  }
+  const buffer = uploadedProjectFileBuffers.get(fileId);
+  if (!buffer) {
+    return null;
+  }
+  return { meta, buffer };
 }
 
 export function validateUploadedFileIdsForProject(projectId, fileIds) {
@@ -1050,4 +1070,5 @@ export async function clearProjects() {
   soundBlueprints.clear();
   jobs.clear();
   uploadedProjectFiles.clear();
+  uploadedProjectFileBuffers.clear();
 }

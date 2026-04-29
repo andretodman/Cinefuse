@@ -139,6 +139,7 @@
 				DEVELOPMENT_TEAM = 35SPKS99N2;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = Cinefuse;
+				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "Cinefuse uses photos and videos you choose from your library as reference material for sound blueprints and character training.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -280,11 +281,13 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_IDENTITY = "Apple Development";
+				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = 35SPKS99N2;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = Cinefuse;
+				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "Cinefuse uses photos and videos you choose from your library as reference material for sound blueprints and character training.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				LD_RUNPATH_SEARCH_PATHS = (
