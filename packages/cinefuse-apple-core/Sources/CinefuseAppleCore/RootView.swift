@@ -1613,8 +1613,20 @@ struct ProjectWorkspaceScreen: View {
     }
 
     private func syncRequestStatesFromSnapshot(shots: [Shot], jobs: [Job]) {
+        var latestJobByShotId: [String: Job] = [:]
+        for job in jobs {
+            guard let shotId = job.shotId else { continue }
+            let current = latestJobByShotId[shotId]
+            let isNewer = parseOptionalISODate(job.updatedAt) ?? .distantPast
+                >= parseOptionalISODate(current?.updatedAt) ?? .distantPast
+            if current == nil || isNewer {
+                latestJobByShotId[shotId] = job
+            }
+        }
+
         for shot in shots {
             let clipJob = jobs.first { $0.shotId == shot.id && $0.kind == "clip" }
+            let generationNoun = latestJobByShotId[shot.id]?.kind == "audio" ? "Sound" : "Shot"
             let progressNow = clipJob?.progressPct
             let prevProgress = lastSyncedClipJobProgressByShotId[shot.id]
             let progressAdvanced = progressNow != nil && progressNow != prevProgress
@@ -1637,7 +1649,7 @@ struct ProjectWorkspaceScreen: View {
                     state.stage = .done
                 case "failed":
                     state.stage = .failed
-                    state.errorMessage = state.errorMessage ?? "Shot generation failed."
+                    state.errorMessage = state.errorMessage ?? "\(generationNoun) generation failed."
                 default:
                     break
                 }
@@ -1995,6 +2007,10 @@ struct ProjectWorkspaceScreen: View {
         switch event.type {
         case "shot_status_changed":
             guard let shotId = event.shotId else { return }
+            let latestShotJob = jobs
+                .filter { $0.shotId == shotId }
+                .max(by: { (parseOptionalISODate($0.updatedAt) ?? .distantPast) < (parseOptionalISODate($1.updatedAt) ?? .distantPast) })
+            let generationNoun = latestShotJob?.kind == "audio" ? "Sound" : "Shot"
             upsertShotRequestState(shotId) { state in
                 let eventDate = parseISODate(event.timestamp)
                 let previousStatus = state.lastKnownStatus
@@ -2013,7 +2029,7 @@ struct ProjectWorkspaceScreen: View {
                     state.stage = .done
                 case "failed":
                     state.stage = .failed
-                    state.errorMessage = state.errorMessage ?? "Shot generation failed."
+                    state.errorMessage = state.errorMessage ?? "\(generationNoun) generation failed."
                 default:
                     break
                 }
