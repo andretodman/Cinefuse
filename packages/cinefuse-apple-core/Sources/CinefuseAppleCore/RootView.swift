@@ -564,6 +564,8 @@ struct ProjectWorkspaceScreen: View {
     @State private var soundBlueprints: [SoundBlueprint] = []
     /// Per-shot selected sound blueprint IDs for Generate (audio mode); merged server-side into reference file IDs.
     @State private var selectedSoundBlueprintIdsByShotId: [String: Set<String>] = [:]
+    /// Defaults used when creating a sound if no timeline shot is selected (toolbar blueprint row).
+    @State private var draftSoundBlueprintIds: Set<String> = []
     /// Per-shot sound origin: `"generated"` (prompt → pipeline) or `"uploaded"` (user file). Not user-editable; set by create/upload flows.
     @State private var shotSoundSourceById: [String: String] = [:]
     @State private var soundTagsDraft = ""
@@ -725,11 +727,18 @@ struct ProjectWorkspaceScreen: View {
             creationModeRaw: $creationModeRaw,
             soundBlueprints: $soundBlueprints,
             selectedSoundBlueprintIdsByShotId: $selectedSoundBlueprintIdsByShotId,
+            draftSoundBlueprintIds: $draftSoundBlueprintIds,
             soundSourceLabel: soundSourceLabel(for:),
             soundTagsDraft: $soundTagsDraft,
             onCreateSoundBlueprint: { request in Task { await createSoundBlueprint(request: request) } },
             onImportSoundBlueprintRefs: { shotId, urls in
-                Task { await addBlueprintFromReferencesForShot(shotId: shotId, urls: urls) }
+                Task {
+                    if let shotId {
+                        await addBlueprintFromReferencesForShot(shotId: shotId, urls: urls)
+                    } else {
+                        await addBlueprintFromReferencesDraft(urls: urls)
+                    }
+                }
             },
             onExportAudioMix: { Task { await exportLayeredAudioMix() } },
             onAddAudioTrack: { Task { await addEmptyAudioLane() } }
@@ -776,6 +785,33 @@ struct ProjectWorkspaceScreen: View {
             set.insert(blueprint.id)
             map[shotId] = set
             selectedSoundBlueprintIdsByShotId = map
+        } catch {
+            model.errorMessage = error.localizedDescription
+        }
+    }
+
+    /// Import on toolbar when no shot is targeted — adds blueprint IDs to draft selection for the next Create Sound.
+    private func addBlueprintFromReferencesDraft(urls: [URL]) async {
+        guard let selectedProjectId else { return }
+        guard !urls.isEmpty else { return }
+        model.errorMessage = nil
+        do {
+            let fileIds = try await performUploadProjectFiles(urls: urls)
+            guard !fileIds.isEmpty else { return }
+            let titleBase = shotPromptDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                ? "Sound references"
+                : String(shotPromptDraft.prefix(40))
+            let blueprint = try await api.createSoundBlueprint(
+                token: model.bearerToken,
+                projectId: selectedProjectId,
+                body: CreateSoundBlueprintRequest(
+                    name: titleBase,
+                    templateId: "neutral",
+                    referenceFileIds: fileIds
+                )
+            )
+            await loadSelectedProjectDetails(showLoadingIndicator: false)
+            draftSoundBlueprintIds.insert(blueprint.id)
         } catch {
             model.errorMessage = error.localizedDescription
         }
@@ -1800,6 +1836,7 @@ struct ProjectWorkspaceScreen: View {
             jobs = []
             soundBlueprints = []
             selectedSoundBlueprintIdsByShotId = [:]
+            draftSoundBlueprintIds = []
             shotSoundSourceById = [:]
             return
         }
@@ -2110,6 +2147,7 @@ struct ProjectWorkspaceScreen: View {
             appendDebugEvent("create shot success shot=\(createdShot.id)")
             if CreationMode(rawValue: creationModeRaw) == .audio {
                 shotSoundSourceById[createdShot.id] = "generated"
+                selectedSoundBlueprintIdsByShotId[createdShot.id] = draftSoundBlueprintIds
             }
             await loadSelectedProjectDetails(showLoadingIndicator: false)
         } catch {
@@ -2954,11 +2992,12 @@ struct ProjectDetailScreen: View {
     @Binding var creationModeRaw: String
     @Binding var soundBlueprints: [SoundBlueprint]
     @Binding var selectedSoundBlueprintIdsByShotId: [String: Set<String>]
+    @Binding var draftSoundBlueprintIds: Set<String>
     let soundSourceLabel: (Shot) -> String
     @Binding var soundTagsDraft: String
     let onCreateSoundBlueprint: (CreateSoundBlueprintRequest) -> Void
-    /// Upload reference audio/video from a sound card: creates a blueprint and selects it for that shot.
-    let onImportSoundBlueprintRefs: (String, [URL]) -> Void
+    /// `shotId` nil = add imported blueprint to draft selection (next Create Sound).
+    let onImportSoundBlueprintRefs: (String?, [URL]) -> Void
     let onExportAudioMix: () -> Void
     let onAddAudioTrack: () -> Void
     @AppStorage("cinefuse.editor.leftPaneWidth") private var leftPaneWidth: Double = 460
@@ -3504,6 +3543,8 @@ struct ProjectDetailScreen: View {
                     panelMode: isAudioCreationMode ? .audioSounds : .videoClips,
                     soundBlueprints: soundBlueprints,
                     selectedSoundBlueprintIdsByShotId: $selectedSoundBlueprintIdsByShotId,
+                    draftSoundBlueprintIds: $draftSoundBlueprintIds,
+                    selectedTimelineShotId: $selectedTimelineShotId,
                     onImportSoundBlueprintRefs: onImportSoundBlueprintRefs,
                     soundSourceLabel: soundSourceLabel,
                     soundTagsDraft: $soundTagsDraft
@@ -4353,51 +4394,54 @@ struct TimelineClipCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: CinefuseTokens.Spacing.xxs) {
-            HStack {
-                GenerationStatusDot(status: statusPresentation)
-                Text("#\(index + 1)")
-                    .font(CinefuseTokens.Typography.caption.weight(.semibold))
-                Spacer()
-                if shot.status.lowercased() != "ready" {
-                    StatusBadge(status: shot.status)
+            VStack(alignment: .leading, spacing: CinefuseTokens.Spacing.xxs) {
+                HStack {
+                    GenerationStatusDot(status: statusPresentation)
+                    Text("#\(index + 1)")
+                        .font(CinefuseTokens.Typography.caption.weight(.semibold))
+                    Spacer()
+                    if shot.status.lowercased() != "ready" {
+                        StatusBadge(status: shot.status)
+                    }
                 }
-            }
-            Text(shot.prompt.isEmpty ? "Untitled clip" : shot.prompt)
-                .font(CinefuseTokens.Typography.label)
-                .lineLimit(2)
-            Text("\(shot.modelTier.capitalized) · \(shot.durationSec ?? 0)s")
-                .font(CinefuseTokens.Typography.caption)
-                .foregroundStyle(CinefuseTokens.ColorRole.textSecondary)
-            if ["queued", "generating", "running", "processing"].contains(shot.status), let progressPct {
-                HStack(spacing: CinefuseTokens.Spacing.xxs) {
-                    ProgressView(value: Double(progressPct), total: 100)
-                    Text("\(progressPct)%")
+                Text(shot.prompt.isEmpty ? "Untitled clip" : shot.prompt)
+                    .font(CinefuseTokens.Typography.label)
+                    .lineLimit(2)
+                Text("\(shot.modelTier.capitalized) · \(shot.durationSec ?? 0)s")
+                    .font(CinefuseTokens.Typography.caption)
+                    .foregroundStyle(CinefuseTokens.ColorRole.textSecondary)
+                if ["queued", "generating", "running", "processing"].contains(shot.status), let progressPct {
+                    HStack(spacing: CinefuseTokens.Spacing.xxs) {
+                        ProgressView(value: Double(progressPct), total: 100)
+                        Text("\(progressPct)%")
+                            .font(CinefuseTokens.Typography.micro)
+                            .foregroundStyle(CinefuseTokens.ColorRole.textSecondary)
+                    }
+                }
+                if let trimRange {
+                    Text("Trim \(trimRange.lowerBound.formatted(.number.precision(.fractionLength(0))))s-\(trimRange.upperBound.formatted(.number.precision(.fractionLength(0))))s")
                         .font(CinefuseTokens.Typography.micro)
                         .foregroundStyle(CinefuseTokens.ColorRole.textSecondary)
                 }
-            }
-            if let trimRange {
-                Text("Trim \(trimRange.lowerBound.formatted(.number.precision(.fractionLength(0))))s-\(trimRange.upperBound.formatted(.number.precision(.fractionLength(0))))s")
-                    .font(CinefuseTokens.Typography.micro)
-                    .foregroundStyle(CinefuseTokens.ColorRole.textSecondary)
-            }
-            HStack(spacing: CinefuseTokens.Spacing.xxs) {
-                IconCommandButton(
-                    systemName: "arrow.left",
-                    label: "Move clip left",
-                    action: onMoveLeft,
-                    tooltipEnabled: showTooltips
-                )
-                .disabled(!canMoveLeft)
+                HStack(spacing: CinefuseTokens.Spacing.xxs) {
+                    IconCommandButton(
+                        systemName: "arrow.left",
+                        label: "Move clip left",
+                        action: onMoveLeft,
+                        tooltipEnabled: showTooltips
+                    )
+                    .disabled(!canMoveLeft)
 
-                IconCommandButton(
-                    systemName: "arrow.right",
-                    label: "Move clip right",
-                    action: onMoveRight,
-                    tooltipEnabled: showTooltips
-                )
-                .disabled(!canMoveRight)
+                    IconCommandButton(
+                        systemName: "arrow.right",
+                        label: "Move clip right",
+                        action: onMoveRight,
+                        tooltipEnabled: showTooltips
+                    )
+                    .disabled(!canMoveRight)
+                }
             }
+            .cinefuseReadableOnMediaBackground()
         }
         .padding(CinefuseTokens.Spacing.s)
         .frame(
@@ -4435,7 +4479,7 @@ struct TimelineClipCard: View {
                                 .scaledToFill()
                                 .overlay(
                                     LinearGradient(
-                                        colors: [.black.opacity(0.42), .black.opacity(0.68)],
+                                        colors: [.black.opacity(0.48), .black.opacity(0.82)],
                                         startPoint: .top,
                                         endPoint: .bottom
                                     )
@@ -5578,10 +5622,17 @@ struct ShotsPanel: View {
     var panelMode: ShotsPanelMode = .videoClips
     var soundBlueprints: [SoundBlueprint] = []
     @Binding var selectedSoundBlueprintIdsByShotId: [String: Set<String>]
-    let onImportSoundBlueprintRefs: (String, [URL]) -> Void
+    @Binding var draftSoundBlueprintIds: Set<String>
+    @Binding var selectedTimelineShotId: String?
+    let onImportSoundBlueprintRefs: (String?, [URL]) -> Void
     let soundSourceLabel: (Shot) -> String
     @Binding var soundTagsDraft: String
-    @State private var blueprintFileImportShotId: String?
+    private enum PendingBlueprintImport {
+        case draft
+        case shot(String)
+    }
+
+    @State private var pendingBlueprintImport: PendingBlueprintImport?
     @State private var pendingDeleteShotId: String?
     @State private var selectedDiagnostics: ArtifactStatusPresentation?
     @State private var soundTagsByShotId: [String: String] = [:]
@@ -5673,60 +5724,100 @@ struct ShotsPanel: View {
         panelMode == .audioSounds ? "Create Sound" : "Create Shot"
     }
 
-    private func flipBlueprintSelection(shotId: String, blueprintId: String) {
-        var map = selectedSoundBlueprintIdsByShotId
-        var set = map[shotId] ?? []
-        if set.contains(blueprintId) {
-            set.remove(blueprintId)
-        } else {
-            set.insert(blueprintId)
+    /// Timeline selection scopes blueprint edits; nil targets defaults for the next Create Sound.
+    private var toolbarBlueprintShotId: String? {
+        guard let sid = selectedTimelineShotId, shots.contains(where: { $0.id == sid }) else {
+            return nil
         }
-        if set.isEmpty {
-            map.removeValue(forKey: shotId)
-        } else {
-            map[shotId] = set
-        }
-        selectedSoundBlueprintIdsByShotId = map
+        return sid
     }
 
-    private func blueprintPickerSummary(for shot: Shot) -> String {
-        let n = selectedSoundBlueprintIdsByShotId[shot.id]?.count ?? 0
+    private func toolbarBlueprintBinding() -> Binding<Set<String>> {
+        Binding(
+            get: {
+                if let id = toolbarBlueprintShotId {
+                    return selectedSoundBlueprintIdsByShotId[id] ?? []
+                }
+                return draftSoundBlueprintIds
+            },
+            set: { newValue in
+                if let id = toolbarBlueprintShotId {
+                    var map = selectedSoundBlueprintIdsByShotId
+                    if newValue.isEmpty {
+                        map.removeValue(forKey: id)
+                    } else {
+                        map[id] = newValue
+                    }
+                    selectedSoundBlueprintIdsByShotId = map
+                } else {
+                    draftSoundBlueprintIds = newValue
+                }
+            }
+        )
+    }
+
+    private func blueprintPickerSummary(selection: Set<String>) -> String {
+        let n = selection.count
         if n == 0 {
             return "Choose blueprints…"
         }
         return n == 1 ? "1 blueprint selected" : "\(n) blueprints selected"
     }
 
-    /// Menu (picker-style) plus Import — always offers a concrete control, not only prose.
+    private var toolbarBlueprintSelection: Set<String> {
+        if let id = toolbarBlueprintShotId {
+            return selectedSoundBlueprintIdsByShotId[id] ?? []
+        }
+        return draftSoundBlueprintIds
+    }
+
+    private func toggleToolbarBlueprint(_ blueprintId: String) {
+        var next = toolbarBlueprintSelection
+        if next.contains(blueprintId) {
+            next.remove(blueprintId)
+        } else {
+            next.insert(blueprintId)
+        }
+        toolbarBlueprintBinding().wrappedValue = next
+    }
+
+    /// Below Budget / Standard / Premium; edits timeline shot’s refs or draft defaults.
     @ViewBuilder
-    private func soundBlueprintAssociationSection(shot: Shot) -> some View {
+    private func soundBlueprintToolbarSection() -> some View {
         VStack(alignment: .leading, spacing: CinefuseTokens.Spacing.xs) {
             Text("Sound blueprints")
                 .font(CinefuseTokens.Typography.caption.weight(.semibold))
                 .foregroundStyle(CinefuseTokens.ColorRole.textPrimary)
+            Text(
+                toolbarBlueprintShotId == nil
+                    ? "No timeline clip selected — choices apply to the next sound you create."
+                    : "Editing the highlighted timeline sound. Generate uses these references."
+            )
+            .font(CinefuseTokens.Typography.micro)
+            .foregroundStyle(CinefuseTokens.ColorRole.textSecondary)
+            .fixedSize(horizontal: false, vertical: true)
             if soundBlueprints.isEmpty {
-                Text("None yet — import files here, or use Sound blueprints on the left.")
+                Text("None yet — import files or use Sound blueprints on the left.")
                     .font(CinefuseTokens.Typography.micro)
                     .foregroundStyle(CinefuseTokens.ColorRole.textSecondary)
-                    .fixedSize(horizontal: false, vertical: true)
                 Button {
-                    blueprintFileImportShotId = shot.id
+                    pendingBlueprintImport = toolbarBlueprintShotId.map { .shot($0) } ?? .draft
                 } label: {
                     Label("Import reference files…", systemImage: "square.and.arrow.down")
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
                 .buttonStyle(SecondaryActionButtonStyle())
-                .tooltip("Creates a blueprint from these files and selects it for this sound.", enabled: showTooltips)
+                .tooltip("Creates a blueprint from files and adds it to the selection.", enabled: showTooltips)
             } else {
                 Menu {
                     ForEach(soundBlueprints) { blueprint in
                         Button {
-                            flipBlueprintSelection(shotId: shot.id, blueprintId: blueprint.id)
+                            toggleToolbarBlueprint(blueprint.id)
                         } label: {
                             HStack {
                                 Text(blueprint.name)
                                 Spacer(minLength: 12)
-                                if selectedSoundBlueprintIdsByShotId[shot.id]?.contains(blueprint.id) == true {
+                                if toolbarBlueprintSelection.contains(blueprint.id) {
                                     Image(systemName: "checkmark")
                                 }
                             }
@@ -5735,7 +5826,7 @@ struct ShotsPanel: View {
                 } label: {
                     HStack(spacing: CinefuseTokens.Spacing.xs) {
                         Image(systemName: "list.bullet.rectangle.portrait")
-                        Text(blueprintPickerSummary(for: shot))
+                        Text(blueprintPickerSummary(selection: toolbarBlueprintSelection))
                             .lineLimit(1)
                         Spacer(minLength: 4)
                         Image(systemName: "chevron.up.chevron.down")
@@ -5752,18 +5843,14 @@ struct ShotsPanel: View {
                     )
                 }
                 Button {
-                    blueprintFileImportShotId = shot.id
+                    pendingBlueprintImport = toolbarBlueprintShotId.map { .shot($0) } ?? .draft
                 } label: {
                     Label("Import reference files…", systemImage: "plus.circle")
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
                 .buttonStyle(SecondaryActionButtonStyle())
-                .tooltip("Adds another blueprint from files and selects it for this sound.", enabled: showTooltips)
+                .tooltip("Adds a blueprint from files and selects it.", enabled: showTooltips)
             }
-            Text("Generate merges chosen blueprint file IDs on the server. No selection = prompt only.")
-                .font(CinefuseTokens.Typography.micro)
-                .foregroundStyle(CinefuseTokens.ColorRole.textSecondary)
-                .fixedSize(horizontal: false, vertical: true)
         }
         .padding(CinefuseTokens.Spacing.s)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -5777,7 +5864,7 @@ struct ShotsPanel: View {
         SectionCard(
             title: panelMode == .audioSounds ? "Sounds" : "Shots",
             subtitle: panelMode == .audioSounds
-                ? "Quote, then on each sound card choose blueprint references (or none), then Generate."
+                ? "Tier row → Sound blueprints → tags. Timeline selects which sound the blueprint row edits."
                 : "1: Draft shot 2: Quote cost 3: Generate 4: Review",
             isCollapsed: $isCollapsed
         ) {
@@ -5862,6 +5949,10 @@ struct ShotsPanel: View {
                 }
 
                 if panelMode == .audioSounds {
+                    soundBlueprintToolbarSection()
+                }
+
+                if panelMode == .audioSounds {
                     TextField("Tags (comma-separated)", text: $soundTagsDraft)
                         .textFieldStyle(.roundedBorder)
                 }
@@ -5912,9 +6003,6 @@ struct ShotsPanel: View {
                                     .font(CinefuseTokens.Typography.caption)
                                     .foregroundStyle(CinefuseTokens.ColorRole.textSecondary)
                                 if panelMode == .audioSounds {
-                                    soundBlueprintAssociationSection(shot: shot)
-                                }
-                                if panelMode == .audioSounds {
                                     HStack(spacing: CinefuseTokens.Spacing.s) {
                                         Text("Origin (automatic)")
                                             .font(CinefuseTokens.Typography.caption)
@@ -5946,7 +6034,22 @@ struct ShotsPanel: View {
                                         .foregroundStyle(CinefuseTokens.ColorRole.textSecondary)
                                         .tooltip(clipUrl, enabled: showTooltips)
                                 }
+                                if inFlightStatuses.contains(shot.status), let progress = renderProgress(for: shot) {
+                                    HStack(spacing: CinefuseTokens.Spacing.xs) {
+                                        ProgressView(value: Double(progress), total: 100)
+                                            .frame(maxWidth: .infinity)
+                                        Text("Rendering \(progress)%")
+                                            .font(CinefuseTokens.Typography.caption)
+                                            .foregroundStyle(CinefuseTokens.ColorRole.textSecondary)
+                                    }
+                                }
+                                if let diagnostics = diagnosticsLine(for: shot) {
+                                    Text(diagnostics)
+                                        .font(CinefuseTokens.Typography.micro)
+                                        .foregroundStyle(CinefuseTokens.ColorRole.textSecondary)
+                                }
                             }
+                            .cinefuseReadableOnMediaBackground()
                             Button {
                                 onGenerateShot(shot.id)
                             } label: {
@@ -5966,20 +6069,6 @@ struct ShotsPanel: View {
                             )
                             .buttonStyle(SecondaryActionButtonStyle())
                             .disabled(inFlightStatuses.contains(shot.status) || shot.status == "ready")
-                            if inFlightStatuses.contains(shot.status), let progress = renderProgress(for: shot) {
-                                HStack(spacing: CinefuseTokens.Spacing.xs) {
-                                    ProgressView(value: Double(progress), total: 100)
-                                        .frame(maxWidth: .infinity)
-                                    Text("Rendering \(progress)%")
-                                        .font(CinefuseTokens.Typography.caption)
-                                        .foregroundStyle(CinefuseTokens.ColorRole.textSecondary)
-                                }
-                            }
-                            if let diagnostics = diagnosticsLine(for: shot) {
-                                Text(diagnostics)
-                                    .font(CinefuseTokens.Typography.micro)
-                                    .foregroundStyle(CinefuseTokens.ColorRole.textSecondary)
-                            }
                             if let clipUrl = shot.clipUrl, let url = URL(string: clipUrl) {
                                 Button {
                                     onPreviewShot(shot.id)
@@ -6031,18 +6120,24 @@ struct ShotsPanel: View {
         .animation(CinefuseTokens.Motion.standard, value: shots.map(\.id))
         .fileImporter(
             isPresented: Binding(
-                get: { panelMode == .audioSounds && blueprintFileImportShotId != nil },
-                set: { if !$0 { blueprintFileImportShotId = nil } }
+                get: { panelMode == .audioSounds && pendingBlueprintImport != nil },
+                set: { if !$0 { pendingBlueprintImport = nil } }
             ),
             allowedContentTypes: [.audio, .movie, .mpeg4Movie, UTType(filenameExtension: "wav") ?? .audio],
             allowsMultipleSelection: true
         ) { result in
-            guard let shotId = blueprintFileImportShotId else { return }
-            blueprintFileImportShotId = nil
+            let session = pendingBlueprintImport
+            pendingBlueprintImport = nil
+            guard let session else { return }
             switch result {
             case .success(let urls):
                 guard !urls.isEmpty else { return }
-                onImportSoundBlueprintRefs(shotId, urls)
+                switch session {
+                case .draft:
+                    onImportSoundBlueprintRefs(nil, urls)
+                case .shot(let shotId):
+                    onImportSoundBlueprintRefs(shotId, urls)
+                }
             case .failure:
                 break
             }
@@ -6193,39 +6288,42 @@ struct JobsPanel: View {
                                 let backgroundThumbnailURL = localThumbnailURLByJobId[job.id]
                                     ?? job.shotId.flatMap { localThumbnailURLByShotId[$0] }
                                 VStack(alignment: .leading, spacing: CinefuseTokens.Spacing.xs) {
-                                    HStack(spacing: CinefuseTokens.Spacing.s) {
-                                        GenerationStatusDot(status: presentation)
-                                            .tooltip(presentation.summary, enabled: showTooltips)
-                                            .onTapGesture {
-                                                selectedDiagnostics = presentation
-                                            }
-                                        Text(job.kind.capitalized)
-                                            .font(CinefuseTokens.Typography.body)
-                                        if job.status.lowercased() != "ready" {
-                                            StatusBadge(status: job.status)
-                                                .contextMenu {
-                                                    Button("Copy Status") {
-                                                        copyTextToClipboard(job.status)
-                                                    }
-                                                    Button("Copy Diagnostics") {
-                                                        copyTextToClipboard(presentation.details)
-                                                    }
+                                    VStack(alignment: .leading, spacing: CinefuseTokens.Spacing.xs) {
+                                        HStack(spacing: CinefuseTokens.Spacing.s) {
+                                            GenerationStatusDot(status: presentation)
+                                                .tooltip(presentation.summary, enabled: showTooltips)
+                                                .onTapGesture {
+                                                    selectedDiagnostics = presentation
                                                 }
-                                        }
-                                        Spacer()
-                                        Text("Cost to us: \(job.costToUsCents)c")
-                                            .font(CinefuseTokens.Typography.caption)
-                                            .foregroundStyle(CinefuseTokens.ColorRole.textSecondary)
-                                    }
-                                    if let progress = job.progressPct {
-                                        HStack(spacing: CinefuseTokens.Spacing.xs) {
-                                            ProgressView(value: Double(progress), total: 100)
-                                                .frame(maxWidth: .infinity)
-                                            Text("\(progress)%")
+                                            Text(job.kind.capitalized)
+                                                .font(CinefuseTokens.Typography.body)
+                                            if job.status.lowercased() != "ready" {
+                                                StatusBadge(status: job.status)
+                                                    .contextMenu {
+                                                        Button("Copy Status") {
+                                                            copyTextToClipboard(job.status)
+                                                        }
+                                                        Button("Copy Diagnostics") {
+                                                            copyTextToClipboard(presentation.details)
+                                                        }
+                                                    }
+                                            }
+                                            Spacer()
+                                            Text("Cost to us: \(job.costToUsCents)c")
                                                 .font(CinefuseTokens.Typography.caption)
                                                 .foregroundStyle(CinefuseTokens.ColorRole.textSecondary)
                                         }
+                                        if let progress = job.progressPct {
+                                            HStack(spacing: CinefuseTokens.Spacing.xs) {
+                                                ProgressView(value: Double(progress), total: 100)
+                                                    .frame(maxWidth: .infinity)
+                                                Text("\(progress)%")
+                                                    .font(CinefuseTokens.Typography.caption)
+                                                    .foregroundStyle(CinefuseTokens.ColorRole.textSecondary)
+                                            }
+                                        }
                                     }
+                                    .cinefuseReadableOnMediaBackground()
                                     HStack(spacing: CinefuseTokens.Spacing.xs) {
                                         Button {
                                             onRetryJob(job.id)
@@ -6285,6 +6383,29 @@ struct JobsPanel: View {
     }
 }
 
+/// Frosted plate behind labels so primary/caption text stays readable on thumbnail or video stills.
+private struct ReadableVideoLabelBackdrop: ViewModifier {
+    func body(content: Content) -> some View {
+        content
+            .padding(CinefuseTokens.Spacing.s)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background {
+                RoundedRectangle(cornerRadius: CinefuseTokens.Radius.small)
+                    .fill(.regularMaterial)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: CinefuseTokens.Radius.small)
+                            .stroke(CinefuseTokens.ColorRole.borderSubtle.opacity(0.45), lineWidth: 1)
+                    )
+            }
+    }
+}
+
+private extension View {
+    func cinefuseReadableOnMediaBackground() -> some View {
+        modifier(ReadableVideoLabelBackdrop())
+    }
+}
+
 private struct MediaCardBackground: View {
     let imageURL: URL?
 
@@ -6301,7 +6422,7 @@ private struct MediaCardBackground: View {
                             .scaledToFill()
                             .overlay(
                                 LinearGradient(
-                                    colors: [.black.opacity(0.40), .black.opacity(0.72)],
+                                    colors: [.black.opacity(0.48), .black.opacity(0.82)],
                                     startPoint: .top,
                                     endPoint: .bottom
                                 )

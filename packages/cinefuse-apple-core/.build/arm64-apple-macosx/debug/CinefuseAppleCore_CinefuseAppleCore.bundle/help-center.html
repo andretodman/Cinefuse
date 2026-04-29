@@ -90,6 +90,7 @@
       <span class="badge">Timeline</span>
       <span class="badge">Jobs</span>
       <span class="badge">Audio</span>
+      <span class="badge">Sound blueprints</span>
       <span class="badge">Export</span>
       <span class="badge">Diagnostics</span>
     </p>
@@ -104,11 +105,12 @@
         <a href="#shots">5) Shots + Prompting</a>
         <a href="#timeline">6) Timeline and Visibility</a>
         <a href="#jobs">7) Jobs Grid and Status</a>
-        <a href="#audio">8) Audio Lanes</a>
-        <a href="#export">9) Stitch + Export</a>
-        <a href="#diagnostics">10) Diagnostics + Failure Recovery</a>
-        <a href="#api">11) API and MCP Reference</a>
-        <a href="#errors">12) Error Codes and Meaning</a>
+        <a href="#audio-creation">8) Audio Creation: Sounds + Sound blueprints</a>
+        <a href="#audio-lanes">9) Audio Lanes (video timeline)</a>
+        <a href="#export">10) Stitch + Export</a>
+        <a href="#diagnostics">11) Diagnostics + Failure Recovery</a>
+        <a href="#api">12) API and MCP Reference</a>
+        <a href="#errors">13) Error Codes and Meaning</a>
       </nav>
 
       <main>
@@ -129,6 +131,7 @@
 
         <section id="quickstart" class="panel">
           <h2>2) Quick Start Workflow</h2>
+          <p><strong>Video Creation</strong></p>
           <ol>
             <li>Create a project from the top bar.</li>
             <li>Add one or more shots with detailed prompts.</li>
@@ -136,16 +139,24 @@
             <li>Watch progress and status in shot cards and the jobs grid.</li>
             <li>Add audio lanes and run stitch/export when ready.</li>
           </ol>
+          <p><strong>Audio Creation</strong> (Creation → Audio)</p>
+          <ol>
+            <li>Optional: build <strong>Sound blueprints</strong> on the left (reference audio/video → Save blueprint).</li>
+            <li>Draft in <strong>Sounds</strong>: prompt → tier → <strong>Sound blueprints</strong> toolbar → tags → Quote → Create Sound.</li>
+            <li>Select timeline clips to edit blueprint associations per sound, or leave unselected to set <strong>defaults for the next sound</strong> you create.</li>
+            <li>Quote then <strong>Generate sound</strong> on each card when ready.</li>
+          </ol>
+          <p>Details: <a href="#audio-creation">§8 Audio Creation</a>.</p>
         </section>
 
         <section id="workspace" class="panel">
           <h2>3) Workspace + Menu Controls</h2>
           <p>The top menu includes <strong>Creation</strong> (Video vs Audio), workspace preset, panel toggles, theme, settings, and Help.</p>
           <ul>
-            <li><strong>Video Creation</strong> — storyboard, characters, shots, video preview, and full export pipeline.</li>
-            <li><strong>Audio Creation</strong> — sound blueprints, Sounds panel (generated/uploaded types + tags), waveform-style timeline, audio-centric preview, per-lane and master volume on lanes, and <em>Export layered mix</em> for a combined WAV job.</li>
+            <li><strong>Video Creation</strong> — storyboard, characters, shots, video preview, layered <strong>audio lanes</strong> (dialogue/score/SFX/mix/lipsync), and full stitch/export pipeline.</li>
+            <li><strong>Audio Creation</strong> — <strong>Sound blueprints</strong> (left), <strong>Sounds</strong> panel with tier row and embedded blueprint toolbar (see <a href="#audio-creation">§8</a>), waveform-style timeline, audio-centric preview, and <em>Export layered mix</em> for a combined WAV job. Not the same UI as video-mode audio lanes.</li>
             <li>Toggle side/bottom panes for focused editing.</li>
-            <li>Toggle Audio Lanes / Jobs independently in render mode.</li>
+            <li>Toggle Audio Lanes / Jobs independently in render (video) mode.</li>
             <li>Use Help button to open this embedded docs center.</li>
           </ul>
         </section>
@@ -196,8 +207,33 @@
           </p>
         </section>
 
-        <section id="audio" class="panel">
-          <h2>8) Audio Lanes</h2>
+        <section id="audio-creation" class="panel">
+          <h2>8) Audio Creation: Sounds + Sound blueprints</h2>
+          <p>Open <strong>Creation → Audio</strong> for sound-focused work. This mode is separate from <strong>Video Creation</strong> layered <a href="#audio-lanes">audio lanes</a> (dialogue/score/SFX/mix/lipsync on the video timeline).</p>
+          <h3>Layout</h3>
+          <ul>
+            <li><strong>Sound blueprints</strong> (left): project-scoped blueprints with optional reference audio/video via the file importer. <strong>Save blueprint</strong> stores them on the server as <code>referenceFileIds</code>.</li>
+            <li><strong>Sounds</strong> panel row order: prompt → <strong>Budget / Standard / Premium</strong> (tier) → <strong>Sound blueprints</strong> toolbar (blueprint menu with checkmarks + <strong>Import reference files</strong>) → tags → Quote / Create Sound.</li>
+          </ul>
+          <h3>Timeline selection vs draft defaults</h3>
+          <ul>
+            <li>When a timeline clip matches the current selection, the blueprint toolbar edits the <strong>highlighted sound’s</strong> associated blueprint set.</li>
+            <li>When nothing on the timeline matches (or no matching clip), the toolbar edits <strong>draft defaults</strong> for the <strong>next Create Sound</strong>.</li>
+          </ul>
+          <h3>Import and blueprints</h3>
+          <ul>
+            <li><strong>Import reference files</strong> uploads files, creates a blueprint, and adds it to the current selection (draft or selected timeline shot, per app behavior).</li>
+            <li>Use the blueprint menu for multi-select (checkmarks) among saved blueprints.</li>
+          </ul>
+          <h3>Quote and Generate</h3>
+          <ul>
+            <li>Quote then <strong>Generate</strong> on a sound card applies as before. On generate, optional client fields supply blueprint IDs; the gateway merges them into the shot’s <code>audioRefs</code> when the job runs.</li>
+          </ul>
+        </section>
+
+        <section id="audio-lanes" class="panel">
+          <h2>9) Audio Lanes (video timeline)</h2>
+          <p>In <strong>Video Creation</strong>, these are layered lanes on the video timeline—not the same surface as <a href="#audio-creation">Audio Creation → Sounds</a>.</p>
           <ul>
             <li>Dialogue, score, and SFX generation lanes.</li>
             <li>Mix and lipsync passes can be queued as jobs.</li>
@@ -208,7 +244,7 @@
         </section>
 
         <section id="export" class="panel">
-          <h2>9) Stitch + Export</h2>
+          <h2>10) Stitch + Export</h2>
           <ul>
             <li>Stitch creates a coherent sequence from shot outputs.</li>
             <li>Export supports resolution, captions, and publish/archive options.</li>
@@ -217,7 +253,7 @@
         </section>
 
         <section id="diagnostics" class="panel">
-          <h2>10) Diagnostics + Failure Recovery</h2>
+          <h2>11) Diagnostics + Failure Recovery</h2>
           <ul>
             <li><strong>Queued too long:</strong> likely worker backlog/offline.</li>
             <li><strong>Retry conflict:</strong> backend says current status is no longer failed.</li>
@@ -234,7 +270,7 @@
         </section>
 
         <section id="api" class="panel">
-          <h2>11) API and MCP Reference</h2>
+          <h2>12) API and MCP Reference</h2>
           <h3>Primary HTTP endpoints</h3>
           <table>
             <thead><tr><th>Area</th><th>Method + Endpoint</th><th>Key Request Fields</th><th>Response Fields</th></tr></thead>
@@ -243,7 +279,8 @@
               <tr><td>Projects</td><td>GET/POST <code>/api/v1/cinefuse/projects</code></td><td><code>title</code>, <code>logline</code></td><td><code>{ project }</code> / <code>{ projects }</code></td></tr>
               <tr><td>Timeline</td><td>GET <code>/api/v1/cinefuse/projects/{projectId}/timeline</code></td><td>path <code>projectId</code></td><td><code>{ shots, audioTracks }</code></td></tr>
               <tr><td>Create Shot</td><td>POST <code>/api/v1/cinefuse/projects/{projectId}/shots</code></td><td><code>promptText</code>, <code>modelTier</code>, <code>durationSec</code></td><td><code>{ shot }</code></td></tr>
-              <tr><td>Generate</td><td>POST <code>/api/v1/cinefuse/projects/{projectId}/shots/{shotId}/generate</code></td><td><code>idempotencyKey</code></td><td><code>{ shot, job }</code></td></tr>
+              <tr><td>Generate</td><td>POST <code>/api/v1/cinefuse/projects/{projectId}/shots/{shotId}/generate</code></td><td><code>idempotencyKey</code>; optional <code>soundBlueprintIds</code> (string array). Unknown blueprint IDs → <strong>400</strong> with <code>SOUND_BLUEPRINT_NOT_FOUND</code>.</td><td><code>{ shot, job }</code>; gateway merges blueprint file refs into shot <code>audioRefs</code> when present.</td></tr>
+              <tr><td>Sound blueprints</td><td>GET/POST <code>/api/v1/cinefuse/projects/{projectId}/sound-blueprints</code></td><td>POST: title, optional <code>referenceFileIds</code> (Pubfuse file IDs)</td><td>List or created blueprint with stored references</td></tr>
               <tr><td>Retry Shot</td><td>POST <code>/api/v1/cinefuse/projects/{projectId}/shots/{shotId}/retry</code></td><td>path ids</td><td><code>{ shot, job }</code> or 409 conflict envelope</td></tr>
               <tr><td>Jobs</td><td>GET <code>/api/v1/cinefuse/projects/{projectId}/jobs</code></td><td>path <code>projectId</code></td><td><code>{ jobs }</code></td></tr>
               <tr><td>Delete Job</td><td>DELETE <code>/api/v1/cinefuse/projects/{projectId}/jobs/{jobId}</code></td><td>path ids</td><td><code>{ ok: true }</code></td></tr>
@@ -256,7 +293,7 @@
 
           <h3>MCP services involved</h3>
           <ul>
-            <li><code>mcp/clip</code>: quote + generate clip output through provider integration.</li>
+            <li><code>mcp/clip</code>: <code>quote_clip</code> / <code>generate_clip</code> forward optional <code>audioRefs</code> (Pubfuse file IDs) into the configured provider/FAL payload where plumbing supports it; the provider must resolve IDs.</li>
             <li><code>mcp/audio</code>: dialogue/score/sfx/mix/lipsync generation.</li>
             <li><code>mcp/stitch</code>: stitch timeline segments and transitions.</li>
             <li><code>mcp/export</code>: finalize export package and metadata.</li>
@@ -266,7 +303,7 @@
         </section>
 
         <section id="errors" class="panel">
-          <h2>12) Error Codes and Meaning</h2>
+          <h2>13) Error Codes and Meaning</h2>
           <table>
             <thead><tr><th>Code</th><th>Meaning</th><th>Action</th></tr></thead>
             <tbody>
@@ -275,6 +312,7 @@
               <tr><td><code>UNAUTHORIZED_WORKER</code></td><td>Worker token mismatch</td><td>Sync <code>CINEFUSE_WORKER_TOKEN</code></td></tr>
               <tr><td><code>FAL_STATUS_FAILED</code></td><td>Provider polling failed</td><td>Inspect diagnostics and provider endpoint config</td></tr>
               <tr><td><code>REDIS_CONNECTION_FAILED</code></td><td>Queue backend unreachable</td><td>Check redis URL/TLS/service state</td></tr>
+              <tr><td><code>SOUND_BLUEPRINT_NOT_FOUND</code></td><td>Generate referenced an unknown or inaccessible blueprint ID</td><td>Refresh blueprints, fix selection, or remove invalid IDs from the request</td></tr>
             </tbody>
           </table>
         </section>
