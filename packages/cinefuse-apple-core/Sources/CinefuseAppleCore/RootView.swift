@@ -3655,6 +3655,7 @@ struct ProjectDetailScreen: View {
         } else {
             EditorPreviewPanel(
                 shots: sortedShots,
+                localFileRecordsByRemoteURL: localFileRecordsByRemoteURL,
                 selectedShotId: $selectedTimelineShotId,
                 playbackRequestToken: previewPlaybackRequestToken,
                 showTooltips: showTooltips,
@@ -3682,6 +3683,7 @@ struct ProjectDetailScreen: View {
         } else {
             EditorPreviewPanel(
                 shots: sortedShots,
+                localFileRecordsByRemoteURL: localFileRecordsByRemoteURL,
                 selectedShotId: $selectedTimelineShotId,
                 playbackRequestToken: previewPlaybackRequestToken,
                 showTooltips: showTooltips,
@@ -4825,6 +4827,7 @@ private struct TimelineClipDropDelegate: DropDelegate {
 
 struct EditorPreviewPanel: View {
     let shots: [Shot]
+    let localFileRecordsByRemoteURL: [String: LocalFileRecord]
     @Binding var selectedShotId: String?
     let playbackRequestToken: Int
     let showTooltips: Bool
@@ -4839,7 +4842,10 @@ struct EditorPreviewPanel: View {
     private static let playbackRates: [Double] = [0.5, 0.75, 1.0, 1.25, 1.5, 2.0]
 
     private var playableShots: [Shot] {
-        shots.filter { $0.clipUrl != nil }
+        shots.filter { shot in
+            guard shot.clipUrl != nil else { return false }
+            return shot.playbackURL(localRecords: localFileRecordsByRemoteURL) != nil
+        }
     }
 
     private var selectedShot: Shot? {
@@ -4966,7 +4972,7 @@ struct EditorPreviewPanel: View {
             sequence = playableShots
         }
         let items = sequence.compactMap { shot -> AVPlayerItem? in
-            guard let clip = shot.clipUrl, let url = URL(string: clip) else { return nil }
+            guard let url = shot.playbackURL(localRecords: localFileRecordsByRemoteURL) else { return nil }
             return AVPlayerItem(url: url)
         }
         queuePlayer.pause()
@@ -4979,8 +4985,7 @@ struct EditorPreviewPanel: View {
 
     private func playSelectedOnly() {
         guard let selected = selectedShot,
-              let clip = selected.clipUrl,
-              let url = URL(string: clip)
+              let url = selected.playbackURL(localRecords: localFileRecordsByRemoteURL)
         else {
             return
         }
@@ -5058,12 +5063,15 @@ struct EditorAudioPreviewPanel: View {
     private var playableMediaURLs: [URL] {
         var urls: [URL] = []
         for shot in shots where shotMayPlayClipUrl(shot) {
-            if let clip = shot.clipUrl, let url = URL(string: clip) {
+            if let url = shot.playbackURL(localRecords: localFileRecordsByRemoteURL) {
                 urls.append(url)
             }
         }
         for track in audioTracks {
-            if let source = track.sourceUrl, !source.isEmpty, let url = URL(string: source) {
+            if let url = CinefusePlaybackURLResolver.resolveForPlayback(
+                remoteURLString: track.sourceUrl,
+                localRecords: localFileRecordsByRemoteURL
+            ) {
                 urls.append(url)
             }
         }
@@ -5075,23 +5083,25 @@ struct EditorAudioPreviewPanel: View {
            let shot = shots.first(where: { $0.id == selectedShotId }),
            shotMayPlayClipUrl(shot) {
             if let track = audioTracks.first(where: { $0.shotId == shot.id }),
-               let source = track.sourceUrl,
-               !source.isEmpty,
-               let url = URL(string: source) {
+               let url = CinefusePlaybackURLResolver.resolveForPlayback(
+                   remoteURLString: track.sourceUrl,
+                   localRecords: localFileRecordsByRemoteURL
+               ) {
                 return url
             }
-            if let clip = shot.clipUrl, let url = URL(string: clip) {
+            if let url = shot.playbackURL(localRecords: localFileRecordsByRemoteURL) {
                 return url
             }
         }
         if let shot = shots.first(where: { shotMayPlayClipUrl($0) }),
-           let clip = shot.clipUrl,
-           let url = URL(string: clip) {
+           let url = shot.playbackURL(localRecords: localFileRecordsByRemoteURL) {
             return url
         }
         return audioTracks.compactMap { track -> URL? in
-            guard let source = track.sourceUrl, !source.isEmpty else { return nil }
-            return URL(string: source)
+            CinefusePlaybackURLResolver.resolveForPlayback(
+                remoteURLString: track.sourceUrl,
+                localRecords: localFileRecordsByRemoteURL
+            )
         }.first
     }
 
@@ -6796,16 +6806,25 @@ struct ShotsPanel: View {
                                     .tooltip("Generate audio for this sound", enabled: showTooltips)
                                     .buttonStyle(SecondaryActionButtonStyle())
                                     .disabled(inFlightStatuses.contains(shot.status) || shot.status == "ready")
-                                    if let clipUrl = shot.clipUrl, let url = URL(string: clipUrl) {
+                                    if let clipUrl = shot.clipUrl, !clipUrl.isEmpty {
+                                        let playURL = shot.playbackURL(localRecords: localFileRecordsByRemoteURL)
                                         Button {
                                             onPreviewShot(shot.id)
-                                            openURL(url)
+                                            if let playURL {
+                                                openURL(playURL)
+                                            }
                                         } label: {
                                             Label("Play", systemImage: "play.circle")
                                                 .font(CinefuseTokens.Typography.caption.weight(.semibold))
                                         }
                                         .lineLimit(1)
-                                        .tooltip("Open rendered output", enabled: showTooltips)
+                                        .disabled(playURL == nil)
+                                        .tooltip(
+                                            playURL == nil
+                                                ? "Gateway file URLs need a local copy before playback. Wait for sync or open Diagnostics."
+                                                : "Open rendered output",
+                                            enabled: showTooltips
+                                        )
                                         .buttonStyle(SecondaryActionButtonStyle())
                                     }
                                     Button {
@@ -6846,15 +6865,24 @@ struct ShotsPanel: View {
                                 .tooltip("Generate final clip for this shot", enabled: showTooltips)
                                 .buttonStyle(SecondaryActionButtonStyle())
                                 .disabled(inFlightStatuses.contains(shot.status) || shot.status == "ready")
-                                if let clipUrl = shot.clipUrl, let url = URL(string: clipUrl) {
+                                if let clipUrl = shot.clipUrl, !clipUrl.isEmpty {
+                                    let playURL = shot.playbackURL(localRecords: localFileRecordsByRemoteURL)
                                     Button {
                                         onPreviewShot(shot.id)
-                                        openURL(url)
+                                        if let playURL {
+                                            openURL(playURL)
+                                        }
                                     } label: {
                                         playRenderClipButtonLabel
                                     }
                                     .frame(maxWidth: .infinity, alignment: .leading)
-                                    .tooltip("Open rendered clip playback", enabled: showTooltips)
+                                    .disabled(playURL == nil)
+                                    .tooltip(
+                                        playURL == nil
+                                            ? "Gateway file URLs need a local copy before playback. Wait for sync or open Diagnostics."
+                                            : "Open rendered clip playback",
+                                        enabled: showTooltips
+                                    )
                                     .buttonStyle(SecondaryActionButtonStyle())
                                 }
                                 HStack(spacing: CinefuseTokens.Spacing.xs) {

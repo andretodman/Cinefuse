@@ -116,7 +116,43 @@ public struct ListAudioTracksResponse: Codable {
     public let audioTracks: [AudioTrack]
 }
 
+/// Maps artifact URLs to something AVFoundation can open without custom HTTP headers.
+/// Gateway `GET …/api/v1/cinefuse/projects/{id}/files/{fileId}` requires Bearer auth; use a synced local copy for playback.
+public enum CinefusePlaybackURLResolver {
+    public static func resolveForPlayback(
+        remoteURLString: String?,
+        localRecords: [String: LocalFileRecord],
+        fileManager: FileManager = .default
+    ) -> URL? {
+        guard let raw = remoteURLString?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty else {
+            return nil
+        }
+        if let u = URL(string: raw), u.isFileURL {
+            return fileManager.fileExists(atPath: u.path) ? u : nil
+        }
+        if let record = localRecords[raw],
+           record.status == .synced || record.status == .alreadyPresent,
+           let path = record.localPath?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !path.isEmpty,
+           fileManager.fileExists(atPath: path) {
+            return URL(fileURLWithPath: path)
+        }
+        guard let url = URL(string: raw), let scheme = url.scheme?.lowercased() else { return nil }
+        guard scheme == "http" || scheme == "https" else { return nil }
+        let pathLower = url.path.lowercased()
+        if pathLower.contains("/api/v1/cinefuse/projects/"), pathLower.contains("/files/") {
+            return nil
+        }
+        return url
+    }
+}
+
 extension Shot {
+    /// Local file or public URL suitable for ``AVPlayer`` / ``NSWorkspace``; nil while gateway project-file URLs are unsynced (they require Bearer auth).
+    public func playbackURL(localRecords: [String: LocalFileRecord]) -> URL? {
+        CinefusePlaybackURLResolver.resolveForPlayback(remoteURLString: clipUrl, localRecords: localRecords)
+    }
+
     /// Returns a copy with `clipUrl` replaced (e.g. local `file://` override for uploaded-preview playback).
     public func withClipUrl(_ clipUrl: String?) -> Shot {
         Shot(
