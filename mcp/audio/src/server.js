@@ -331,11 +331,8 @@ function resolveUploadedAssetUrl(payload, uploadPostUrl) {
  */
 async function uploadAudioBuffer(buffer, contentType = "audio/mpeg", options = {}) {
   const envUrl = (process.env.CINEFUSE_AUDIO_UPLOAD_URL ?? "").trim();
-  const uploadUrl =
+  let uploadUrl =
     (typeof options.uploadUrl === "string" && options.uploadUrl.length > 0 ? options.uploadUrl : envUrl).trim();
-  if (!uploadUrl) {
-    return null;
-  }
   const useWorkerIngest =
     typeof options.uploadWorkerToken === "string"
     && options.uploadWorkerToken.length > 0
@@ -343,6 +340,21 @@ async function uploadAudioBuffer(buffer, contentType = "audio/mpeg", options = {
     && options.uploadProjectId.length > 0
     && typeof options.uploadUserId === "string"
     && options.uploadUserId.length > 0;
+  if (!uploadUrl && useWorkerIngest) {
+    const base = (
+      process.env.CINEFUSE_GATEWAY_PUBLIC_ORIGIN
+      ?? process.env.CINEFUSE_API_BASE_URL
+      ?? ""
+    )
+      .trim()
+      .replace(/\/+$/, "");
+    if (base.length > 0) {
+      uploadUrl = `${base}/api/v1/internal/render/project-audio`;
+    }
+  }
+  if (!uploadUrl) {
+    return null;
+  }
   let auth = "";
   if (!useWorkerIngest) {
     if (typeof options.authorizationHeader === "string" && options.authorizationHeader.trim().length > 0) {
@@ -631,7 +643,7 @@ async function runGenerateScore(tool, kind, input) {
         provider: "elevenlabs_music",
         reason: "elevenlabs_music_requires_upload_url",
         detail:
-          "ElevenLabs Music returned audio but no upload target is configured. Set CINEFUSE_AUDIO_UPLOAD_URL (and token if required), or CINEFUSE_GATEWAY_PUBLIC_ORIGIN + CINEFUSE_WORKER_TOKEN so the gateway can ingest via /api/v1/internal/render/project-audio.",
+          "ElevenLabs Music returned audio but no upload target is configured. Set CINEFUSE_AUDIO_UPLOAD_URL (and token if required), or set CINEFUSE_GATEWAY_PUBLIC_ORIGIN (or CINEFUSE_API_BASE_URL) plus CINEFUSE_WORKER_TOKEN on the gateway so ingest can POST to /api/v1/internal/render/project-audio.",
         outputCreated: false
       });
     }

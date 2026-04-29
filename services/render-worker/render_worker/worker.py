@@ -3,13 +3,29 @@ from __future__ import annotations
 from dataclasses import dataclass
 from queue import Empty, Queue
 from threading import Event
-import os
 import json
+import logging
+import os
 from time import sleep
 from typing import Any
 
 import httpx
 from redis import Redis
+
+logger = logging.getLogger("render_worker")
+
+
+def _ensure_worker_logging() -> None:
+    root = logging.getLogger()
+    if root.handlers:
+        return
+    level_name = (os.getenv("LOG_LEVEL") or "INFO").upper()
+    level = getattr(logging, level_name, logging.INFO)
+    logging.basicConfig(
+        level=level,
+        format="%(asctime)s %(levelname)s [render-worker] %(message)s",
+        datefmt="%Y-%m-%dT%H:%M:%S",
+    )
 
 
 @dataclass(slots=True)
@@ -21,6 +37,7 @@ class RenderJob:
 
 class RenderWorker:
     def __init__(self) -> None:
+        _ensure_worker_logging()
         self.jobs: Queue[RenderJob] = Queue()
         self.stop_event = Event()
         self.redis_url = os.getenv("CINEFUSE_REDIS_URL", os.getenv("REDIS_URL", "redis://127.0.0.1:6379/0"))
@@ -49,9 +66,7 @@ class RenderWorker:
         self.stop_event.set()
 
     def _process(self, job: RenderJob) -> None:
-        print(
-            f"[render-worker] processed stub job id={job.id} kind={job.kind} payload={job.payload}"
-        )
+        logger.info("stub job processed id=%s kind=%s payload=%s", job.id, job.kind, job.payload)
 
     def run_once_redis(self) -> bool:
         try:
@@ -63,15 +78,46 @@ class RenderWorker:
 
             _, payload = result
             task = json.loads(payload)
+            job_id = task.get("jobId")
+            shot_id = task.get("shotId")
+            project_id = task.get("projectId")
+            gen_kind = task.get("generationKind", "video")
+            logger.info(
+                "dequeued queue=%s job_id=%s shot_id=%s project_id=%s kind=%s gateway=%s",
+                self.redis_queue,
+                job_id,
+                shot_id,
+                project_id,
+                gen_kind,
+                self.gateway_url,
+            )
             with httpx.Client(timeout=60.0) as client:
                 response = client.post(
                     f"{self.gateway_url}/api/v1/internal/render/process",
                     headers={"x-cinefuse-worker-token": self.worker_token},
                     json=task,
                 )
+                if response.status_code >= 400:
+                    body_preview = (response.text or "")[:800]
+                    logger.error(
+                        "gateway POST /internal/render/process status=%s job_id=%s shot_id=%s body_preview=%r",
+                        response.status_code,
+                        job_id,
+                        shot_id,
+                        body_preview,
+                    )
                 response.raise_for_status()
+            logger.info(
+                "gateway render ok job_id=%s shot_id=%s project_id=%s",
+                job_id,
+                shot_id,
+                project_id,
+            )
             return True
-        except Exception as error:  # noqa: BLE001
-            print(f"[render-worker] redis task handling failed: {error}")
+        except Exception:
+            logger.exception(
+                "redis task failed queue=%s",
+                self.redis_queue,
+            )
             self.redis_client = None
             return False

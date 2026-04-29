@@ -68,6 +68,18 @@ function writeError(response, status, message, code) {
 const RENDER_QUEUE_KEY = process.env.CINEFUSE_RENDER_QUEUE_KEY ?? "cinefuse:render_jobs";
 const WORKER_AUTH_TOKEN = process.env.CINEFUSE_WORKER_TOKEN ?? "cinefuse-dev-worker-token";
 
+/** Structured logs for render queue / worker debugging (grep `[render]`). */
+function renderLog(level, event, fields) {
+  const payload = { event, ...fields };
+  if (level === "error") {
+    console.error("[render]", payload);
+  } else if (level === "warn") {
+    console.warn("[render]", payload);
+  } else {
+    console.info("[render]", payload);
+  }
+}
+
 function deriveThumbnailUrl(clipUrl) {
   if (typeof clipUrl !== "string" || clipUrl.length === 0) {
     return null;
@@ -436,8 +448,11 @@ export function createHttpServer() {
       return null;
     }
     redisClient = createClient({ url: redisUrl });
-    redisClient.on("error", () => {
-      // Fall back to in-process queue if Redis is unavailable.
+    redisClient.on("error", (err) => {
+      renderLog("error", "redis_client_error", {
+        message: err instanceof Error ? err.message : String(err),
+        queueKey: RENDER_QUEUE_KEY
+      });
     });
     return redisClient;
   }
@@ -478,7 +493,7 @@ export function createHttpServer() {
         }
       });
     } catch (error) {
-      console.error("[render] progress save failed", {
+      renderLog("error", "progress_save_failed", {
         projectId,
         shotId,
         jobId,
@@ -500,9 +515,15 @@ export function createHttpServer() {
    * Persists ElevenLabs MP3 bytes to project files. Custom `CINEFUSE_AUDIO_UPLOAD_URL` keeps prior behavior.
    * Otherwise uses worker-authenticated internal ingest (avoids the render task HTTP-calling itself with user Bearer).
    */
+  function gatewayPublicOrigin() {
+    const raw =
+      (process.env.CINEFUSE_GATEWAY_PUBLIC_ORIGIN ?? process.env.CINEFUSE_API_BASE_URL ?? "").trim();
+    return raw.replace(/\/$/, "");
+  }
+
   function resolveSoundGenerationUploadContext(projectId, userId) {
     const explicitUpload = (process.env.CINEFUSE_AUDIO_UPLOAD_URL ?? "").trim();
-    const origin = (process.env.CINEFUSE_GATEWAY_PUBLIC_ORIGIN ?? "").replace(/\/$/, "");
+    const origin = gatewayPublicOrigin();
     const defaultGatewayUpload =
       origin.length > 0
         ? `${origin}/api/v1/cinefuse/projects/${encodeURIComponent(projectId)}/files`
@@ -536,11 +557,38 @@ export function createHttpServer() {
     return {};
   }
 
+  /** Which sound upload branch is active (no secrets / URLs). */
+  function soundUploadLogMode(projectId, userId) {
+    const explicitUpload = (process.env.CINEFUSE_AUDIO_UPLOAD_URL ?? "").trim();
+    const origin = gatewayPublicOrigin();
+    const defaultGatewayUpload =
+      origin.length > 0
+        ? `${origin}/api/v1/cinefuse/projects/${encodeURIComponent(projectId)}/files`
+        : "";
+    if (explicitUpload.length > 0) {
+      const uploadToken = (process.env.CINEFUSE_AUDIO_UPLOAD_TOKEN ?? "").trim();
+      const providerToken = (process.env.CINEFUSE_AUDIO_PROVIDER_TOKEN ?? "").trim();
+      if (uploadToken) return "explicit_upload_url_with_upload_token";
+      if (providerToken) return "explicit_upload_url_with_provider_token";
+      if (defaultGatewayUpload && explicitUpload === defaultGatewayUpload && userId) {
+        return "explicit_upload_matches_default_files_bearer_user";
+      }
+      return "explicit_upload_url_no_token";
+    }
+    if (origin.length > 0 && userId) {
+      return "internal_project_audio_worker_headers";
+    }
+    return "no_upload_target";
+  }
+
   async function processRenderTask(task) {
-    console.info("[render] task started", {
+    const generationKind = task.generationKind === "sound" ? "sound" : "video";
+    renderLog("info", "task_started", {
       projectId: task.projectId,
       shotId: task.shotId,
-      jobId: task.jobId
+      jobId: task.jobId,
+      generationKind,
+      source: task._renderSource ?? "unknown"
     });
     const currentShot = await getShot(task.shotId, task.projectId);
     if (!currentShot) {
@@ -594,7 +642,7 @@ export function createHttpServer() {
         return;
       }
       runningProgress = Math.min(90, runningProgress + 10);
-      console.info("[render] progress tick", {
+      renderLog("info", "progress_tick", {
         projectId: task.projectId,
         shotId: task.shotId,
         jobId: task.jobId,
@@ -610,13 +658,14 @@ export function createHttpServer() {
     }, 4000);
 
     try {
-      const generationKind = task.generationKind === "sound" ? "sound" : "video";
       if (generationKind === "sound") {
-        console.info("[render] invoking audio.generate_score", {
+        const uploadMode = soundUploadLogMode(task.projectId, task.userId);
+        renderLog("info", "audio_invoke_start", {
           projectId: task.projectId,
           shotId: task.shotId,
           jobId: task.jobId,
-          modelTier: currentShot.modelTier
+          modelTier: currentShot.modelTier,
+          soundUploadMode: uploadMode
         });
         const uploadCtx = resolveSoundGenerationUploadContext(task.projectId, task.userId);
         const audioGeneration = await mcpHost.invoke("audio", "generate_score", {
@@ -639,11 +688,11 @@ export function createHttpServer() {
         if (shouldRejectStubSoundReady() && isStubSoundGenerationResult(audioGeneration, track)) {
           throw new Error("audio_score_failed: stub sound output is blocked outside test runs");
         }
-        console.info("[render] audio.generate_score completed", {
+        renderLog("info", "audio_invoke_done", {
           projectId: task.projectId,
           shotId: task.shotId,
           jobId: task.jobId,
-          sourceUrl: track.sourceUrl
+          hasSourceUrl: Boolean(track.sourceUrl)
         });
 
         await saveShot({
@@ -670,7 +719,7 @@ export function createHttpServer() {
           costToUsCents: Number(track.costToUsCents ?? 0)
         });
       } else {
-        console.info("[render] invoking clip.generate_clip", {
+        renderLog("info", "clip_invoke_start", {
           projectId: task.projectId,
           shotId: task.shotId,
           jobId: task.jobId,
@@ -686,11 +735,11 @@ export function createHttpServer() {
           audioRefs
         });
         clearInterval(progressTimer);
-        console.info("[render] clip.generate_clip completed", {
+        renderLog("info", "clip_invoke_done", {
           projectId: task.projectId,
           shotId: task.shotId,
           jobId: task.jobId,
-          clipUrl: generation.clipUrl ?? null
+          hasClipUrl: Boolean(generation.clipUrl)
         });
 
         await saveShot({
@@ -727,19 +776,21 @@ export function createHttpServer() {
         shotId: task.shotId,
         status: "ready"
       });
-      console.info("[render] task completed", {
+      renderLog("info", "task_completed", {
         projectId: task.projectId,
         shotId: task.shotId,
-        jobId: task.jobId
+        jobId: task.jobId,
+        generationKind
       });
     } catch (error) {
       clearInterval(progressTimer);
       const message = error instanceof Error ? error.message : "generation failed";
       const falContext = parseFalContext(message);
-      console.error("[render] task failed", {
+      renderLog("error", "task_failed", {
         projectId: task.projectId,
         shotId: task.shotId,
         jobId: task.jobId,
+        generationKind,
         message,
         falContext
       });
@@ -792,6 +843,9 @@ export function createHttpServer() {
 
   async function processRenderQueue() {
     if (isProcessingRenderQueue) {
+      renderLog("info", "process_queue_skip_already_running", {
+        pendingInMemory: renderQueue.length
+      });
       return;
     }
     isProcessingRenderQueue = true;
@@ -809,6 +863,13 @@ export function createHttpServer() {
   }
 
   async function enqueueRenderTask(task) {
+    const generationKind = task.generationKind === "sound" ? "sound" : "video";
+    const baseFields = {
+      jobId: task.jobId,
+      shotId: task.shotId,
+      projectId: task.projectId,
+      generationKind
+    };
     const redis = getRedisClient();
     if (redis) {
       try {
@@ -816,11 +877,29 @@ export function createHttpServer() {
           await redis.connect();
         }
         await redis.rPush(RENDER_QUEUE_KEY, JSON.stringify(task));
+        renderLog("info", "task_enqueued", {
+          ...baseFields,
+          backend: "redis",
+          queueKey: RENDER_QUEUE_KEY,
+          hint: "A render-worker must BLPOP this key and POST /api/v1/internal/render/process, or unset REDIS_URL for in-process."
+        });
         return;
-      } catch {
-        // Fall through to in-process queue if Redis enqueue fails.
+      } catch (enqueueErr) {
+        renderLog("warn", "redis_enqueue_failed_fallback_in_process", {
+          ...baseFields,
+          message: enqueueErr instanceof Error ? enqueueErr.message : String(enqueueErr),
+          queueKey: RENDER_QUEUE_KEY
+        });
       }
     }
+
+    task._renderSource = "gateway_in_process";
+    renderLog("info", "task_enqueued", {
+      ...baseFields,
+      backend: "in-process",
+      queuedAhead: renderQueue.length + 1,
+      inProcessReason: redis ? "redis_enqueue_failed" : "no_redis_url"
+    });
 
     renderQueue.push(task);
     queueMicrotask(() => {
@@ -920,6 +999,13 @@ export function createHttpServer() {
           return writeError(response, 401, "unauthorized worker", "UNAUTHORIZED_WORKER");
         }
         const task = await readBody(request);
+        task._renderSource = "worker_http";
+        renderLog("info", "worker_process_invoked", {
+          jobId: task.jobId,
+          shotId: task.shotId,
+          projectId: task.projectId,
+          generationKind: task.generationKind === "sound" ? "sound" : "video"
+        });
         await processRenderTask(task);
         return json(response, 200, { ok: true });
       }
