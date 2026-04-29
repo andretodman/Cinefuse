@@ -14,7 +14,7 @@ targets:
       - Sources
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.cinefuse.applehost
+        PRODUCT_BUNDLE_IDENTIFIER: com.pubfuse.cinefuse
         PRODUCT_NAME: CinefuseAppleHost
         MARKETING_VERSION: 0.1.0
         CURRENT_PROJECT_VERSION: 1
@@ -27,10 +27,6 @@ targets:
         TARGETED_DEVICE_FAMILY: "1,2"
         SUPPORTS_MACCATALYST: YES
         SWIFT_VERSION: 5.9
-      configs:
-        Debug:
-          CODE_SIGNING_ALLOWED: NO
-          CODE_SIGNING_REQUIRED: NO
     dependencies:
       - package: CinefuseAppleCore
         product: CinefuseAppleCore
