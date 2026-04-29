@@ -475,6 +475,35 @@ export function createHttpServer() {
     });
   }
 
+  /**
+   * When `CINEFUSE_AUDIO_UPLOAD_URL` is unset, fall back to this gateway's project file store
+   * so ElevenLabs Music bytes can become a durable `clipUrl` (requires `CINEFUSE_GATEWAY_PUBLIC_ORIGIN`).
+   */
+  function resolveSoundGenerationUploadContext(projectId, userId) {
+    const explicitUpload = (process.env.CINEFUSE_AUDIO_UPLOAD_URL ?? "").trim();
+    const origin = (process.env.CINEFUSE_GATEWAY_PUBLIC_ORIGIN ?? "").replace(/\/$/, "");
+    const defaultGatewayUpload =
+      origin.length > 0
+        ? `${origin}/api/v1/cinefuse/projects/${encodeURIComponent(projectId)}/files`
+        : "";
+    const uploadUrl = explicitUpload || defaultGatewayUpload;
+    if (!uploadUrl) {
+      return {};
+    }
+    const uploadToken = (process.env.CINEFUSE_AUDIO_UPLOAD_TOKEN ?? "").trim();
+    const providerToken = (process.env.CINEFUSE_AUDIO_PROVIDER_TOKEN ?? "").trim();
+    if (uploadToken) {
+      return { uploadUrl, uploadAuthorization: `Bearer ${uploadToken}` };
+    }
+    if (providerToken) {
+      return { uploadUrl, uploadAuthorization: `Bearer ${providerToken}` };
+    }
+    if (defaultGatewayUpload && uploadUrl === defaultGatewayUpload && userId) {
+      return { uploadUrl, uploadAuthorization: `Bearer user:${userId}` };
+    }
+    return { uploadUrl };
+  }
+
   async function processRenderTask(task) {
     console.info("[render] task started", {
       projectId: task.projectId,
@@ -557,6 +586,7 @@ export function createHttpServer() {
           jobId: task.jobId,
           modelTier: currentShot.modelTier
         });
+        const uploadCtx = resolveSoundGenerationUploadContext(task.projectId, task.userId);
         const audioGeneration = await mcpHost.invoke("audio", "generate_score", {
           projectId: task.projectId,
           prompt: currentShot.prompt,
@@ -564,7 +594,8 @@ export function createHttpServer() {
           modelTier: currentShot.modelTier,
           durationMs: Math.max(3000, Math.round((currentShot.durationSec ?? 5) * 1000)),
           shotId: task.shotId,
-          userId: task.userId
+          userId: task.userId,
+          ...uploadCtx
         });
         soundMcpInvokeResult = audioGeneration;
         clearInterval(progressTimer);
@@ -933,7 +964,15 @@ export function createHttpServer() {
         byteSize: buffer.length,
         buffer
       });
-      return json(response, 201, { file });
+      const publicOrigin = (process.env.CINEFUSE_GATEWAY_PUBLIC_ORIGIN ?? "").replace(/\/$/, "");
+      const filePayload =
+        publicOrigin.length > 0
+          ? {
+              ...file,
+              url: `${publicOrigin}/api/v1/cinefuse/projects/${encodeURIComponent(projectId)}/files/${encodeURIComponent(file.id)}`
+            }
+          : file;
+      return json(response, 201, { file: filePayload });
     }
 
     const projectFileGetMatch = url.pathname.match(/^\/api\/v1\/cinefuse\/projects\/([^/]+)\/files\/([^/]+)$/);

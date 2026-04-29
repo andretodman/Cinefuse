@@ -169,9 +169,19 @@ function extractMusicPrompt(input = {}) {
   return "";
 }
 
+/** Default Music output: MP3 44.1kHz 128kbps — supported below Pro-only PCM presets (see ElevenLabs Music docs). */
+const ELEVENLABS_MUSIC_FORMAT_FALLBACK_CHAIN = ["mp3_44100_128", "mp3_44100_96", "mp3_22050_32"];
+
+function resolveElevenLabsApiBase() {
+  const raw = (process.env.ELEVENLABS_API_BASE_URL ?? "https://api.elevenlabs.io").trim();
+  return raw.replace(/\/+$/, "");
+}
+
 /**
- * ElevenLabs Music: instrumental (or prompt-led) generation via Compose API.
- * Returns raw MP3 (or chosen output_format) bytes.
+ * ElevenLabs Music: instrumental (or prompt-led) generation via Compose API
+ * (`POST /v1/music`, same capability as the ElevenCreative Music product in the web UI).
+ * Restricted API keys must include permission `music_generation` or the request returns 403.
+ * Retries with safer MP3 presets when the API rejects `output_format` (e.g. Pro-only PCM on Creator).
  */
 async function elevenLabsComposeMusic({ prompt, musicLengthMs, forceInstrumental = true }) {
   const apiKey = process.env.ELEVENLABS_API_KEY ?? "";
@@ -183,35 +193,79 @@ async function elevenLabsComposeMusic({ prompt, musicLengthMs, forceInstrumental
     typeof prompt === "string" && prompt.trim().length > 0
       ? prompt.trim()
       : "instrumental cinematic underscore";
-  const outputFormat = process.env.ELEVENLABS_MUSIC_OUTPUT_FORMAT ?? "mp3_44100_128";
-  const url = new URL("https://api.elevenlabs.io/v1/music");
-  url.searchParams.set("output_format", outputFormat);
-  const response = await fetch(url, {
-    method: "POST",
-    headers: {
-      "xi-api-key": apiKey,
-      accept: "audio/mpeg",
-      "content-type": "application/json"
-    },
-    body: JSON.stringify({
-      prompt: promptText,
-      music_length_ms: length,
-      model_id: "music_v1",
-      force_instrumental: forceInstrumental
-    }),
-    signal: AbortSignal.timeout(300_000)
-  });
-  if (!response.ok) {
-    const errBody = await response.text();
-    throw new Error(`elevenlabs_music_http_${response.status}: ${errBody.slice(0, 800)}`);
+  const envFormat = (process.env.ELEVENLABS_MUSIC_OUTPUT_FORMAT ?? "").trim();
+  const formatCandidates = [];
+  if (envFormat.length > 0) {
+    formatCandidates.push(envFormat);
   }
-  const providerRequestId =
-    response.headers.get("request-id") ??
-    response.headers.get("x-request-id") ??
-    response.headers.get("xi-request-id") ??
-    null;
-  const buffer = Buffer.from(await response.arrayBuffer());
-  return { buffer, providerRequestId };
+  for (const f of ELEVENLABS_MUSIC_FORMAT_FALLBACK_CHAIN) {
+    if (!formatCandidates.includes(f)) {
+      formatCandidates.push(f);
+    }
+  }
+  const base = resolveElevenLabsApiBase();
+  let lastStatus = 0;
+  let lastBody = "";
+  let lastFormat = "";
+  for (const outputFormat of formatCandidates) {
+    lastFormat = outputFormat;
+    const url = new URL(`${base}/v1/music`);
+    url.searchParams.set("output_format", outputFormat);
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        "xi-api-key": apiKey,
+        accept: "audio/*,*/*",
+        "content-type": "application/json"
+      },
+      body: JSON.stringify({
+        prompt: promptText,
+        music_length_ms: length,
+        model_id: "music_v1",
+        force_instrumental: forceInstrumental
+      }),
+      signal: AbortSignal.timeout(300_000)
+    });
+    if (response.ok) {
+      const providerRequestId =
+        response.headers.get("request-id") ??
+        response.headers.get("x-request-id") ??
+        response.headers.get("xi-request-id") ??
+        null;
+      const buffer = Buffer.from(await response.arrayBuffer());
+      return { buffer, providerRequestId };
+    }
+    const errBody = await response.text();
+    lastStatus = response.status;
+    lastBody = errBody;
+    const canRetryOtherFormat =
+      outputFormat !== formatCandidates[formatCandidates.length - 1]
+      && (response.status === 400 || response.status === 422)
+      && /output_format|pcm|sample_rate|bitrate|format|encode|unsupported|invalid|quality|tier|plan|subscription/i.test(
+        errBody
+      );
+    if (canRetryOtherFormat) {
+      structuredLog("warn", "elevenlabs_music_retry_output_format", {
+        failedFormat: outputFormat,
+        status: response.status,
+        detail: errBody.slice(0, 400)
+      });
+      continue;
+    }
+    break;
+  }
+  const permissionHint =
+    lastStatus === 403
+      ? " If this key is restricted in ElevenLabs → Developers → API keys, enable Music (permission: music_generation) or use a key with full access."
+      : "";
+  const planHint =
+    lastStatus === 402
+    || /pcm|44\.?1|output_format|format|tier|plan|subscription|quota|credit/i.test(lastBody)
+      ? " Creator supports Music API with MP3 (e.g. mp3_44100_128). Pro adds PCM 44.1kHz via API; if you overrode ELEVENLABS_MUSIC_OUTPUT_FORMAT with PCM, remove it. EU residency: set ELEVENLABS_API_BASE_URL (see ElevenLabs docs for your region)."
+      : "";
+  throw new Error(
+    `elevenlabs_music_http_${lastStatus} (format=${lastFormat}): ${lastBody.slice(0, 800)}${permissionHint}${planHint}`
+  );
 }
 
 async function elevenLabsTextToSpeech(text) {
@@ -221,7 +275,7 @@ async function elevenLabsTextToSpeech(text) {
   }
   const voiceId = process.env.ELEVENLABS_VOICE_ID ?? "21m00Tcm4TlvDq8ikWAM";
   const modelId = process.env.ELEVENLABS_MODEL_ID ?? "eleven_turbo_v2";
-  const url = `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`;
+  const url = `${resolveElevenLabsApiBase()}/v1/text-to-speech/${voiceId}`;
   const response = await fetch(url, {
     method: "POST",
     headers: {
@@ -242,15 +296,60 @@ async function elevenLabsTextToSpeech(text) {
   return Buffer.from(await response.arrayBuffer());
 }
 
-async function uploadAudioBuffer(buffer, contentType = "audio/mpeg") {
-  const uploadUrl = process.env.CINEFUSE_AUDIO_UPLOAD_URL ?? "";
+function resolveUploadedAssetUrl(payload, uploadPostUrl) {
+  if (!payload || typeof payload !== "object") {
+    return null;
+  }
+  if (typeof payload.url === "string" && payload.url.length > 0) {
+    return payload.url;
+  }
+  if (typeof payload.fileUrl === "string" && payload.fileUrl.length > 0) {
+    return payload.fileUrl;
+  }
+  if (typeof payload.sourceUrl === "string" && payload.sourceUrl.length > 0) {
+    return payload.sourceUrl;
+  }
+  const file = payload.file;
+  if (file && typeof file === "object") {
+    if (typeof file.url === "string" && file.url.length > 0) {
+      return file.url;
+    }
+    if (typeof file.id === "string" && file.id.length > 0 && typeof uploadPostUrl === "string") {
+      const base = uploadPostUrl.replace(/\/+$/, "");
+      if (base.endsWith("/files")) {
+        return `${base}/${encodeURIComponent(file.id)}`;
+      }
+    }
+  }
+  return null;
+}
+
+/**
+ * POST raw audio bytes. `options.uploadUrl` overrides `CINEFUSE_AUDIO_UPLOAD_URL`.
+ * Cinefuse gateway returns `{ file: { id, url? } }`; other bridges may return top-level `url`.
+ */
+async function uploadAudioBuffer(buffer, contentType = "audio/mpeg", options = {}) {
+  const envUrl = (process.env.CINEFUSE_AUDIO_UPLOAD_URL ?? "").trim();
+  const uploadUrl =
+    (typeof options.uploadUrl === "string" && options.uploadUrl.length > 0 ? options.uploadUrl : envUrl).trim();
   if (!uploadUrl) {
     return null;
   }
-  const token = process.env.CINEFUSE_AUDIO_UPLOAD_TOKEN ?? process.env.CINEFUSE_AUDIO_PROVIDER_TOKEN ?? "";
+  let auth = "";
+  if (typeof options.authorizationHeader === "string" && options.authorizationHeader.trim().length > 0) {
+    auth = options.authorizationHeader.trim();
+  } else if ((process.env.CINEFUSE_AUDIO_UPLOAD_TOKEN ?? "").trim().length > 0) {
+    auth = `Bearer ${process.env.CINEFUSE_AUDIO_UPLOAD_TOKEN.trim()}`;
+  } else if ((process.env.CINEFUSE_AUDIO_PROVIDER_TOKEN ?? "").trim().length > 0) {
+    auth = `Bearer ${process.env.CINEFUSE_AUDIO_PROVIDER_TOKEN.trim()}`;
+  }
+  const filename =
+    (typeof options.filename === "string" && options.filename.length > 0 ? options.filename : "score.mp3")
+      .replace(/[^\w.\-]+/g, "_");
   const headers = {
     "content-type": contentType,
-    ...(token ? { authorization: `Bearer ${token}` } : {})
+    "x-filename": filename,
+    ...(auth ? { authorization: auth } : {})
   };
   const response = await fetch(uploadUrl, {
     method: "POST",
@@ -262,7 +361,7 @@ async function uploadAudioBuffer(buffer, contentType = "audio/mpeg") {
     throw new Error(`audio_upload_error (${response.status}): ${await response.text()}`);
   }
   const payload = await response.json().catch(() => ({}));
-  const uploaded = payload.url ?? payload.fileUrl ?? payload.sourceUrl ?? null;
+  const uploaded = resolveUploadedAssetUrl(payload, uploadUrl);
   if (typeof uploaded !== "string" || uploaded.length === 0) {
     throw new Error("audio_upload_missing_url_in_response");
   }
@@ -367,7 +466,13 @@ async function runGenerateDialogue(tool, kind, input) {
 
   try {
     const audioBuffer = await elevenLabsTextToSpeech(text);
-    const uploadedUrl = await uploadAudioBuffer(audioBuffer, "audio/mpeg");
+    const uploadedUrl = await uploadAudioBuffer(audioBuffer, "audio/mpeg", {
+      uploadUrl: typeof input.uploadUrl === "string" ? input.uploadUrl : undefined,
+      authorizationHeader: typeof input.uploadAuthorization === "string"
+        ? input.uploadAuthorization
+        : undefined,
+      filename: typeof input.uploadFilename === "string" ? input.uploadFilename : "dialogue.mp3"
+    });
     if (!uploadedUrl) {
       return skipResult({
         tool,
@@ -470,7 +575,7 @@ async function runGenerateScore(tool, kind, input) {
       provider: "none",
       reason: "no_music_provider",
       detail:
-        "Set ELEVENLABS_API_KEY for ElevenLabs Music (compose API) or CINEFUSE_AUDIO_SCORE_PROVIDER_URL for a custom bridge (and CINEFUSE_AUDIO_UPLOAD_URL to persist audio).",
+        "Set ELEVENLABS_API_KEY for ElevenLabs Music (compose API) or CINEFUSE_AUDIO_SCORE_PROVIDER_URL for a custom bridge. Persist MP3 via CINEFUSE_AUDIO_UPLOAD_URL, or rely on the API gateway to pass project file upload when CINEFUSE_GATEWAY_PUBLIC_ORIGIN is set.",
       outputCreated: false
     });
   }
@@ -487,7 +592,17 @@ async function runGenerateScore(tool, kind, input) {
       musicLengthMs,
       forceInstrumental: input.forceInstrumental !== false
     });
-    const uploadedUrl = await uploadAudioBuffer(buffer, "audio/mpeg");
+    const uploadFilename =
+      typeof input.shotId === "string" && input.shotId.length > 0
+        ? `sound-${input.shotId}.mp3`
+        : `sound-${randomUUID()}.mp3`;
+    const uploadedUrl = await uploadAudioBuffer(buffer, "audio/mpeg", {
+      uploadUrl: typeof input.uploadUrl === "string" ? input.uploadUrl : undefined,
+      authorizationHeader: typeof input.uploadAuthorization === "string"
+        ? input.uploadAuthorization
+        : undefined,
+      filename: uploadFilename
+    });
     if (!uploadedUrl) {
       return skipResult({
         tool,
@@ -495,7 +610,7 @@ async function runGenerateScore(tool, kind, input) {
         provider: "elevenlabs_music",
         reason: "elevenlabs_music_requires_upload_url",
         detail:
-          "ElevenLabs Music returned audio but CINEFUSE_AUDIO_UPLOAD_URL is not set to persist a public URL.",
+          "ElevenLabs Music returned audio but no upload target is configured. Set CINEFUSE_AUDIO_UPLOAD_URL (and token if required), or set CINEFUSE_GATEWAY_PUBLIC_ORIGIN so the API gateway can persist to project files.",
         outputCreated: false
       });
     }
