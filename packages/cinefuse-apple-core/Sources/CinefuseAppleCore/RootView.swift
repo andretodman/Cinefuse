@@ -768,7 +768,8 @@ struct ProjectWorkspaceScreen: View {
                 Task { await playBlueprintReferenceFile(fileId: fileId) }
             },
             onExportAudioMix: { Task { await exportLayeredAudioMix() } },
-            onAddAudioTrack: { Task { await addEmptyAudioLane() } }
+            onAddAudioTrack: { Task { await addEmptyAudioLane() } },
+            onRefreshStatusDetails: { Task { await loadSelectedProjectDetails(showLoadingIndicator: true) } }
         )
     }
 
@@ -3067,6 +3068,7 @@ struct ProjectDetailScreen: View {
     let onPlayBlueprintReferenceFile: (String) -> Void
     let onExportAudioMix: () -> Void
     let onAddAudioTrack: () -> Void
+    let onRefreshStatusDetails: () -> Void
     @AppStorage("cinefuse.editor.leftPaneWidth") private var leftPaneWidth: Double = 460
     @AppStorage("cinefuse.editor.rightPaneWidth") private var rightPaneWidth: Double = 460
     @AppStorage("cinefuse.editor.bottomPaneHeight") private var bottomPaneHeight: Double = 240
@@ -3628,7 +3630,8 @@ struct ProjectDetailScreen: View {
                     draftSoundBlueprintIds: $draftSoundBlueprintIds,
                     selectedTimelineShotId: $selectedTimelineShotId,
                     soundSourceLabel: soundSourceLabel,
-                    soundTagsDraft: $soundTagsDraft
+                    soundTagsDraft: $soundTagsDraft,
+                    onRefreshStatusDetails: onRefreshStatusDetails
                 )
                 if isAudioCreationMode {
                     SectionCard(
@@ -3873,7 +3876,8 @@ struct ProjectDetailScreen: View {
             onRetryJob: onRetryJob,
             onDeleteJob: onDeleteJob,
             showTooltips: showTooltips,
-            isCollapsed: $collapseJobsPanel
+                    isCollapsed: $collapseJobsPanel,
+                    onRefreshStatusDetails: onRefreshStatusDetails
         )
     }
 
@@ -6136,6 +6140,7 @@ struct ShotsPanel: View {
     @Binding var selectedTimelineShotId: String?
     let soundSourceLabel: (Shot) -> String
     @Binding var soundTagsDraft: String
+    let onRefreshStatusDetails: () -> Void
     @State private var pendingDeleteShotId: String?
     @State private var selectedDiagnostics: ArtifactStatusPresentation?
     @State private var soundTagsByShotId: [String: String] = [:]
@@ -6560,7 +6565,8 @@ struct ShotsPanel: View {
                                     }
                                 }
                                 if let diagnostics = diagnosticsLine(for: shot) {
-                                    Text(diagnostics)
+                                    let diagnosticsText = diagnostics
+                                    Text(verbatim: diagnosticsText)
                                         .font(CinefuseTokens.Typography.micro)
                                         .foregroundStyle(CinefuseTokens.ColorRole.textSecondary)
                                 }
@@ -6703,7 +6709,7 @@ struct ShotsPanel: View {
             Text("This removes the shot and related render jobs from the project.")
         }
         .sheet(item: $selectedDiagnostics) { details in
-            StatusDetailsSheet(details: details)
+            StatusDetailsSheet(details: details, onRefresh: onRefreshStatusDetails)
         }
     }
 }
@@ -6721,6 +6727,7 @@ struct JobsPanel: View {
     let onDeleteJob: (String) -> Void
     let showTooltips: Bool
     @Binding var isCollapsed: Bool
+    let onRefreshStatusDetails: () -> Void
     @AppStorage("cinefuse.editor.jobs.showCompleted") private var showCompletedJobs = false
     @State private var pendingDeleteJobId: String?
     @State private var selectedDiagnostics: ArtifactStatusPresentation?
@@ -6948,7 +6955,7 @@ struct JobsPanel: View {
             Text("This removes the job from the render track.")
         }
         .sheet(item: $selectedDiagnostics) { details in
-            StatusDetailsSheet(details: details)
+            StatusDetailsSheet(details: details, onRefresh: onRefreshStatusDetails)
         }
     }
 }
@@ -7136,6 +7143,17 @@ private func artifactStatusPresentation(
     requestState: RenderRequestState?,
     remoteURLDisplay: String? = nil
 ) -> ArtifactStatusPresentation {
+    func displayValue(_ value: String?, missing: String) -> String {
+        guard let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines), !trimmed.isEmpty else {
+            return missing
+        }
+        return trimmed
+    }
+    func displayCode(_ value: Int?, missing: String) -> String {
+        guard let value else { return missing }
+        return String(value)
+    }
+
     let remoteURLForDetails = remoteURLDisplay ?? job.outputUrl
     let requestLines = requestTimelineLines(requestState)
     if job.skippedFeature == true {
@@ -7144,12 +7162,12 @@ private func artifactStatusPresentation(
             ?? "Feature skipped by provider adapter."
         let detailLines = [
             "Job: \(job.kind) / \(job.status)",
-            "Provider adapter: \(job.providerAdapter ?? job.featureError?.provider ?? "unknown")",
+            "Provider adapter: \(displayValue(job.providerAdapter ?? job.featureError?.provider, missing: "not reported"))",
             "Feature status: skipped (workflow continues)",
             "Reason: \(reason)",
-            "Output file created: \(job.outputCreated == true ? "yes" : (job.outputCreated == false ? "no" : "n/a"))",
-            "Remote URL: \(remoteURLForDetails ?? "none")",
-            "Local file: \(localRecord?.localPath ?? "not applicable")"
+            "Output file created: \(job.outputCreated == true ? "yes" : (job.outputCreated == false ? "no" : "unknown"))",
+            "Remote URL: \(displayValue(remoteURLForDetails, missing: "not produced"))",
+            "Local file: \(displayValue(localRecord?.localPath, missing: "not applicable"))"
         ] + requestLines
         return ArtifactStatusPresentation(
             level: .warning,
@@ -7159,21 +7177,24 @@ private func artifactStatusPresentation(
     }
     let apiEvidence = [
         "Job ID: \(job.id)",
-        "Request ID: \(job.requestId ?? "n/a")",
-        "Idempotency key: \(job.idempotencyKey ?? "n/a")",
-        "Invoke state: \(job.invokeState ?? "n/a")",
-        "Provider endpoint: \(job.providerEndpoint ?? job.falEndpoint ?? "n/a")",
-        "Provider status URL: \(job.falStatusUrl ?? "n/a")",
-        "Provider status code: \(job.providerStatusCode.map(String.init) ?? "n/a")",
-        "Provider response: \(job.providerResponseSnippet ?? "n/a")"
+        "Updated at: \(displayValue(job.updatedAt, missing: "unknown"))",
+        "Request ID: \(displayValue(job.requestId, missing: "not provided by provider"))",
+        "Idempotency key: \(displayValue(job.idempotencyKey, missing: "not set"))",
+        "Invoke state: \(displayValue(job.invokeState, missing: "not reported"))",
+        "Provider adapter: \(displayValue(job.providerAdapter, missing: "not reported"))",
+        "Provider endpoint: \(displayValue(job.providerEndpoint ?? job.falEndpoint, missing: "provider not started yet"))",
+        "Provider status URL: \(displayValue(job.falStatusUrl, missing: "not available"))",
+        "Provider status code: \(displayCode(job.providerStatusCode, missing: "not available"))",
+        "Output file created: \(job.outputCreated == true ? "yes" : (job.outputCreated == false ? "no" : "unknown"))",
+        "Provider response: \(displayValue(job.providerResponseSnippet, missing: "no provider response captured"))"
     ]
     if requestState?.stage == .timedOut || requestState?.stage == .failed {
         let details = [
             "Job: \(job.kind) / \(job.status)",
             "Model: \(job.modelId ?? "unknown")",
-            "Prompt: \(job.promptText ?? "n/a")",
-            "Remote URL: \(remoteURLForDetails ?? "n/a")",
-            "Local file: \(localRecord?.localPath ?? "not available")",
+            "Prompt: \(displayValue(job.promptText, missing: "not captured"))",
+            "Remote URL: \(displayValue(remoteURLForDetails, missing: "not produced"))",
+            "Local file: \(displayValue(localRecord?.localPath, missing: "not available"))",
             "Error: \(requestState?.errorMessage ?? job.errorMessage ?? localRecord?.errorMessage ?? "request timed out or failed")"
         ] + apiEvidence + requestLines
         return ArtifactStatusPresentation(
@@ -7186,9 +7207,9 @@ private func artifactStatusPresentation(
         let details = [
             "Job: \(job.kind) / \(job.status)",
             "Model: \(job.modelId ?? "unknown")",
-            "Prompt: \(job.promptText ?? "n/a")",
-            "Remote URL: \(remoteURLForDetails ?? "n/a")",
-            "Local file: \(localRecord?.localPath ?? "not available")",
+            "Prompt: \(displayValue(job.promptText, missing: "not captured"))",
+            "Remote URL: \(displayValue(remoteURLForDetails, missing: "not produced"))",
+            "Local file: \(displayValue(localRecord?.localPath, missing: "not available"))",
             "Error: \(job.errorMessage ?? localRecord?.errorMessage ?? "unknown")"
         ] + apiEvidence + requestLines
         let detailText = details.joined(separator: "\n")
@@ -7203,10 +7224,10 @@ private func artifactStatusPresentation(
         let details = [
             "Job: \(job.kind) / \(job.status)",
             "Model: \(job.modelId ?? "unknown")",
-            "Prompt: \(job.promptText ?? "n/a")",
-            "Remote URL: \(remoteURLForDetails ?? "n/a")",
-            "Local file: \(localRecord?.localPath ?? "n/a")",
-            "File sync: \(localRecord?.status.rawValue ?? "n/a")"
+            "Prompt: \(displayValue(job.promptText, missing: "not captured"))",
+            "Remote URL: \(displayValue(remoteURLForDetails, missing: "not produced"))",
+            "Local file: \(displayValue(localRecord?.localPath, missing: "not available"))",
+            "File sync: \(displayValue(localRecord?.status.rawValue, missing: "unknown"))"
         ] + apiEvidence + requestLines
         let detailText = details.joined(separator: "\n")
         return ArtifactStatusPresentation(
@@ -7218,9 +7239,9 @@ private func artifactStatusPresentation(
 
     let waitingDetails = [
         "Job: \(job.kind) / \(job.status)",
-        "Progress: \(job.progressPct.map(String.init) ?? "n/a")%",
-        "Prompt: \(job.promptText ?? "n/a")",
-        "Remote URL: \(remoteURLForDetails ?? "n/a")",
+        "Progress: \(job.progressPct.map { "\($0)%" } ?? "unknown")",
+        "Prompt: \(displayValue(job.promptText, missing: "not captured"))",
+        "Remote URL: \(displayValue(remoteURLForDetails, missing: "pending"))",
         "Local file: pending"
     ] + apiEvidence + requestLines
     let waitingSummary: String
@@ -7253,6 +7274,17 @@ private func shotArtifactStatusPresentation(
     localRecord: LocalFileRecord?,
     requestState: RenderRequestState?
 ) -> ArtifactStatusPresentation {
+    func displayValue(_ value: String?, missing: String) -> String {
+        guard let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines), !trimmed.isEmpty else {
+            return missing
+        }
+        return trimmed
+    }
+    func displayCode(_ value: Int?, missing: String) -> String {
+        guard let value else { return missing }
+        return String(value)
+    }
+
     let requestLines = requestTimelineLines(requestState)
     let artifactNoun = job?.kind == "audio" ? "Sound" : "Shot"
     if let retryConflict = requestState?.errorMessage,
@@ -7278,11 +7310,15 @@ private func shotArtifactStatusPresentation(
             "Status: \(shot.status)",
             "Prompt: \(shot.prompt)",
             "Model tier: \(shot.modelTier)",
-            "Request ID: \(job?.requestId ?? "n/a")",
-            "Idempotency key: \(job?.idempotencyKey ?? "n/a")",
-            "Provider endpoint: \(job?.providerEndpoint ?? job?.falEndpoint ?? "n/a")",
-            "Provider status URL: \(job?.falStatusUrl ?? "n/a")",
-            "Provider status code: \(job?.providerStatusCode.map(String.init) ?? "n/a")",
+            "Job ID: \(displayValue(job?.id, missing: "unknown"))",
+            "Request ID: \(displayValue(job?.requestId, missing: "not provided by provider"))",
+            "Idempotency key: \(displayValue(job?.idempotencyKey, missing: "not set"))",
+            "Provider adapter: \(displayValue(job?.providerAdapter, missing: "not reported"))",
+            "Invoke state: \(displayValue(job?.invokeState, missing: "not reported"))",
+            "Output file created: \(job?.outputCreated == true ? "yes" : (job?.outputCreated == false ? "no" : "unknown"))",
+            "Provider endpoint: \(displayValue(job?.providerEndpoint ?? job?.falEndpoint, missing: "provider not started yet"))",
+            "Provider status URL: \(displayValue(job?.falStatusUrl, missing: "not available"))",
+            "Provider status code: \(displayCode(job?.providerStatusCode, missing: "not available"))",
             "Error: \(requestState?.errorMessage ?? job?.errorMessage ?? localRecord?.errorMessage ?? "request timed out or failed")"
         ] + requestLines
         return ArtifactStatusPresentation(
@@ -7297,11 +7333,15 @@ private func shotArtifactStatusPresentation(
             "Status: \(shot.status)",
             "Prompt: \(shot.prompt)",
             "Model tier: \(shot.modelTier)",
-            "Request ID: \(job?.requestId ?? "n/a")",
-            "Idempotency key: \(job?.idempotencyKey ?? "n/a")",
-            "Provider endpoint: \(job?.providerEndpoint ?? job?.falEndpoint ?? "n/a")",
-            "Provider status URL: \(job?.falStatusUrl ?? "n/a")",
-            "Provider status code: \(job?.providerStatusCode.map(String.init) ?? "n/a")",
+            "Job ID: \(displayValue(job?.id, missing: "unknown"))",
+            "Request ID: \(displayValue(job?.requestId, missing: "not provided by provider"))",
+            "Idempotency key: \(displayValue(job?.idempotencyKey, missing: "not set"))",
+            "Provider adapter: \(displayValue(job?.providerAdapter, missing: "not reported"))",
+            "Invoke state: \(displayValue(job?.invokeState, missing: "not reported"))",
+            "Output file created: \(job?.outputCreated == true ? "yes" : (job?.outputCreated == false ? "no" : "unknown"))",
+            "Provider endpoint: \(displayValue(job?.providerEndpoint ?? job?.falEndpoint, missing: "provider not started yet"))",
+            "Provider status URL: \(displayValue(job?.falStatusUrl, missing: "not available"))",
+            "Provider status code: \(displayCode(job?.providerStatusCode, missing: "not available"))",
             "Error: \(job?.errorMessage ?? localRecord?.errorMessage ?? "unknown")"
         ] + requestLines
         return ArtifactStatusPresentation(level: .error, summary: "\(artifactNoun) generation failed", details: details.joined(separator: "\n"))
@@ -7313,14 +7353,15 @@ private func shotArtifactStatusPresentation(
             "Status: \(shot.status)",
             "Prompt: \(shot.prompt)",
             "Model tier: \(shot.modelTier)",
-            "Remote URL: \(shot.clipUrl ?? "n/a")",
-            "Local file: \(localRecord?.localPath ?? "n/a")",
+            "Remote URL: \(displayValue(shot.clipUrl, missing: "not produced"))",
+            "Local file: \(displayValue(localRecord?.localPath, missing: "not available"))",
             "Model: \(job?.modelId ?? "unknown")",
-            "Request ID: \(job?.requestId ?? "n/a")",
-            "Idempotency key: \(job?.idempotencyKey ?? "n/a")",
-            "Provider endpoint: \(job?.providerEndpoint ?? job?.falEndpoint ?? "n/a")",
-            "Provider status URL: \(job?.falStatusUrl ?? "n/a")",
-            "Provider status code: \(job?.providerStatusCode.map(String.init) ?? "n/a")"
+            "Request ID: \(displayValue(job?.requestId, missing: "not provided by provider"))",
+            "Idempotency key: \(displayValue(job?.idempotencyKey, missing: "not set"))",
+            "Provider adapter: \(displayValue(job?.providerAdapter, missing: "not reported"))",
+            "Provider endpoint: \(displayValue(job?.providerEndpoint ?? job?.falEndpoint, missing: "provider not started yet"))",
+            "Provider status URL: \(displayValue(job?.falStatusUrl, missing: "not available"))",
+            "Provider status code: \(displayCode(job?.providerStatusCode, missing: "not available"))"
         ] + requestLines
         return ArtifactStatusPresentation(level: .success, summary: "\(artifactNoun) file is available locally", details: details.joined(separator: "\n"))
     }
@@ -7330,13 +7371,14 @@ private func shotArtifactStatusPresentation(
             "\(artifactNoun): \(shot.id)",
             "Status: \(shot.status)",
             "Prompt: \(shot.prompt)",
-            "Remote URL: \(shot.clipUrl ?? "n/a")",
+            "Remote URL: \(displayValue(shot.clipUrl, missing: "not produced"))",
             "Local file: unavailable",
-            "Request ID: \(job?.requestId ?? "n/a")",
-            "Idempotency key: \(job?.idempotencyKey ?? "n/a")",
-            "Provider endpoint: \(job?.providerEndpoint ?? job?.falEndpoint ?? "n/a")",
-            "Provider status URL: \(job?.falStatusUrl ?? "n/a")",
-            "Provider status code: \(job?.providerStatusCode.map(String.init) ?? "n/a")",
+            "Request ID: \(displayValue(job?.requestId, missing: "not provided by provider"))",
+            "Idempotency key: \(displayValue(job?.idempotencyKey, missing: "not set"))",
+            "Provider adapter: \(displayValue(job?.providerAdapter, missing: "not reported"))",
+            "Provider endpoint: \(displayValue(job?.providerEndpoint ?? job?.falEndpoint, missing: "provider not started yet"))",
+            "Provider status URL: \(displayValue(job?.falStatusUrl, missing: "not available"))",
+            "Provider status code: \(displayCode(job?.providerStatusCode, missing: "not available"))",
             "Error: \(localRecord?.errorMessage ?? "file sync failed")"
         ] + requestLines
         return ArtifactStatusPresentation(level: .error, summary: "\(artifactNoun) rendered but local file sync failed", details: details.joined(separator: "\n"))
@@ -7347,12 +7389,13 @@ private func shotArtifactStatusPresentation(
         "Status: \(shot.status)",
         "Prompt: \(shot.prompt)",
         "Model tier: \(shot.modelTier)",
-        "Progress: \(job?.progressPct.map(String.init) ?? "n/a")%",
-        "Request ID: \(job?.requestId ?? "n/a")",
-        "Idempotency key: \(job?.idempotencyKey ?? "n/a")",
-        "Provider endpoint: \(job?.providerEndpoint ?? job?.falEndpoint ?? "n/a")",
-        "Provider status URL: \(job?.falStatusUrl ?? "n/a")",
-        "Provider status code: \(job?.providerStatusCode.map(String.init) ?? "n/a")"
+        "Progress: \(job?.progressPct.map { "\($0)%" } ?? "unknown")",
+        "Request ID: \(displayValue(job?.requestId, missing: "not provided by provider"))",
+        "Idempotency key: \(displayValue(job?.idempotencyKey, missing: "not set"))",
+        "Provider adapter: \(displayValue(job?.providerAdapter, missing: "not reported"))",
+        "Provider endpoint: \(displayValue(job?.providerEndpoint ?? job?.falEndpoint, missing: "provider not started yet"))",
+        "Provider status URL: \(displayValue(job?.falStatusUrl, missing: "not available"))",
+        "Provider status code: \(displayCode(job?.providerStatusCode, missing: "not available"))"
     ] + requestLines
     let providerNotStarted = (job?.requestId == nil || job?.requestId == "n/a")
         && (job?.falEndpoint == nil || job?.falEndpoint == "n/a")
@@ -7400,7 +7443,13 @@ struct GenerationStatusDot: View {
 
 struct StatusDetailsSheet: View {
     let details: ArtifactStatusPresentation
+    let onRefresh: (() -> Void)?
     @Environment(\.dismiss) private var dismiss
+
+    init(details: ArtifactStatusPresentation, onRefresh: (() -> Void)? = nil) {
+        self.details = details
+        self.onRefresh = onRefresh
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: CinefuseTokens.Spacing.s) {
@@ -7408,6 +7457,15 @@ struct StatusDetailsSheet: View {
                 Text(details.summary)
                     .font(CinefuseTokens.Typography.sectionTitle)
                 Spacer()
+                if let onRefresh {
+                    Button {
+                        onRefresh()
+                    } label: {
+                        Image(systemName: "arrow.clockwise")
+                    }
+                    .buttonStyle(SecondaryActionButtonStyle())
+                    .help("Refresh status")
+                }
                 Button("Copy Diagnostics") {
                     copyTextToClipboard(details.details)
                 }
