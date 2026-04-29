@@ -5349,6 +5349,7 @@ struct SoundBlueprintsPanel: View {
 #if canImport(AVFoundation)
     @MainActor
     private func appendFilteredBlueprintURLs(_ urls: [URL]) async {
+        blueprintError = nil
         var skipped = 0
         var accepted: [URL] = []
         for url in urls {
@@ -6248,7 +6249,7 @@ struct ShotsPanel: View {
         }
     }
 
-    /// Audio: Quote Cost left of Create Sound on one row. Video: stacked vertically.
+    /// Quote Cost to the left of Create Shot / Create Sound on one row.
     @ViewBuilder
     private func quoteAndCreateButtons() -> some View {
         let quote = Button {
@@ -6270,16 +6271,9 @@ struct ShotsPanel: View {
         )
         .buttonStyle(PrimaryActionButtonStyle())
 
-        if panelMode == .audioSounds {
-            HStack(alignment: .center, spacing: CinefuseTokens.Spacing.s) {
-                quote
-                create
-            }
-        } else {
-            VStack(alignment: .leading, spacing: CinefuseTokens.Spacing.xs) {
-                quote
-                create
-            }
+        HStack(alignment: .center, spacing: CinefuseTokens.Spacing.s) {
+            quote
+            create
         }
     }
 
@@ -6458,54 +6452,93 @@ struct ShotsPanel: View {
                                 }
                             }
                             .modifier(ConditionalReadableVideoLabelBackdrop(useFrostedPlate: panelMode != .audioSounds))
-                            Button {
-                                onGenerateShot(shot.id)
-                            } label: {
-                                Label(
-                                    panelMode == .audioSounds ? "Generate sound" : "Generate",
-                                    systemImage: panelMode == .audioSounds ? "waveform" : "video.badge.plus"
-                                )
-                                    .font(CinefuseTokens.Typography.caption.weight(.semibold))
-                            }
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .lineLimit(1)
-                            .tooltip(
-                                panelMode == .audioSounds
-                                    ? "Generate audio for this sound"
-                                    : "Generate final clip for this shot",
-                                enabled: showTooltips
-                            )
-                            .buttonStyle(SecondaryActionButtonStyle())
-                            .disabled(inFlightStatuses.contains(shot.status) || shot.status == "ready")
-                            if let clipUrl = shot.clipUrl, let url = URL(string: clipUrl) {
+                            if panelMode == .audioSounds {
+                                HStack(alignment: .center, spacing: CinefuseTokens.Spacing.s) {
+                                    Button {
+                                        onGenerateShot(shot.id)
+                                    } label: {
+                                        Label("Generate sound", systemImage: "waveform")
+                                            .font(CinefuseTokens.Typography.caption.weight(.semibold))
+                                    }
+                                    .lineLimit(1)
+                                    .tooltip("Generate audio for this sound", enabled: showTooltips)
+                                    .buttonStyle(SecondaryActionButtonStyle())
+                                    .disabled(inFlightStatuses.contains(shot.status) || shot.status == "ready")
+                                    if let clipUrl = shot.clipUrl, let url = URL(string: clipUrl) {
+                                        Button {
+                                            onPreviewShot(shot.id)
+                                            openURL(url)
+                                        } label: {
+                                            Label("Play", systemImage: "play.circle")
+                                                .font(CinefuseTokens.Typography.caption.weight(.semibold))
+                                        }
+                                        .lineLimit(1)
+                                        .tooltip("Open rendered output", enabled: showTooltips)
+                                        .buttonStyle(SecondaryActionButtonStyle())
+                                    }
+                                    Button {
+                                        onRetryShot(shot.id)
+                                    } label: {
+                                        Image(systemName: "arrow.clockwise")
+                                    }
+                                    .buttonStyle(SecondaryActionButtonStyle())
+                                    .tooltip("Retry failed or restart queued shot", enabled: showTooltips)
+                                    .disabled(!(shot.status == "failed" || shot.status == "queued"))
+                                    Button(role: .destructive) {
+                                        pendingDeleteShotId = shot.id
+                                    } label: {
+                                        Image(systemName: "xmark.circle.fill")
+                                    }
+                                    .buttonStyle(DestructiveActionButtonStyle())
+                                    .tooltip("Delete sound", enabled: showTooltips)
+                                    Spacer(minLength: 0)
+                                }
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                            } else {
                                 Button {
-                                    onPreviewShot(shot.id)
-                                    openURL(url)
+                                    onGenerateShot(shot.id)
                                 } label: {
-                                    Label("Play Render", systemImage: "play.circle")
+                                    Label(
+                                        "Generate",
+                                        systemImage: "video.badge.plus"
+                                    )
                                         .font(CinefuseTokens.Typography.caption.weight(.semibold))
                                 }
                                 .frame(maxWidth: .infinity, alignment: .leading)
-                                .tooltip("Open rendered clip playback", enabled: showTooltips)
+                                .lineLimit(1)
+                                .tooltip("Generate final clip for this shot", enabled: showTooltips)
                                 .buttonStyle(SecondaryActionButtonStyle())
-                            }
-                            HStack(spacing: CinefuseTokens.Spacing.xs) {
-                                Button {
-                                    onRetryShot(shot.id)
-                                } label: {
-                                    Image(systemName: "arrow.clockwise")
+                                .disabled(inFlightStatuses.contains(shot.status) || shot.status == "ready")
+                                if let clipUrl = shot.clipUrl, let url = URL(string: clipUrl) {
+                                    Button {
+                                        onPreviewShot(shot.id)
+                                        openURL(url)
+                                    } label: {
+                                        Label("Play Render", systemImage: "play.circle")
+                                            .font(CinefuseTokens.Typography.caption.weight(.semibold))
+                                    }
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .tooltip("Open rendered clip playback", enabled: showTooltips)
+                                    .buttonStyle(SecondaryActionButtonStyle())
                                 }
-                                .buttonStyle(SecondaryActionButtonStyle())
-                                .tooltip("Retry failed or restart queued shot", enabled: showTooltips)
-                                .disabled(!(shot.status == "failed" || shot.status == "queued"))
+                                HStack(spacing: CinefuseTokens.Spacing.xs) {
+                                    Button {
+                                        onRetryShot(shot.id)
+                                    } label: {
+                                        Image(systemName: "arrow.clockwise")
+                                    }
+                                    .buttonStyle(SecondaryActionButtonStyle())
+                                    .tooltip("Retry failed or restart queued shot", enabled: showTooltips)
+                                    .disabled(!(shot.status == "failed" || shot.status == "queued"))
 
-                                Button(role: .destructive) {
-                                    pendingDeleteShotId = shot.id
-                                } label: {
-                                    Image(systemName: "delete.left")
+                                    Button(role: .destructive) {
+                                        pendingDeleteShotId = shot.id
+                                    } label: {
+                                        Image(systemName: "delete.left")
+                                    }
+                                    .buttonStyle(DestructiveActionButtonStyle())
+                                    .tooltip("Delete shot", enabled: showTooltips)
                                 }
-                                .buttonStyle(DestructiveActionButtonStyle())
-                                .tooltip("Delete shot", enabled: showTooltips)
                             }
                         }
                         .padding(CinefuseTokens.Spacing.s)
