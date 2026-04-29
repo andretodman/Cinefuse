@@ -6520,16 +6520,21 @@ struct ShotsPanel: View {
                                         onRetryShot(shot.id)
                                     } label: {
                                         Image(systemName: "arrow.clockwise")
+                                            .font(.system(size: 14, weight: .medium))
                                     }
-                                    .buttonStyle(SecondaryActionButtonStyle())
+                                    .buttonStyle(.plain)
+                                    .frame(width: 18, height: 18)
                                     .tooltip("Retry failed or restart queued shot", enabled: showTooltips)
                                     .disabled(!(shot.status == "failed" || shot.status == "queued"))
                                     Button(role: .destructive) {
                                         pendingDeleteShotId = shot.id
                                     } label: {
                                         Image(systemName: "xmark.circle.fill")
+                                            .font(.system(size: 14, weight: .medium))
                                     }
-                                    .buttonStyle(DestructiveActionButtonStyle())
+                                    .buttonStyle(.plain)
+                                    .frame(width: 18, height: 18)
+                                    .foregroundStyle(CinefuseTokens.ColorRole.danger)
                                     .tooltip("Delete sound", enabled: showTooltips)
                                     Spacer(minLength: 0)
                                 }
@@ -6566,8 +6571,10 @@ struct ShotsPanel: View {
                                         onRetryShot(shot.id)
                                     } label: {
                                         Image(systemName: "arrow.clockwise")
+                                            .font(.system(size: 14, weight: .medium))
                                     }
-                                    .buttonStyle(SecondaryActionButtonStyle())
+                                    .buttonStyle(.plain)
+                                    .frame(width: 18, height: 18)
                                     .tooltip("Retry failed or restart queued shot", enabled: showTooltips)
                                     .disabled(!(shot.status == "failed" || shot.status == "queued"))
 
@@ -6575,8 +6582,11 @@ struct ShotsPanel: View {
                                         pendingDeleteShotId = shot.id
                                     } label: {
                                         Image(systemName: "delete.left")
+                                            .font(.system(size: 14, weight: .medium))
                                     }
-                                    .buttonStyle(DestructiveActionButtonStyle())
+                                    .buttonStyle(.plain)
+                                    .frame(width: 18, height: 18)
+                                    .foregroundStyle(CinefuseTokens.ColorRole.danger)
                                     .tooltip("Delete shot", enabled: showTooltips)
                                 }
                             }
