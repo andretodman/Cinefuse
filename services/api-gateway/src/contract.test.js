@@ -1158,9 +1158,13 @@ test("api contract: sound generation uses audio MCP stub (wav url on shot)", asy
   const jobsBody = await jobListResponse.json();
   const audioJob = jobsBody.jobs.find((job) => job.kind === "audio" && job.shotId === shotId);
   assert.ok(audioJob);
-  if (audioJob.status === "done") {
-    assert.equal(audioJob.costToUsCents > 0, true);
-  }
+  assert.equal(audioJob.status, "done");
+  assert.equal(audioJob.costToUsCents > 0, true);
+  assert.equal(audioJob.providerAdapter, "stub");
+  assert.equal(audioJob.modelId, "music_v1");
+  assert.ok(typeof audioJob.providerEndpoint === "string" && audioJob.providerEndpoint.length > 0);
+  assert.equal(audioJob.outputPayload?.providerAdapter, "stub");
+  assert.equal(audioJob.outputUrl ?? audioJob.outputPayload?.sourceUrl, shotClipUrl);
 
   await new Promise((resolve, reject) => {
     server.close((error) => {
@@ -1172,3 +1176,106 @@ test("api contract: sound generation uses audio MCP stub (wav url on shot)", asy
     });
   });
 });
+
+test(
+  "api contract: live ElevenLabs sound generation (gated; costs API credits)",
+  {
+    skip:
+      process.env.CINEFUSE_LIVE_ELEVENLABS_TEST !== "1" ||
+      !process.env.ELEVENLABS_API_KEY ||
+      !process.env.CINEFUSE_AUDIO_UPLOAD_URL
+  },
+  async () => {
+    const prev = {
+      NODE_ENV: process.env.NODE_ENV,
+      CINEFUSE_ALLOW_STUB_MEDIA: process.env.CINEFUSE_ALLOW_STUB_MEDIA
+    };
+    process.env.NODE_ENV = "development";
+    delete process.env.CINEFUSE_ALLOW_STUB_MEDIA;
+
+    const headers = authHeaders("usr_contract_live_sound");
+    await clearProjects();
+    const server = createHttpServer();
+    await new Promise((resolve) => server.listen(0, resolve));
+    const address = server.address();
+    const port = typeof address === "object" && address ? address.port : 0;
+    const baseUrl = `http://127.0.0.1:${port}`;
+
+    try {
+      const createResponse = await fetch(`${baseUrl}/api/v1/cinefuse/projects`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ title: "Live EL sound contract" })
+      });
+      assert.equal(createResponse.status, 201);
+      const projectId = (await createResponse.json()).project.id;
+
+      const shotCreateResponse = await fetch(
+        `${baseUrl}/api/v1/cinefuse/projects/${projectId}/shots`,
+        {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ prompt: "short ambient pad two seconds", modelTier: "standard" })
+        }
+      );
+      assert.equal(shotCreateResponse.status, 201);
+      const shotId = (await shotCreateResponse.json()).shot.id;
+
+      const generateResponse = await fetch(
+        `${baseUrl}/api/v1/cinefuse/projects/${projectId}/shots/${shotId}/generate`,
+        {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ generationKind: "sound", soundBlueprintIds: [] })
+        }
+      );
+      assert.equal(generateResponse.status, 200);
+
+      let shotStatus = "queued";
+      let retries = 240;
+      while (retries > 0) {
+        const shotListResponse = await fetch(`${baseUrl}/api/v1/cinefuse/projects/${projectId}/shots`, {
+          headers
+        });
+        assert.equal(shotListResponse.status, 200);
+        const shotsBody = await shotListResponse.json();
+        shotStatus = shotsBody.shots[0].status;
+        if (shotStatus === "ready" || shotStatus === "failed") {
+          break;
+        }
+        retries -= 1;
+        await new Promise((resolve) => setTimeout(resolve, 500));
+      }
+
+      assert.equal(shotStatus, "ready");
+      const jobListResponse = await fetch(`${baseUrl}/api/v1/cinefuse/projects/${projectId}/jobs`, {
+        headers
+      });
+      assert.equal(jobListResponse.status, 200);
+      const jobsBody = await jobListResponse.json();
+      const audioJob = jobsBody.jobs.find((job) => job.kind === "audio" && job.shotId === shotId);
+      assert.ok(audioJob);
+      assert.equal(audioJob.status, "done");
+      assert.equal(audioJob.providerAdapter, "elevenlabs_music");
+      assert.equal(audioJob.providerEndpoint, "https://api.elevenlabs.io/v1/music");
+      assert.match(audioJob.outputUrl ?? "", /^https?:\/\//);
+      assert.equal(audioJob.modelId, "music_v1");
+    } finally {
+      process.env.NODE_ENV = prev.NODE_ENV;
+      if (prev.CINEFUSE_ALLOW_STUB_MEDIA === undefined) {
+        delete process.env.CINEFUSE_ALLOW_STUB_MEDIA;
+      } else {
+        process.env.CINEFUSE_ALLOW_STUB_MEDIA = prev.CINEFUSE_ALLOW_STUB_MEDIA;
+      }
+      await new Promise((resolve, reject) => {
+        server.close((error) => {
+          if (error) {
+            reject(error);
+            return;
+          }
+          resolve();
+        });
+      });
+    }
+  }
+);

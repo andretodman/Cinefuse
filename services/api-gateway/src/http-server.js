@@ -525,6 +525,8 @@ export function createHttpServer() {
       progressPct: 15
     });
 
+    /** Set when `audio.generate_score` returns; used for failed-job diagnostics and refunds. */
+    let soundMcpInvokeResult = null;
     let runningProgress = 15;
     const progressTimer = setInterval(() => {
       if (runningProgress >= 90) {
@@ -564,6 +566,7 @@ export function createHttpServer() {
           shotId: task.shotId,
           userId: task.userId
         });
+        soundMcpInvokeResult = audioGeneration;
         clearInterval(progressTimer);
         const track = audioGeneration.track ?? null;
         if (audioGeneration.skipped || !track?.sourceUrl) {
@@ -587,12 +590,16 @@ export function createHttpServer() {
         await saveJob({
           id: task.jobId,
           outputPayload: {
-            modelId: track.kind ?? "score",
+            modelId: track.modelId ?? "music_v1",
             sourceUrl: track.sourceUrl,
             waveformUrl: track.waveformUrl ?? null,
+            requestId: audioGeneration.providerRequestId ?? null,
+            providerEndpoint: audioGeneration.providerEndpoint ?? null,
+            providerAdapter: audioGeneration.adapter ?? null,
             sparksCost: task.quote.sparksCost,
             invokeState: "done",
-            apiInvokeFinishedAt: new Date().toISOString()
+            apiInvokeFinishedAt: new Date().toISOString(),
+            outputCreated: audioGeneration.outputCreated !== false
           },
           costToUsCents: Number(track.costToUsCents ?? 0)
         });
@@ -678,9 +685,16 @@ export function createHttpServer() {
         id: task.jobId,
         outputPayload: {
           error: message,
-          requestId: typeof falContext?.requestId === "string" ? falContext.requestId : null,
+          requestId:
+            (typeof falContext?.requestId === "string" ? falContext.requestId : null)
+            ?? (typeof soundMcpInvokeResult?.providerRequestId === "string"
+              ? soundMcpInvokeResult.providerRequestId
+              : null),
           falEndpoint: typeof falContext?.endpoint === "string" ? falContext.endpoint : null,
           falStatusUrl: typeof falContext?.statusUrl === "string" ? falContext.statusUrl : null,
+          providerEndpoint: soundMcpInvokeResult?.providerEndpoint ?? null,
+          providerAdapter: soundMcpInvokeResult?.adapter ?? null,
+          featureError: soundMcpInvokeResult?.featureError ?? null,
           providerStatusCode: coerceProviderStatusCode(falContext?.statusCode),
           providerResponseSnippet: typeof falContext?.responseSnippet === "string" ? falContext.responseSnippet : null,
           invokeState: "failed",

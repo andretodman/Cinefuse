@@ -288,6 +288,7 @@ function mapJobRow(row) {
     ?? outputPayload.stitchedUrl
     ?? outputPayload.exportUrl
     ?? outputPayload.outputUrl
+    ?? (typeof outputPayload.sourceUrl === "string" ? outputPayload.sourceUrl : null)
     ?? (typeof outputPayload.track?.sourceUrl === "string" ? outputPayload.track.sourceUrl : null)
     ?? null;
   const skippedFeature = Boolean(outputPayload.skippedFeature);
@@ -323,6 +324,8 @@ function mapJobRow(row) {
     invokeState: typeof outputPayload.invokeState === "string" ? outputPayload.invokeState : null,
     falEndpoint: typeof outputPayload.falEndpoint === "string" ? outputPayload.falEndpoint : null,
     falStatusUrl: typeof outputPayload.falStatusUrl === "string" ? outputPayload.falStatusUrl : null,
+    providerEndpoint:
+      typeof outputPayload.providerEndpoint === "string" ? outputPayload.providerEndpoint : null,
     providerStatusCode: Number.isFinite(Number(outputPayload.providerStatusCode))
       ? Number(outputPayload.providerStatusCode)
       : null,

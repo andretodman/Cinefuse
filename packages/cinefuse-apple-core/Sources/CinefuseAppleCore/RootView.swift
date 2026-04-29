@@ -4508,9 +4508,6 @@ struct TimelineClipCard: View {
                     StatusBadge(status: shot.status)
                 }
             }
-            .contentShape(Rectangle())
-            .onTapGesture(count: 2, perform: onPreview)
-            .onTapGesture(count: 1, perform: onSelect)
 
             Text(shot.prompt.isEmpty ? "Untitled clip" : shot.prompt)
                 .font(CinefuseTokens.Typography.label)
@@ -4559,8 +4556,6 @@ struct TimelineClipCard: View {
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            .contentShape(Rectangle())
-            .onTapGesture(perform: onSelect)
         }
         .padding(CinefuseTokens.Spacing.s)
         .frame(
@@ -4616,6 +4611,9 @@ struct TimelineClipCard: View {
                     )
             }
         )
+        .contentShape(Rectangle())
+        .onTapGesture(count: 2, perform: onPreview)
+        .onTapGesture(count: 1, perform: onSelect)
         .opacity(isDragging ? 0.75 : 1)
         .onDrag {
             onDragStarted()

@@ -205,7 +205,13 @@ async function elevenLabsComposeMusic({ prompt, musicLengthMs, forceInstrumental
     const errBody = await response.text();
     throw new Error(`elevenlabs_music_http_${response.status}: ${errBody.slice(0, 800)}`);
   }
-  return Buffer.from(await response.arrayBuffer());
+  const providerRequestId =
+    response.headers.get("request-id") ??
+    response.headers.get("x-request-id") ??
+    response.headers.get("xi-request-id") ??
+    null;
+  const buffer = Buffer.from(await response.arrayBuffer());
+  return { buffer, providerRequestId };
 }
 
 async function elevenLabsTextToSpeech(text) {
@@ -413,6 +419,8 @@ async function runGenerateScore(tool, kind, input) {
         skipped: false,
         outputCreated: true,
         providerAdapter: resolveAudioAdapterKind(),
+        providerEndpoint: httpUrl,
+        providerRequestId: null,
         track: {
           ...track,
           providerAdapter: resolveAudioAdapterKind()
@@ -437,6 +445,8 @@ async function runGenerateScore(tool, kind, input) {
       skipped: false,
       outputCreated: true,
       providerAdapter: "stub",
+      providerEndpoint: stubMediaRootUrl(),
+      providerRequestId: null,
       track: { ...track, providerAdapter: "stub", modelId: "music_v1" }
     };
   }
@@ -472,7 +482,7 @@ async function runGenerateScore(tool, kind, input) {
   );
 
   try {
-    const buffer = await elevenLabsComposeMusic({
+    const { buffer, providerRequestId: elevenRequestId } = await elevenLabsComposeMusic({
       prompt: promptText,
       musicLengthMs,
       forceInstrumental: input.forceInstrumental !== false
@@ -506,6 +516,8 @@ async function runGenerateScore(tool, kind, input) {
       skipped: false,
       outputCreated: true,
       providerAdapter: "elevenlabs_music",
+      providerEndpoint: "https://api.elevenlabs.io/v1/music",
+      providerRequestId: elevenRequestId ?? null,
       track: {
         ...track,
         providerAdapter: "elevenlabs_music",
@@ -645,6 +657,8 @@ export function createServer() {
         server: "audio",
         tool,
         adapter,
+        providerEndpoint: result.providerEndpoint ?? null,
+        providerRequestId: result.providerRequestId ?? null,
         skipped: Boolean(result.skipped),
         skippedFeature: result.skippedFeature ?? null,
         featureError: result.featureError ?? null,
