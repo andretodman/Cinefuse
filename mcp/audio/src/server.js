@@ -173,8 +173,10 @@ function extractMusicPrompt(input = {}) {
 const ELEVENLABS_MUSIC_FORMAT_FALLBACK_CHAIN = ["mp3_44100_128", "mp3_44100_96", "mp3_22050_32"];
 
 function resolveElevenLabsApiBase() {
-  const raw = (process.env.ELEVENLABS_API_BASE_URL ?? "https://api.elevenlabs.io").trim();
-  return raw.replace(/\/+$/, "");
+  const fallback = "https://api.elevenlabs.io";
+  const raw = (process.env.ELEVENLABS_API_BASE_URL ?? "").trim();
+  const base = raw.length > 0 ? raw : fallback;
+  return base.replace(/\/+$/, "");
 }
 
 /**
@@ -335,13 +337,22 @@ async function uploadAudioBuffer(buffer, contentType = "audio/mpeg", options = {
   if (!uploadUrl) {
     return null;
   }
+  const useWorkerIngest =
+    typeof options.uploadWorkerToken === "string"
+    && options.uploadWorkerToken.length > 0
+    && typeof options.uploadProjectId === "string"
+    && options.uploadProjectId.length > 0
+    && typeof options.uploadUserId === "string"
+    && options.uploadUserId.length > 0;
   let auth = "";
-  if (typeof options.authorizationHeader === "string" && options.authorizationHeader.trim().length > 0) {
-    auth = options.authorizationHeader.trim();
-  } else if ((process.env.CINEFUSE_AUDIO_UPLOAD_TOKEN ?? "").trim().length > 0) {
-    auth = `Bearer ${process.env.CINEFUSE_AUDIO_UPLOAD_TOKEN.trim()}`;
-  } else if ((process.env.CINEFUSE_AUDIO_PROVIDER_TOKEN ?? "").trim().length > 0) {
-    auth = `Bearer ${process.env.CINEFUSE_AUDIO_PROVIDER_TOKEN.trim()}`;
+  if (!useWorkerIngest) {
+    if (typeof options.authorizationHeader === "string" && options.authorizationHeader.trim().length > 0) {
+      auth = options.authorizationHeader.trim();
+    } else if ((process.env.CINEFUSE_AUDIO_UPLOAD_TOKEN ?? "").trim().length > 0) {
+      auth = `Bearer ${process.env.CINEFUSE_AUDIO_UPLOAD_TOKEN.trim()}`;
+    } else if ((process.env.CINEFUSE_AUDIO_PROVIDER_TOKEN ?? "").trim().length > 0) {
+      auth = `Bearer ${process.env.CINEFUSE_AUDIO_PROVIDER_TOKEN.trim()}`;
+    }
   }
   const filename =
     (typeof options.filename === "string" && options.filename.length > 0 ? options.filename : "score.mp3")
@@ -349,7 +360,14 @@ async function uploadAudioBuffer(buffer, contentType = "audio/mpeg", options = {
   const headers = {
     "content-type": contentType,
     "x-filename": filename,
-    ...(auth ? { authorization: auth } : {})
+    ...(auth ? { authorization: auth } : {}),
+    ...(useWorkerIngest
+      ? {
+          "x-cinefuse-worker-token": options.uploadWorkerToken,
+          "x-cinefuse-project-id": options.uploadProjectId,
+          "x-cinefuse-user-id": options.uploadUserId
+        }
+      : {})
   };
   const response = await fetch(uploadUrl, {
     method: "POST",
@@ -601,6 +619,9 @@ async function runGenerateScore(tool, kind, input) {
       authorizationHeader: typeof input.uploadAuthorization === "string"
         ? input.uploadAuthorization
         : undefined,
+      uploadWorkerToken: typeof input.uploadWorkerToken === "string" ? input.uploadWorkerToken : undefined,
+      uploadProjectId: typeof input.uploadProjectId === "string" ? input.uploadProjectId : undefined,
+      uploadUserId: typeof input.uploadUserId === "string" ? input.uploadUserId : undefined,
       filename: uploadFilename
     });
     if (!uploadedUrl) {
@@ -610,7 +631,7 @@ async function runGenerateScore(tool, kind, input) {
         provider: "elevenlabs_music",
         reason: "elevenlabs_music_requires_upload_url",
         detail:
-          "ElevenLabs Music returned audio but no upload target is configured. Set CINEFUSE_AUDIO_UPLOAD_URL (and token if required), or set CINEFUSE_GATEWAY_PUBLIC_ORIGIN so the API gateway can persist to project files.",
+          "ElevenLabs Music returned audio but no upload target is configured. Set CINEFUSE_AUDIO_UPLOAD_URL (and token if required), or CINEFUSE_GATEWAY_PUBLIC_ORIGIN + CINEFUSE_WORKER_TOKEN so the gateway can ingest via /api/v1/internal/render/project-audio.",
         outputCreated: false
       });
     }

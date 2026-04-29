@@ -307,6 +307,8 @@ public struct Job: Codable, Identifiable {
     public let invokeState: String?
     public let falEndpoint: String?
     public let falStatusUrl: String?
+    /// Music / non-fal providers (e.g. ElevenLabs compose URL); falls back to `falEndpoint` in UI when nil.
+    public let providerEndpoint: String?
     public let providerStatusCode: Int?
     public let providerResponseSnippet: String?
     /// When true, the MCP marked this audio feature as skipped (provider limitation); overall flow continues.

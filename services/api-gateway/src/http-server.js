@@ -476,8 +476,8 @@ export function createHttpServer() {
   }
 
   /**
-   * When `CINEFUSE_AUDIO_UPLOAD_URL` is unset, fall back to this gateway's project file store
-   * so ElevenLabs Music bytes can become a durable `clipUrl` (requires `CINEFUSE_GATEWAY_PUBLIC_ORIGIN`).
+   * Persists ElevenLabs MP3 bytes to project files. Custom `CINEFUSE_AUDIO_UPLOAD_URL` keeps prior behavior.
+   * Otherwise uses worker-authenticated internal ingest (avoids the render task HTTP-calling itself with user Bearer).
    */
   function resolveSoundGenerationUploadContext(projectId, userId) {
     const explicitUpload = (process.env.CINEFUSE_AUDIO_UPLOAD_URL ?? "").trim();
@@ -486,22 +486,33 @@ export function createHttpServer() {
       origin.length > 0
         ? `${origin}/api/v1/cinefuse/projects/${encodeURIComponent(projectId)}/files`
         : "";
-    const uploadUrl = explicitUpload || defaultGatewayUpload;
-    if (!uploadUrl) {
-      return {};
+
+    if (explicitUpload.length > 0) {
+      const uploadUrl = explicitUpload;
+      const uploadToken = (process.env.CINEFUSE_AUDIO_UPLOAD_TOKEN ?? "").trim();
+      const providerToken = (process.env.CINEFUSE_AUDIO_PROVIDER_TOKEN ?? "").trim();
+      if (uploadToken) {
+        return { uploadUrl, uploadAuthorization: `Bearer ${uploadToken}` };
+      }
+      if (providerToken) {
+        return { uploadUrl, uploadAuthorization: `Bearer ${providerToken}` };
+      }
+      if (defaultGatewayUpload && uploadUrl === defaultGatewayUpload && userId) {
+        return { uploadUrl, uploadAuthorization: `Bearer user:${userId}` };
+      }
+      return { uploadUrl };
     }
-    const uploadToken = (process.env.CINEFUSE_AUDIO_UPLOAD_TOKEN ?? "").trim();
-    const providerToken = (process.env.CINEFUSE_AUDIO_PROVIDER_TOKEN ?? "").trim();
-    if (uploadToken) {
-      return { uploadUrl, uploadAuthorization: `Bearer ${uploadToken}` };
+
+    if (origin.length > 0 && userId) {
+      return {
+        uploadUrl: `${origin}/api/v1/internal/render/project-audio`,
+        uploadWorkerToken: WORKER_AUTH_TOKEN,
+        uploadProjectId: projectId,
+        uploadUserId: userId
+      };
     }
-    if (providerToken) {
-      return { uploadUrl, uploadAuthorization: `Bearer ${providerToken}` };
-    }
-    if (defaultGatewayUpload && uploadUrl === defaultGatewayUpload && userId) {
-      return { uploadUrl, uploadAuthorization: `Bearer user:${userId}` };
-    }
-    return { uploadUrl };
+
+    return {};
   }
 
   async function processRenderTask(task) {
@@ -887,6 +898,43 @@ export function createHttpServer() {
         const task = await readBody(request);
         await processRenderTask(task);
         return json(response, 200, { ok: true });
+      }
+
+      if (method === "POST" && url.pathname === "/api/v1/internal/render/project-audio") {
+        if (request.headers["x-cinefuse-worker-token"] !== WORKER_AUTH_TOKEN) {
+          return writeError(response, 401, "unauthorized worker", "UNAUTHORIZED_WORKER");
+        }
+        const projectId = String(request.headers["x-cinefuse-project-id"] ?? "").trim();
+        const userId = String(request.headers["x-cinefuse-user-id"] ?? "").trim();
+        if (!projectId || !userId) {
+          return writeError(response, 400, "missing project or user headers", "BAD_UPLOAD_CONTEXT");
+        }
+        const project = await getProject(projectId, userId);
+        if (!project) {
+          return writeError(response, 404, "project not found", "PROJECT_NOT_FOUND");
+        }
+        const filenameHeader = request.headers["x-filename"] ?? request.headers["x-file-name"] ?? "score.mp3";
+        const filename = decodeURIComponent(String(filenameHeader));
+        const chunks = [];
+        for await (const chunk of request) {
+          chunks.push(chunk);
+        }
+        const buffer = Buffer.concat(chunks);
+        const file = registerUploadedProjectFile({
+          projectId,
+          filename,
+          byteSize: buffer.length,
+          buffer
+        });
+        const publicOrigin = (process.env.CINEFUSE_GATEWAY_PUBLIC_ORIGIN ?? "").replace(/\/$/, "");
+        const filePayload =
+          publicOrigin.length > 0
+            ? {
+                ...file,
+                url: `${publicOrigin}/api/v1/cinefuse/projects/${encodeURIComponent(projectId)}/files/${encodeURIComponent(file.id)}`
+              }
+            : file;
+        return json(response, 201, { file: filePayload });
       }
 
       if (method === "GET" && url.pathname === "/health") {

@@ -2119,6 +2119,7 @@ struct ProjectWorkspaceScreen: View {
                     invokeState: job.invokeState,
                     falEndpoint: job.falEndpoint,
                     falStatusUrl: job.falStatusUrl,
+                    providerEndpoint: job.providerEndpoint,
                     providerStatusCode: job.providerStatusCode,
                     providerResponseSnippet: job.providerResponseSnippet,
                     skippedFeature: job.skippedFeature,
@@ -2146,6 +2147,7 @@ struct ProjectWorkspaceScreen: View {
                         invokeState: nil,
                         falEndpoint: nil,
                         falStatusUrl: nil,
+                        providerEndpoint: nil,
                         providerStatusCode: nil,
                         providerResponseSnippet: nil,
                         skippedFeature: nil,
@@ -7170,7 +7172,7 @@ private func artifactStatusPresentation(
         "Request ID: \(job.requestId ?? "n/a")",
         "Idempotency key: \(job.idempotencyKey ?? "n/a")",
         "Invoke state: \(job.invokeState ?? "n/a")",
-        "Provider endpoint: \(job.falEndpoint ?? "n/a")",
+        "Provider endpoint: \(job.providerEndpoint ?? job.falEndpoint ?? "n/a")",
         "Provider status URL: \(job.falStatusUrl ?? "n/a")",
         "Provider status code: \(job.providerStatusCode.map(String.init) ?? "n/a")",
         "Provider response: \(job.providerResponseSnippet ?? "n/a")"
@@ -7287,7 +7289,7 @@ private func shotArtifactStatusPresentation(
             "Model tier: \(shot.modelTier)",
             "Request ID: \(job?.requestId ?? "n/a")",
             "Idempotency key: \(job?.idempotencyKey ?? "n/a")",
-            "Provider endpoint: \(job?.falEndpoint ?? "n/a")",
+            "Provider endpoint: \(job?.providerEndpoint ?? job?.falEndpoint ?? "n/a")",
             "Provider status URL: \(job?.falStatusUrl ?? "n/a")",
             "Provider status code: \(job?.providerStatusCode.map(String.init) ?? "n/a")",
             "Error: \(requestState?.errorMessage ?? job?.errorMessage ?? localRecord?.errorMessage ?? "request timed out or failed")"
@@ -7306,7 +7308,7 @@ private func shotArtifactStatusPresentation(
             "Model tier: \(shot.modelTier)",
             "Request ID: \(job?.requestId ?? "n/a")",
             "Idempotency key: \(job?.idempotencyKey ?? "n/a")",
-            "Provider endpoint: \(job?.falEndpoint ?? "n/a")",
+            "Provider endpoint: \(job?.providerEndpoint ?? job?.falEndpoint ?? "n/a")",
             "Provider status URL: \(job?.falStatusUrl ?? "n/a")",
             "Provider status code: \(job?.providerStatusCode.map(String.init) ?? "n/a")",
             "Error: \(job?.errorMessage ?? localRecord?.errorMessage ?? "unknown")"
@@ -7325,7 +7327,7 @@ private func shotArtifactStatusPresentation(
             "Model: \(job?.modelId ?? "unknown")",
             "Request ID: \(job?.requestId ?? "n/a")",
             "Idempotency key: \(job?.idempotencyKey ?? "n/a")",
-            "Provider endpoint: \(job?.falEndpoint ?? "n/a")",
+            "Provider endpoint: \(job?.providerEndpoint ?? job?.falEndpoint ?? "n/a")",
             "Provider status URL: \(job?.falStatusUrl ?? "n/a")",
             "Provider status code: \(job?.providerStatusCode.map(String.init) ?? "n/a")"
         ] + requestLines
@@ -7341,7 +7343,7 @@ private func shotArtifactStatusPresentation(
             "Local file: unavailable",
             "Request ID: \(job?.requestId ?? "n/a")",
             "Idempotency key: \(job?.idempotencyKey ?? "n/a")",
-            "Provider endpoint: \(job?.falEndpoint ?? "n/a")",
+            "Provider endpoint: \(job?.providerEndpoint ?? job?.falEndpoint ?? "n/a")",
             "Provider status URL: \(job?.falStatusUrl ?? "n/a")",
             "Provider status code: \(job?.providerStatusCode.map(String.init) ?? "n/a")",
             "Error: \(localRecord?.errorMessage ?? "file sync failed")"
@@ -7357,7 +7359,7 @@ private func shotArtifactStatusPresentation(
         "Progress: \(job?.progressPct.map(String.init) ?? "n/a")%",
         "Request ID: \(job?.requestId ?? "n/a")",
         "Idempotency key: \(job?.idempotencyKey ?? "n/a")",
-        "Provider endpoint: \(job?.falEndpoint ?? "n/a")",
+        "Provider endpoint: \(job?.providerEndpoint ?? job?.falEndpoint ?? "n/a")",
         "Provider status URL: \(job?.falStatusUrl ?? "n/a")",
         "Provider status code: \(job?.providerStatusCode.map(String.init) ?? "n/a")"
     ] + requestLines
