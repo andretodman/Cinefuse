@@ -3572,16 +3572,6 @@ struct ProjectDetailScreen: View {
                         onCreate: onCreateSoundBlueprint,
                         onPlayReferenceFile: onPlayBlueprintReferenceFile
                     )
-                    CharacterPanel(
-                        characters: characters,
-                        newCharacterName: $newCharacterName,
-                        newCharacterDescription: $newCharacterDescription,
-                        onCreateCharacter: onCreateCharacter,
-                        uploadProjectFiles: uploadProjectFiles,
-                        onTrainCharacter: onTrainCharacter,
-                        showTooltips: showTooltips,
-                        isCollapsed: $collapseCharacterPanel
-                    )
                 } else {
                     StoryboardPanel(
                         scenes: scenes,
@@ -7264,10 +7254,11 @@ private func shotArtifactStatusPresentation(
     requestState: RenderRequestState?
 ) -> ArtifactStatusPresentation {
     let requestLines = requestTimelineLines(requestState)
+    let artifactNoun = job?.kind == "audio" ? "Sound" : "Shot"
     if let retryConflict = requestState?.errorMessage,
        retryConflict.localizedCaseInsensitiveContains("retry is only for failed shots") {
         let details = [
-            "Shot: \(shot.id)",
+            "\(artifactNoun): \(shot.id)",
             "Status: \(shot.status)",
             "Prompt: \(shot.prompt)",
             "Model tier: \(shot.modelTier)",
@@ -7283,7 +7274,7 @@ private func shotArtifactStatusPresentation(
     }
     if requestState?.stage == .timedOut || requestState?.stage == .failed {
         let details = [
-            "Shot: \(shot.id)",
+            "\(artifactNoun): \(shot.id)",
             "Status: \(shot.status)",
             "Prompt: \(shot.prompt)",
             "Model tier: \(shot.modelTier)",
@@ -7296,13 +7287,13 @@ private func shotArtifactStatusPresentation(
         ] + requestLines
         return ArtifactStatusPresentation(
             level: .error,
-            summary: "Shot request timed out or failed",
+            summary: "\(artifactNoun) request timed out or failed",
             details: details.joined(separator: "\n")
         )
     }
     if shot.status == "failed" {
         let details = [
-            "Shot: \(shot.id)",
+            "\(artifactNoun): \(shot.id)",
             "Status: \(shot.status)",
             "Prompt: \(shot.prompt)",
             "Model tier: \(shot.modelTier)",
@@ -7313,12 +7304,12 @@ private func shotArtifactStatusPresentation(
             "Provider status code: \(job?.providerStatusCode.map(String.init) ?? "n/a")",
             "Error: \(job?.errorMessage ?? localRecord?.errorMessage ?? "unknown")"
         ] + requestLines
-        return ArtifactStatusPresentation(level: .error, summary: "Shot generation failed", details: details.joined(separator: "\n"))
+        return ArtifactStatusPresentation(level: .error, summary: "\(artifactNoun) generation failed", details: details.joined(separator: "\n"))
     }
 
     if localRecord?.status == .synced || localRecord?.status == .alreadyPresent {
         let details = [
-            "Shot: \(shot.id)",
+            "\(artifactNoun): \(shot.id)",
             "Status: \(shot.status)",
             "Prompt: \(shot.prompt)",
             "Model tier: \(shot.modelTier)",
@@ -7331,12 +7322,12 @@ private func shotArtifactStatusPresentation(
             "Provider status URL: \(job?.falStatusUrl ?? "n/a")",
             "Provider status code: \(job?.providerStatusCode.map(String.init) ?? "n/a")"
         ] + requestLines
-        return ArtifactStatusPresentation(level: .success, summary: "Shot file is available locally", details: details.joined(separator: "\n"))
+        return ArtifactStatusPresentation(level: .success, summary: "\(artifactNoun) file is available locally", details: details.joined(separator: "\n"))
     }
 
     if localRecord?.status == .downloadFailed || localRecord?.status == .writeFailed {
         let details = [
-            "Shot: \(shot.id)",
+            "\(artifactNoun): \(shot.id)",
             "Status: \(shot.status)",
             "Prompt: \(shot.prompt)",
             "Remote URL: \(shot.clipUrl ?? "n/a")",
@@ -7348,11 +7339,11 @@ private func shotArtifactStatusPresentation(
             "Provider status code: \(job?.providerStatusCode.map(String.init) ?? "n/a")",
             "Error: \(localRecord?.errorMessage ?? "file sync failed")"
         ] + requestLines
-        return ArtifactStatusPresentation(level: .error, summary: "Shot rendered but local file sync failed", details: details.joined(separator: "\n"))
+        return ArtifactStatusPresentation(level: .error, summary: "\(artifactNoun) rendered but local file sync failed", details: details.joined(separator: "\n"))
     }
 
     let details = [
-        "Shot: \(shot.id)",
+        "\(artifactNoun): \(shot.id)",
         "Status: \(shot.status)",
         "Prompt: \(shot.prompt)",
         "Model tier: \(shot.modelTier)",
@@ -7368,10 +7359,10 @@ private func shotArtifactStatusPresentation(
         && (job?.falStatusUrl == nil || job?.falStatusUrl == "n/a")
     let queuedTooLongLikely = shot.status == "queued" && providerNotStarted
     let summary = requestState?.stage == .responseReceived
-        ? "Shot API call accepted; waiting for worker"
+        ? "\(artifactNoun) API call accepted; waiting for worker"
         : queuedTooLongLikely
         ? "Queued: worker backlog/offline likely"
-        : "Shot generation still in progress"
+        : "\(artifactNoun) generation still in progress"
     let queuedGuidance = queuedTooLongLikely
         ? ["Provider call has not started yet; render-worker may be delayed or offline."]
         : []
