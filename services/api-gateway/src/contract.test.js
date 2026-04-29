@@ -1079,3 +1079,96 @@ test("api contract: project file upload stores bytes and GET returns same payloa
     });
   });
 });
+
+test("api contract: sound generation uses audio MCP stub (wav url on shot)", async () => {
+  const headers = authHeaders("usr_contract_sound_gen");
+  await clearProjects();
+  const server = createHttpServer();
+  await new Promise((resolve) => server.listen(0, resolve));
+  const address = server.address();
+  const port = typeof address === "object" && address ? address.port : 0;
+  const baseUrl = `http://127.0.0.1:${port}`;
+
+  const createResponse = await fetch(`${baseUrl}/api/v1/cinefuse/projects`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ title: "Sound generation contract" })
+  });
+  assert.equal(createResponse.status, 201);
+  const projectId = (await createResponse.json()).project.id;
+
+  const quoteResponse = await fetch(`${baseUrl}/api/v1/cinefuse/projects/${projectId}/shots/quote`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({
+      prompt: "ambient tension bed",
+      modelTier: "standard",
+      generationKind: "sound"
+    })
+  });
+  assert.equal(quoteResponse.status, 200);
+  const quoteBody = await quoteResponse.json();
+  assert.equal(quoteBody.quote.sparksCost, 70);
+  assert.match(quoteBody.quote.modelId, /audio-score/);
+
+  const shotCreateResponse = await fetch(`${baseUrl}/api/v1/cinefuse/projects/${projectId}/shots`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ prompt: "ambient tension bed", modelTier: "standard" })
+  });
+  assert.equal(shotCreateResponse.status, 201);
+  const shotId = (await shotCreateResponse.json()).shot.id;
+
+  const generateResponse = await fetch(
+    `${baseUrl}/api/v1/cinefuse/projects/${projectId}/shots/${shotId}/generate`,
+    {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ generationKind: "sound", soundBlueprintIds: [] })
+    }
+  );
+  assert.equal(generateResponse.status, 200);
+  const generateBody = await generateResponse.json();
+  assert.equal(generateBody.job.kind, "audio");
+
+  let shotStatus = "queued";
+  let shotClipUrl = null;
+  let retries = 40;
+  while (retries > 0) {
+    const shotListResponse = await fetch(`${baseUrl}/api/v1/cinefuse/projects/${projectId}/shots`, {
+      headers
+    });
+    assert.equal(shotListResponse.status, 200);
+    const shotsBody = await shotListResponse.json();
+    shotStatus = shotsBody.shots[0].status;
+    shotClipUrl = shotsBody.shots[0].clipUrl;
+    if (shotStatus === "ready") {
+      break;
+    }
+    retries -= 1;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  assert.equal(shotStatus, "ready");
+  assert.match(shotClipUrl, /\.wav$/);
+
+  const jobListResponse = await fetch(`${baseUrl}/api/v1/cinefuse/projects/${projectId}/jobs`, {
+    headers
+  });
+  assert.equal(jobListResponse.status, 200);
+  const jobsBody = await jobListResponse.json();
+  const audioJob = jobsBody.jobs.find((job) => job.kind === "audio" && job.shotId === shotId);
+  assert.ok(audioJob);
+  if (audioJob.status === "done") {
+    assert.equal(audioJob.costToUsCents > 0, true);
+  }
+
+  await new Promise((resolve, reject) => {
+    server.close((error) => {
+      if (error) {
+        reject(error);
+        return;
+      }
+      resolve();
+    });
+  });
+});

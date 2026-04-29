@@ -626,12 +626,26 @@ public struct APIClient {
         return try JSONDecoder().decode(CreateSceneResponse.self, from: data).scene
     }
 
-    public func quoteShot(token: String, projectId: String, prompt: String, modelTier: String) async throws -> ShotQuote {
+    /// - Parameter generationKind: Pass `"sound"` in Audio Creation mode so the gateway quotes the audio path; default is video/clip.
+    public func quoteShot(
+        token: String,
+        projectId: String,
+        prompt: String,
+        modelTier: String,
+        generationKind: String? = nil
+    ) async throws -> ShotQuote {
         var request = URLRequest(url: buildURL(path: "\(Self.cinefusePrefix)/projects/\(projectId)/shots/quote"))
         request.httpMethod = "POST"
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = try JSONEncoder().encode(["prompt": prompt, "modelTier": modelTier])
+        var body: [String: Any] = [
+            "prompt": prompt,
+            "modelTier": modelTier
+        ]
+        if let generationKind {
+            body["generationKind"] = generationKind
+        }
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
         let (data, response) = try await URLSession.shared.data(for: request)
         try validate(response: response, data: data)
         return try JSONDecoder().decode(QuoteShotResponse.self, from: data).quote
@@ -735,28 +749,46 @@ public struct APIClient {
     }
 
     /// - Parameter soundBlueprintIds: When non-nil, sends `{"soundBlueprintIds": ...}` so the gateway merges reference file IDs onto the shot before queuing. Pass `[]` in audio mode to clear blueprint refs. When `nil`, the body is omitted and existing shot `audioRefs` are unchanged.
+    /// - Parameter generationKind: Pass `"sound"` in Audio Creation so the gateway runs the audio/score path instead of clip video generation.
     public func generateShot(
         token: String,
         projectId: String,
         shotId: String,
-        soundBlueprintIds: [String]? = nil
+        soundBlueprintIds: [String]? = nil,
+        generationKind: String? = nil
     ) async throws -> GenerateShotResponse {
         var request = URLRequest(url: buildURL(path: "\(Self.cinefusePrefix)/projects/\(projectId)/shots/\(shotId)/generate"))
         request.httpMethod = "POST"
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        if let ids = soundBlueprintIds {
+        if soundBlueprintIds != nil || generationKind != nil {
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-            request.httpBody = try JSONSerialization.data(withJSONObject: ["soundBlueprintIds": ids])
+            var body: [String: Any] = [:]
+            if let ids = soundBlueprintIds {
+                body["soundBlueprintIds"] = ids
+            }
+            if let generationKind {
+                body["generationKind"] = generationKind
+            }
+            request.httpBody = try JSONSerialization.data(withJSONObject: body)
         }
         let (data, response) = try await performDataRequest(request, context: "generateShot")
         try validate(response: response, data: data)
         return try JSONDecoder().decode(GenerateShotResponse.self, from: data)
     }
 
-    public func retryShot(token: String, projectId: String, shotId: String) async throws -> GenerateShotResponse {
+    public func retryShot(
+        token: String,
+        projectId: String,
+        shotId: String,
+        generationKind: String? = nil
+    ) async throws -> GenerateShotResponse {
         var request = URLRequest(url: buildURL(path: "\(Self.cinefusePrefix)/projects/\(projectId)/shots/\(shotId)/retry"))
         request.httpMethod = "POST"
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        if let generationKind {
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            request.httpBody = try JSONSerialization.data(withJSONObject: ["generationKind": generationKind])
+        }
         let (data, response) = try await URLSession.shared.data(for: request)
         try validate(response: response, data: data)
         return try JSONDecoder().decode(GenerateShotResponse.self, from: data)

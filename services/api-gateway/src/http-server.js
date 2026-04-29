@@ -500,50 +500,101 @@ export function createHttpServer() {
     }, 4000);
 
     try {
-      console.info("[render] invoking clip.generate_clip", {
-        projectId: task.projectId,
-        shotId: task.shotId,
-        jobId: task.jobId,
-        modelTier: currentShot.modelTier
-      });
-      const audioRefs = Array.isArray(currentShot.audioRefs) ? currentShot.audioRefs : [];
-      const generation = await mcpHost.invoke("clip", "generate_clip", {
-        shotId: task.shotId,
-        projectId: task.projectId,
-        prompt: currentShot.prompt,
-        modelTier: currentShot.modelTier,
-        userId: task.userId,
-        audioRefs
-      });
-      clearInterval(progressTimer);
-      console.info("[render] clip.generate_clip completed", {
-        projectId: task.projectId,
-        shotId: task.shotId,
-        jobId: task.jobId,
-        clipUrl: generation.clipUrl ?? null
-      });
+      const generationKind = task.generationKind === "sound" ? "sound" : "video";
+      if (generationKind === "sound") {
+        console.info("[render] invoking audio.generate_score", {
+          projectId: task.projectId,
+          shotId: task.shotId,
+          jobId: task.jobId,
+          modelTier: currentShot.modelTier
+        });
+        const audioGeneration = await mcpHost.invoke("audio", "generate_score", {
+          projectId: task.projectId,
+          prompt: currentShot.prompt,
+          mood: "neutral",
+          modelTier: currentShot.modelTier,
+          durationMs: Math.max(2000, Math.round((currentShot.durationSec ?? 5) * 1000)),
+          shotId: task.shotId,
+          userId: task.userId
+        });
+        clearInterval(progressTimer);
+        const track = audioGeneration.track ?? null;
+        if (audioGeneration.skipped || !track?.sourceUrl) {
+          const detail = audioGeneration.featureError?.detail ?? "audio generation skipped or missing url";
+          throw new Error(`audio_score_failed: ${detail}`);
+        }
+        console.info("[render] audio.generate_score completed", {
+          projectId: task.projectId,
+          shotId: task.shotId,
+          jobId: task.jobId,
+          sourceUrl: track.sourceUrl
+        });
 
-      await saveShot({
-        ...currentShot,
-        status: "ready",
-        clipUrl: generation.clipUrl ?? null,
-        thumbnailUrl: deriveThumbnailUrl(generation.clipUrl ?? null),
-        durationSec: generation.durationSec ?? currentShot.durationSec ?? 5
-      });
-      await saveJob({
-        id: task.jobId,
-        outputPayload: {
-          modelId: generation.modelId ?? null,
-          requestId: generation.requestId ?? null,
-          falEndpoint: generation.falEndpoint ?? null,
-          falStatusUrl: generation.falStatusUrl ?? null,
+        await saveShot({
+          ...currentShot,
+          status: "ready",
+          clipUrl: track.sourceUrl,
+          thumbnailUrl: track.waveformUrl ?? null,
+          durationSec: Math.max(1, Math.round((track.durationMs ?? 4000) / 1000))
+        });
+        await saveJob({
+          id: task.jobId,
+          outputPayload: {
+            modelId: track.kind ?? "score",
+            sourceUrl: track.sourceUrl,
+            waveformUrl: track.waveformUrl ?? null,
+            sparksCost: task.quote.sparksCost,
+            invokeState: "done",
+            apiInvokeFinishedAt: new Date().toISOString()
+          },
+          costToUsCents: Number(track.costToUsCents ?? 0)
+        });
+      } else {
+        console.info("[render] invoking clip.generate_clip", {
+          projectId: task.projectId,
+          shotId: task.shotId,
+          jobId: task.jobId,
+          modelTier: currentShot.modelTier
+        });
+        const audioRefs = Array.isArray(currentShot.audioRefs) ? currentShot.audioRefs : [];
+        const generation = await mcpHost.invoke("clip", "generate_clip", {
+          shotId: task.shotId,
+          projectId: task.projectId,
+          prompt: currentShot.prompt,
+          modelTier: currentShot.modelTier,
+          userId: task.userId,
+          audioRefs
+        });
+        clearInterval(progressTimer);
+        console.info("[render] clip.generate_clip completed", {
+          projectId: task.projectId,
+          shotId: task.shotId,
+          jobId: task.jobId,
+          clipUrl: generation.clipUrl ?? null
+        });
+
+        await saveShot({
+          ...currentShot,
+          status: "ready",
           clipUrl: generation.clipUrl ?? null,
-          sparksCost: task.quote.sparksCost,
-          invokeState: "done",
-          apiInvokeFinishedAt: new Date().toISOString()
-        },
-        costToUsCents: generation.costToUsCents ?? 0
-      });
+          thumbnailUrl: deriveThumbnailUrl(generation.clipUrl ?? null),
+          durationSec: generation.durationSec ?? currentShot.durationSec ?? 5
+        });
+        await saveJob({
+          id: task.jobId,
+          outputPayload: {
+            modelId: generation.modelId ?? null,
+            requestId: generation.requestId ?? null,
+            falEndpoint: generation.falEndpoint ?? null,
+            falStatusUrl: generation.falStatusUrl ?? null,
+            clipUrl: generation.clipUrl ?? null,
+            sparksCost: task.quote.sparksCost,
+            invokeState: "done",
+            apiInvokeFinishedAt: new Date().toISOString()
+          },
+          costToUsCents: generation.costToUsCents ?? 0
+        });
+      }
       await updateRenderJobProgress({
         projectId: task.projectId,
         jobId: task.jobId,
@@ -1613,13 +1664,21 @@ export function createHttpServer() {
         return writeError(response, 400, "prompt required", "PROMPT_REQUIRED");
       }
       const modelTier = payload.modelTier ?? "budget";
-      const quote = await mcpHost.invoke("clip", "quote_clip", {
-        prompt: payload.prompt,
-        modelTier,
-        projectId,
-        characterLocks: payload.characterLocks ?? [],
-        userId: auth.userId
-      });
+      const generationKind = payload.generationKind === "sound" ? "sound" : "video";
+      const quote = generationKind === "sound"
+        ? await mcpHost.invoke("audio", "quote_sound", {
+            prompt: payload.prompt,
+            modelTier,
+            projectId,
+            userId: auth.userId
+          })
+        : await mcpHost.invoke("clip", "quote_clip", {
+            prompt: payload.prompt,
+            modelTier,
+            projectId,
+            characterLocks: payload.characterLocks ?? [],
+            userId: auth.userId
+          });
       return json(response, 200, {
         quote: {
           sparksCost: quote.sparksCost,
@@ -1700,11 +1759,13 @@ export function createHttpServer() {
       if (appliedRetry.error) {
         return writeError(response, 400, appliedRetry.message, appliedRetry.error);
       }
+      const generationKind = payload.generationKind === "sound" ? "sound" : "video";
       const result = await queueShotGeneration({
         projectId,
         shot: appliedRetry.shot,
         userId: auth.userId,
-        idempotencyKey: payload.idempotencyKey
+        idempotencyKey: payload.idempotencyKey,
+        generationKind
       });
       return json(response, 200, {
         shot: result.queuedShot,
@@ -1742,11 +1803,13 @@ export function createHttpServer() {
       if (applied.error) {
         return writeError(response, 400, applied.message, applied.error);
       }
+      const generationKind = payload.generationKind === "sound" ? "sound" : "video";
       const result = await queueShotGeneration({
         projectId,
         shot: applied.shot,
         userId: auth.userId,
-        idempotencyKey: payload.idempotencyKey
+        idempotencyKey: payload.idempotencyKey,
+        generationKind
       });
 
       return json(response, 200, {
@@ -1822,8 +1885,8 @@ export function createHttpServer() {
       if (job.status !== "failed") {
         return writeError(response, 409, "only failed jobs can be retried", "JOB_RETRY_CONFLICT");
       }
-      if (job.kind !== "clip" || !job.shotId) {
-        return writeError(response, 400, "retry supported only for failed clip jobs", "JOB_RETRY_UNSUPPORTED");
+      if ((job.kind !== "clip" && job.kind !== "audio") || !job.shotId) {
+        return writeError(response, 400, "retry supported only for failed clip or audio jobs", "JOB_RETRY_UNSUPPORTED");
       }
       const shot = await getShot(job.shotId, projectId);
       if (!shot) {
@@ -1834,11 +1897,15 @@ export function createHttpServer() {
       if (appliedJobRetry.error) {
         return writeError(response, 400, appliedJobRetry.message, appliedJobRetry.error);
       }
+      const inferredKind = payload.generationKind === "sound"
+        ? "sound"
+        : (job.kind === "audio" ? "sound" : "video");
       const result = await queueShotGeneration({
         projectId,
         shot: appliedJobRetry.shot,
         userId: auth.userId,
-        idempotencyKey: payload.idempotencyKey
+        idempotencyKey: payload.idempotencyKey,
+        generationKind: inferredKind
       });
       return json(response, 200, {
         shot: result.queuedShot,

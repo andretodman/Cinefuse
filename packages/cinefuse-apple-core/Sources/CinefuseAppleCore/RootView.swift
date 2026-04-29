@@ -2015,6 +2015,8 @@ struct ProjectWorkspaceScreen: View {
                 appendDebugEvent("shot final shot=\(shotId) status=ready")
                 Task {
                     await loadSelectedProjectDetails(showLoadingIndicator: false)
+                    try? await Task.sleep(nanoseconds: 400_000_000)
+                    await loadSelectedProjectDetails(showLoadingIndicator: false)
                 }
             } else if event.status == "failed" {
                 appendDebugEvent("shot final shot=\(shotId) status=failed")
@@ -2294,7 +2296,8 @@ struct ProjectWorkspaceScreen: View {
                 token: model.bearerToken,
                 projectId: selectedProjectId,
                 prompt: shotPromptDraft,
-                modelTier: shotModelTierDraft
+                modelTier: shotModelTierDraft,
+                generationKind: isAudioCreationWorkspace ? "sound" : nil
             )
         } catch {
             model.errorMessage = error.localizedDescription
@@ -2321,7 +2324,8 @@ struct ProjectWorkspaceScreen: View {
                 token: model.bearerToken,
                 projectId: selectedProjectId,
                 shotId: shotId,
-                soundBlueprintIds: soundBlueprintIds
+                soundBlueprintIds: soundBlueprintIds,
+                generationKind: isAudioCreationWorkspace ? "sound" : nil
             )
             quotedShotCost = generation.quote
             upsertShotRequestState(shotId) { state in
@@ -2399,7 +2403,8 @@ struct ProjectWorkspaceScreen: View {
             let generation = try await api.retryShot(
                 token: model.bearerToken,
                 projectId: selectedProjectId,
-                shotId: shotId
+                shotId: shotId,
+                generationKind: isAudioCreationWorkspace ? "sound" : nil
             )
             quotedShotCost = generation.quote
             upsertShotRequestState(shotId) { state in
@@ -6103,6 +6108,13 @@ struct ShotsPanel: View {
             }
     }
 
+    /// Audio mode: show indeterminate activity when the backend has not reported a progress percentage yet (determinate bar would look frozen at 0%).
+    private func showsIndeterminateSoundProgress(for shot: Shot) -> Bool {
+        guard panelMode == .audioSounds else { return false }
+        guard inFlightStatuses.contains(shot.status) else { return false }
+        return latestJob(for: shot.id)?.progressPct == nil
+    }
+
     private func parseTimestamp(_ value: String?) -> Date {
         guard let value else { return .distantPast }
         return ISO8601DateFormatter().date(from: value) ?? .distantPast
@@ -6113,7 +6125,8 @@ struct ShotsPanel: View {
         if let requestState = shotRequestStateById[shot.id],
            let error = requestState.errorMessage,
            error.localizedCaseInsensitiveContains("retry is only for failed shots") {
-            return "Render diagnostics: Retry conflict - \(error)"
+            let label = panelMode == .audioSounds ? "Sound diagnostics" : "Render diagnostics"
+            return "\(label): Retry conflict - \(error)"
         }
         let progressText = (job.progressPct ?? renderProgress(for: shot)).map { "\($0)%" } ?? "n/a"
         let statusText = job.status.capitalized
@@ -6125,13 +6138,14 @@ struct ShotsPanel: View {
         let providerNotStarted = (job.requestId == nil || job.requestId == "n/a")
             && (job.falEndpoint == nil || job.falEndpoint == "n/a")
             && (job.falStatusUrl == nil || job.falStatusUrl == "n/a")
+        let diagLabel = panelMode == .audioSounds ? "Sound diagnostics" : "Render diagnostics"
         if job.status == "queued", age > 30, providerNotStarted {
-            return "Render diagnostics: Queued too long (>30s) - worker backlog/offline likely. Check render-worker logs."
+            return "\(diagLabel): Queued too long (>30s) - worker backlog/offline likely. Check render-worker logs."
         }
         if inFlightStatuses.contains(job.status), age > 20 {
-            return "Render diagnostics: \(statusText) \(progressText) - no update in \(Int(age))s"
+            return "\(diagLabel): \(statusText) \(progressText) - no update in \(Int(age))s"
         }
-        return "Render diagnostics: \(statusText) \(progressText) - \(updatedText)"
+        return "\(diagLabel): \(statusText) \(progressText) - \(updatedText)"
     }
 
     private func statusPresentation(for shot: Shot) -> ArtifactStatusPresentation {
@@ -6448,13 +6462,27 @@ struct ShotsPanel: View {
                                         .foregroundStyle(CinefuseTokens.ColorRole.textSecondary)
                                         .tooltip(clipUrl, enabled: showTooltips)
                                 }
-                                if inFlightStatuses.contains(shot.status), let progress = renderProgress(for: shot) {
-                                    HStack(spacing: CinefuseTokens.Spacing.xs) {
-                                        ProgressView(value: Double(progress), total: 100)
-                                            .frame(maxWidth: .infinity)
-                                        Text("Rendering \(progress)%")
-                                            .font(CinefuseTokens.Typography.caption)
-                                            .foregroundStyle(CinefuseTokens.ColorRole.textSecondary)
+                                if inFlightStatuses.contains(shot.status) {
+                                    if showsIndeterminateSoundProgress(for: shot) {
+                                        HStack(spacing: CinefuseTokens.Spacing.xs) {
+                                            ProgressView()
+                                                .frame(maxWidth: .infinity)
+                                            Text("Generating sound…")
+                                                .font(CinefuseTokens.Typography.caption)
+                                                .foregroundStyle(CinefuseTokens.ColorRole.textSecondary)
+                                        }
+                                    } else if let progress = renderProgress(for: shot) {
+                                        HStack(spacing: CinefuseTokens.Spacing.xs) {
+                                            ProgressView(value: Double(progress), total: 100)
+                                                .frame(maxWidth: .infinity)
+                                            Text(
+                                                panelMode == .audioSounds
+                                                    ? "Generating sound \(progress)%"
+                                                    : "Rendering \(progress)%"
+                                            )
+                                                .font(CinefuseTokens.Typography.caption)
+                                                .foregroundStyle(CinefuseTokens.ColorRole.textSecondary)
+                                        }
                                     }
                                 }
                                 if let diagnostics = diagnosticsLine(for: shot) {
