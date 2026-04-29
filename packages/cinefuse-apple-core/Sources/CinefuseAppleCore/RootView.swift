@@ -3120,6 +3120,8 @@ struct ProjectDetailScreen: View {
                             shots: shotsForSoundOrVideoTimeline,
                             jobs: jobs,
                             localThumbnailURLByShotId: localThumbnailURLByShotId,
+                            localFileRecordsByRemoteURL: localFileRecordsByRemoteURL,
+                            shotRequestStateById: shotRequestStateById,
                             selectedShotId: $selectedTimelineShotId,
                             onPreviewShot: { shotId in
                                 selectedTimelineShotId = shotId
@@ -4090,6 +4092,8 @@ struct HorizontalTimelineTrack: View {
     let shots: [Shot]
     let jobs: [Job]
     let localThumbnailURLByShotId: [String: URL]
+    let localFileRecordsByRemoteURL: [String: LocalFileRecord]
+    let shotRequestStateById: [String: RenderRequestState]
     @Binding var selectedShotId: String?
     let onPreviewShot: (String) -> Void
     let onMoveShot: (IndexSet, Int) -> Void
@@ -4134,6 +4138,7 @@ struct HorizontalTimelineTrack: View {
                                 TimelineClipCard(
                                     shot: shot,
                                     localThumbnailURL: localThumbnailURLByShotId[shot.id],
+                                    clipStatusPresentation: clipArtifactStatus(for: shot),
                                     index: index,
                                     progressPct: renderProgress(for: shot),
                                     trimRange: trimByShotId[shot.id],
@@ -4387,11 +4392,35 @@ struct HorizontalTimelineTrack: View {
         }
     }
 
+    private func timelineParseTimestamp(_ value: String?) -> Date {
+        guard let value else { return .distantPast }
+        return ISO8601DateFormatter().date(from: value) ?? .distantPast
+    }
+
+    private func latestJob(for shotId: String) -> Job? {
+        jobs
+            .filter { $0.shotId == shotId }
+            .max { lhs, rhs in
+                timelineParseTimestamp(lhs.updatedAt) < timelineParseTimestamp(rhs.updatedAt)
+            }
+    }
+
+    private func clipArtifactStatus(for shot: Shot) -> ArtifactStatusPresentation {
+        let localRecord = shot.clipUrl.flatMap { localFileRecordsByRemoteURL[$0] }
+        return shotArtifactStatusPresentation(
+            shot: shot,
+            job: latestJob(for: shot.id),
+            localRecord: localRecord,
+            requestState: shotRequestStateById[shot.id]
+        )
+    }
+
 }
 
 struct TimelineClipCard: View {
     let shot: Shot
     let localThumbnailURL: URL?
+    let clipStatusPresentation: ArtifactStatusPresentation
     let index: Int
     let progressPct: Int?
     let trimRange: ClosedRange<Double>?
@@ -4429,22 +4458,10 @@ struct TimelineClipCard: View {
         isSelected ? CinefuseTokens.ColorRole.surfacePrimary : CinefuseTokens.ColorRole.surfaceSecondary
     }
 
-    private var statusPresentation: ArtifactStatusPresentation {
-        let normalized = shot.status.lowercased()
-        switch normalized {
-        case "ready", "done":
-            return ArtifactStatusPresentation(level: .success, summary: "Ready", details: "Timeline clip is ready.")
-        case "failed", "timedout", "timed_out":
-            return ArtifactStatusPresentation(level: .error, summary: "Failed", details: "Timeline clip failed or timed out.")
-        default:
-            return ArtifactStatusPresentation(level: .warning, summary: "In progress", details: "Timeline clip is in progress.")
-        }
-    }
-
     var body: some View {
         VStack(alignment: .leading, spacing: CinefuseTokens.Spacing.xxs) {
             HStack {
-                GenerationStatusDot(status: statusPresentation)
+                GenerationStatusDot(status: clipStatusPresentation)
                 Text("#\(index + 1)")
                     .font(CinefuseTokens.Typography.caption.weight(.semibold))
                 Spacer()
