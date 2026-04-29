@@ -562,7 +562,8 @@ struct ProjectWorkspaceScreen: View {
     @AppStorage("cinefuse.editor.workspacePreset") private var workspacePresetRaw = EditorWorkspacePreset.editing.rawValue
     @AppStorage("cinefuse.editor.creationMode") private var creationModeRaw = CreationMode.video.rawValue
     @State private var soundBlueprints: [SoundBlueprint] = []
-    @State private var soundTypeDraft = "generated"
+    /// Per-shot sound origin: `"generated"` (prompt → pipeline) or `"uploaded"` (user file). Not user-editable; set by create/upload flows.
+    @State private var shotSoundSourceById: [String: String] = [:]
     @State private var soundTagsDraft = ""
     @State private var jobKindDraft = "clip"
     @State private var isLoadingProjectDetails = false
@@ -714,7 +715,7 @@ struct ProjectWorkspaceScreen: View {
             showTooltips: editorSettings.showTooltips,
             creationModeRaw: $creationModeRaw,
             soundBlueprints: $soundBlueprints,
-            soundTypeDraft: $soundTypeDraft,
+            soundSourceLabel: soundSourceLabel(for:),
             soundTagsDraft: $soundTagsDraft,
             onCreateSoundBlueprint: { request in Task { await createSoundBlueprint(request: request) } },
             onExportAudioMix: { Task { await exportLayeredAudioMix() } },
@@ -1431,6 +1432,7 @@ struct ProjectWorkspaceScreen: View {
         shots = []
         audioTracks = []
         jobs = []
+        shotSoundSourceById = [:]
         localFileRecordsByRemoteURL = [:]
         localThumbnailURLByShotId = [:]
         localThumbnailURLByJobId = [:]
@@ -1749,6 +1751,7 @@ struct ProjectWorkspaceScreen: View {
             audioTracks = []
             jobs = []
             soundBlueprints = []
+            shotSoundSourceById = [:]
             return
         }
         if isRefreshingProjectDetails {
@@ -1793,6 +1796,8 @@ struct ProjectWorkspaceScreen: View {
                 audioTracks = latestTimeline.audioTracks
                 jobs = latestJobs.filter { $0.status != "deleted" }
                 soundBlueprints = latestBlueprints
+                let keptShotIds = Set(latestTimeline.shots.map(\.id))
+                shotSoundSourceById = shotSoundSourceById.filter { keptShotIds.contains($0.key) }
             }
             syncRequestStatesFromSnapshot(
                 shots: latestTimeline.shots,
@@ -2053,11 +2058,26 @@ struct ProjectWorkspaceScreen: View {
             shotPromptDraft = ""
             quotedShotCost = nil
             appendDebugEvent("create shot success shot=\(createdShot.id)")
+            if CreationMode(rawValue: creationModeRaw) == .audio {
+                shotSoundSourceById[createdShot.id] = "generated"
+            }
             await loadSelectedProjectDetails(showLoadingIndicator: false)
         } catch {
             appendDebugEvent("create shot failed reason=\(error.localizedDescription)")
             model.errorMessage = error.localizedDescription
         }
+    }
+
+    /// Label for Sounds panel: derived from create/upload actions and shot status, not from a user picker.
+    private func soundSourceLabel(for shot: Shot) -> String {
+        if let raw = shotSoundSourceById[shot.id] {
+            return raw == "uploaded" ? "Uploaded" : "Generated"
+        }
+        let s = shot.status.lowercased()
+        if ["queued", "generating", "running", "processing", "ready", "failed"].contains(s) {
+            return "Generated"
+        }
+        return "Generated"
     }
 
     private func generateStoryboard() async {
@@ -2859,7 +2879,7 @@ struct ProjectDetailScreen: View {
     let showTooltips: Bool
     @Binding var creationModeRaw: String
     @Binding var soundBlueprints: [SoundBlueprint]
-    @Binding var soundTypeDraft: String
+    let soundSourceLabel: (Shot) -> String
     @Binding var soundTagsDraft: String
     let onCreateSoundBlueprint: (CreateSoundBlueprintRequest) -> Void
     let onExportAudioMix: () -> Void
@@ -3388,7 +3408,7 @@ struct ProjectDetailScreen: View {
                     showTooltips: showTooltips,
                     isCollapsed: $collapseShotsPanel,
                     panelMode: isAudioCreationMode ? .audioSounds : .videoClips,
-                    soundTypeDraft: $soundTypeDraft,
+                    soundSourceLabel: soundSourceLabel,
                     soundTagsDraft: $soundTagsDraft
                 )
                 if isAudioCreationMode {
@@ -5319,11 +5339,10 @@ struct ShotsPanel: View {
     let showTooltips: Bool
     @Binding var isCollapsed: Bool
     var panelMode: ShotsPanelMode = .videoClips
-    @Binding var soundTypeDraft: String
+    let soundSourceLabel: (Shot) -> String
     @Binding var soundTagsDraft: String
     @State private var pendingDeleteShotId: String?
     @State private var selectedDiagnostics: ArtifactStatusPresentation?
-    @State private var soundKindByShotId: [String: String] = [:]
     @State private var soundTagsByShotId: [String: String] = [:]
     @Environment(\.openURL) private var openURL
 
@@ -5502,16 +5521,8 @@ struct ShotsPanel: View {
                 }
 
                 if panelMode == .audioSounds {
-                    HStack(spacing: CinefuseTokens.Spacing.s) {
-                        Picker("Default type", selection: $soundTypeDraft) {
-                            Text("Generated").tag("generated")
-                            Text("Uploaded").tag("uploaded")
-                        }
-                        .pickerStyle(.menu)
-                        .frame(minWidth: 140)
-                        TextField("Tags (comma-separated)", text: $soundTagsDraft)
-                            .textFieldStyle(.roundedBorder)
-                    }
+                    TextField("Tags (comma-separated)", text: $soundTagsDraft)
+                        .textFieldStyle(.roundedBorder)
                 }
 
                 if let quotedShotCost {
@@ -5561,18 +5572,13 @@ struct ShotsPanel: View {
                                     .foregroundStyle(CinefuseTokens.ColorRole.textSecondary)
                                 if panelMode == .audioSounds {
                                     HStack(spacing: CinefuseTokens.Spacing.s) {
-                                        Picker(
-                                            "Type",
-                                            selection: Binding(
-                                                get: { soundKindByShotId[shot.id] ?? soundTypeDraft },
-                                                set: { soundKindByShotId[shot.id] = $0 }
-                                            )
-                                        ) {
-                                            Text("Generated").tag("generated")
-                                            Text("Uploaded").tag("uploaded")
-                                        }
-                                        .pickerStyle(.menu)
-                                        .frame(minWidth: 120)
+                                        Text("Source")
+                                            .font(CinefuseTokens.Typography.caption)
+                                            .foregroundStyle(CinefuseTokens.ColorRole.textSecondary)
+                                        Text(soundSourceLabel(shot))
+                                            .font(CinefuseTokens.Typography.label.weight(.semibold))
+                                            .foregroundStyle(CinefuseTokens.ColorRole.textPrimary)
+                                        Spacer(minLength: CinefuseTokens.Spacing.s)
                                         TextField(
                                             "Tags",
                                             text: Binding(
@@ -5680,7 +5686,6 @@ struct ShotsPanel: View {
         .animation(CinefuseTokens.Motion.standard, value: shots.map(\.id))
         .onChange(of: shots.map(\.id)) { _, ids in
             let allowed = Set(ids)
-            soundKindByShotId = soundKindByShotId.filter { allowed.contains($0.key) }
             soundTagsByShotId = soundTagsByShotId.filter { allowed.contains($0.key) }
         }
         .confirmationDialog("Delete this shot?", isPresented: Binding(
