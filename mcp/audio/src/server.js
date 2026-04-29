@@ -234,6 +234,12 @@ async function elevenLabsComposeMusic({ prompt, musicLengthMs, forceInstrumental
         response.headers.get("xi-request-id") ??
         null;
       const buffer = Buffer.from(await response.arrayBuffer());
+      structuredLog("info", "elevenlabs_music_compose_ok", {
+        bytes: buffer.length,
+        musicLengthMs: length,
+        outputFormat,
+        hasRequestId: Boolean(providerRequestId)
+      });
       return { buffer, providerRequestId };
     }
     const errBody = await response.text();
@@ -662,6 +668,11 @@ async function runGenerateScore(tool, kind, input) {
         outputCreated: false
       });
     }
+    structuredLog("info", "elevenlabs_music_upload_ok", {
+      projectId: typeof input.projectId === "string" ? input.projectId : "",
+      shotId: typeof input.shotId === "string" ? input.shotId : "",
+      hasSourceUrl: typeof uploadedUrl === "string" && uploadedUrl.length > 0
+    });
     const track = normalizeTrack(
       {
         sourceUrl: uploadedUrl,

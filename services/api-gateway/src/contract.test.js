@@ -1271,14 +1271,14 @@ test(
   "api contract: live ElevenLabs sound generation (gated; costs API credits)",
   {
     skip:
-      process.env.CINEFUSE_LIVE_ELEVENLABS_TEST !== "1" ||
-      !process.env.ELEVENLABS_API_KEY ||
-      !process.env.CINEFUSE_AUDIO_UPLOAD_URL
+      process.env.CINEFUSE_LIVE_ELEVENLABS_TEST !== "1" || !process.env.ELEVENLABS_API_KEY
   },
   async () => {
     const prev = {
       NODE_ENV: process.env.NODE_ENV,
-      CINEFUSE_ALLOW_STUB_MEDIA: process.env.CINEFUSE_ALLOW_STUB_MEDIA
+      CINEFUSE_ALLOW_STUB_MEDIA: process.env.CINEFUSE_ALLOW_STUB_MEDIA,
+      CINEFUSE_GATEWAY_PUBLIC_ORIGIN: process.env.CINEFUSE_GATEWAY_PUBLIC_ORIGIN,
+      CINEFUSE_API_BASE_URL: process.env.CINEFUSE_API_BASE_URL
     };
     process.env.NODE_ENV = "development";
     delete process.env.CINEFUSE_ALLOW_STUB_MEDIA;
@@ -1290,6 +1290,10 @@ test(
     const address = server.address();
     const port = typeof address === "object" && address ? address.port : 0;
     const baseUrl = `http://127.0.0.1:${port}`;
+    // Internal sound ingest needs a reachable gateway base; point env at this test server.
+    delete process.env.CINEFUSE_GATEWAY_PUBLIC_ORIGIN;
+    delete process.env.CINEFUSE_API_BASE_URL;
+    process.env.CINEFUSE_GATEWAY_PUBLIC_ORIGIN = baseUrl;
 
     try {
       const createResponse = await fetch(`${baseUrl}/api/v1/cinefuse/projects`, {
@@ -1356,6 +1360,16 @@ test(
         delete process.env.CINEFUSE_ALLOW_STUB_MEDIA;
       } else {
         process.env.CINEFUSE_ALLOW_STUB_MEDIA = prev.CINEFUSE_ALLOW_STUB_MEDIA;
+      }
+      if (prev.CINEFUSE_GATEWAY_PUBLIC_ORIGIN === undefined) {
+        delete process.env.CINEFUSE_GATEWAY_PUBLIC_ORIGIN;
+      } else {
+        process.env.CINEFUSE_GATEWAY_PUBLIC_ORIGIN = prev.CINEFUSE_GATEWAY_PUBLIC_ORIGIN;
+      }
+      if (prev.CINEFUSE_API_BASE_URL === undefined) {
+        delete process.env.CINEFUSE_API_BASE_URL;
+      } else {
+        process.env.CINEFUSE_API_BASE_URL = prev.CINEFUSE_API_BASE_URL;
       }
       await new Promise((resolve, reject) => {
         server.close((error) => {

@@ -2440,6 +2440,7 @@ struct ProjectWorkspaceScreen: View {
             }
             appendDebugEvent("generate shot queued shot=\(shotId) job=\(generation.job.id)")
             await loadSelectedProjectDetails(showLoadingIndicator: false)
+            await refreshGenerationStatusSnapshot()
         } catch {
             let nsError = error as NSError
             let isAlreadyGenerating = nsError.domain == "CinefuseAPI"
@@ -2518,6 +2519,7 @@ struct ProjectWorkspaceScreen: View {
                 state.source = "api-response"
             }
             await loadSelectedProjectDetails(showLoadingIndicator: false)
+            await refreshGenerationStatusSnapshot()
         } catch {
             let nsError = error as NSError
             let errorCode = nsError.userInfo[CinefuseAPIErrorUserInfoKey.errorCode] as? String
@@ -2648,6 +2650,7 @@ struct ProjectWorkspaceScreen: View {
             )
             quotedShotCost = generation.quote
             await loadSelectedProjectDetails(showLoadingIndicator: false)
+            await refreshGenerationStatusSnapshot()
         } catch {
             model.errorMessage = error.localizedDescription
         }
