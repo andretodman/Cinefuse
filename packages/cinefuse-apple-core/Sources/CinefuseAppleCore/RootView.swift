@@ -4259,7 +4259,7 @@ struct HorizontalTimelineTrack: View {
                                     localThumbnailURL: localThumbnailURLByShotId[shot.id],
                                     clipStatusPresentation: clipArtifactStatus(for: shot),
                                     index: index,
-                                    progressPct: renderProgress(for: shot),
+                                    backendProgressPercent: latestBackendProgressPercent(for: shot.id),
                                     trimRange: trimByShotId[shot.id],
                                     isSelected: selectedShotId == shot.id,
                                     canMoveLeft: index > 0,
@@ -4492,23 +4492,16 @@ struct HorizontalTimelineTrack: View {
         trimByShotId[shotId] = current.lowerBound...newUpper
     }
 
-    private func renderProgress(for shot: Shot) -> Int? {
-        let candidates = jobs.filter { $0.shotId == shot.id }.compactMap(\.progressPct)
-        if let latest = candidates.last {
-            return max(0, min(100, latest))
-        }
-        switch shot.status {
-        case "queued":
-            return 5
-        case "generating", "running", "processing":
-            return 35
-        case "ready":
-            return 100
-        case "failed":
-            return 0
-        default:
+    /// Latest job-attached percent from the gateway (nil until the worker reports ticks).
+    private func latestBackendProgressPercent(for shotId: String) -> Int? {
+        guard let job = jobs
+            .filter({ $0.shotId == shotId })
+            .max(by: { timelineParseTimestamp($0.updatedAt) < timelineParseTimestamp($1.updatedAt) }),
+            let pct = job.progressPct
+        else {
             return nil
         }
+        return max(0, min(100, pct))
     }
 
     private func timelineParseTimestamp(_ value: String?) -> Date {
@@ -4541,7 +4534,8 @@ struct TimelineClipCard: View {
     let localThumbnailURL: URL?
     let clipStatusPresentation: ArtifactStatusPresentation
     let index: Int
-    let progressPct: Int?
+    /// When non-nil, shows a determinate bar; otherwise an animated indeterminate strip while in-flight.
+    let backendProgressPercent: Int?
     let trimRange: ClosedRange<Double>?
     let isSelected: Bool
     let canMoveLeft: Bool
@@ -4603,13 +4597,25 @@ struct TimelineClipCard: View {
                 Text("\(shot.modelTier.capitalized) · \(shot.durationSec ?? 0)s")
                     .font(CinefuseTokens.Typography.caption)
                     .foregroundStyle(CinefuseTokens.ColorRole.textSecondary)
-                if ["queued", "generating", "running", "processing"].contains(shot.status), let progressPct {
-                    HStack(spacing: CinefuseTokens.Spacing.xxs) {
-                        ProgressView(value: Double(progressPct), total: 100)
-                            .controlSize(.mini)
-                        Text("\(progressPct)%")
-                            .font(CinefuseTokens.Typography.nano)
-                            .foregroundStyle(CinefuseTokens.ColorRole.textSecondary)
+                if ["queued", "generating", "running", "processing"].contains(shot.status) {
+                    if let p = backendProgressPercent {
+                        HStack(spacing: CinefuseTokens.Spacing.xxs) {
+                            ProgressView(value: Double(p), total: 100)
+                                .controlSize(.mini)
+                                .tint(CinefuseTokens.ColorRole.accent)
+                                .animation(.easeInOut(duration: 0.28), value: p)
+                            Text("\(p)%")
+                                .font(CinefuseTokens.Typography.nano)
+                                .foregroundStyle(CinefuseTokens.ColorRole.textSecondary)
+                        }
+                    } else {
+                        HStack(spacing: CinefuseTokens.Spacing.xxs) {
+                            AnimatedIndeterminateProgressBar(height: 4)
+                                .frame(maxWidth: .infinity)
+                            Text(clipVisualStyle == .audioWaveform ? "Generating…" : "Rendering…")
+                                .font(CinefuseTokens.Typography.nano)
+                                .foregroundStyle(CinefuseTokens.ColorRole.textSecondary)
+                        }
                     }
                 }
                 if let trimRange {
@@ -6270,13 +6276,6 @@ struct ShotsPanel: View {
             }
     }
 
-    /// Audio mode: show indeterminate activity when the backend has not reported a progress percentage yet (determinate bar would look frozen at 0%).
-    private func showsIndeterminateSoundProgress(for shot: Shot) -> Bool {
-        guard panelMode == .audioSounds else { return false }
-        guard inFlightStatuses.contains(shot.status) else { return false }
-        return latestJob(for: shot.id)?.progressPct == nil
-    }
-
     private func parseTimestamp(_ value: String?) -> Date {
         guard let value else { return .distantPast }
         return ISO8601DateFormatter().date(from: value) ?? .distantPast
@@ -6648,29 +6647,19 @@ struct ShotsPanel: View {
                                         .tooltip(clipUrl, enabled: showTooltips)
                                 }
                                 if inFlightStatuses.contains(shot.status) {
-                                    if showsIndeterminateSoundProgress(for: shot) {
-                                        HStack(spacing: CinefuseTokens.Spacing.xs) {
-                                            ProgressView()
-                                                .controlSize(.mini)
-                                                .frame(maxWidth: .infinity)
-                                            Text("Generating sound…")
-                                                .font(CinefuseTokens.Typography.nano)
-                                                .foregroundStyle(CinefuseTokens.ColorRole.textSecondary)
+                                    GenerationActivityProgressRow(
+                                        determinatePercent: latestJob(for: shot.id)?
+                                            .progressPct
+                                            .map { max(0, min(100, $0)) },
+                                        waitingLabel: panelMode == .audioSounds
+                                            ? "Generating sound…"
+                                            : "Rendering…",
+                                        determinateLabel: { p in
+                                            panelMode == .audioSounds
+                                                ? "Generating sound \(p)%"
+                                                : "Rendering \(p)%"
                                         }
-                                    } else if let progress = renderProgress(for: shot) {
-                                        HStack(spacing: CinefuseTokens.Spacing.xs) {
-                                            ProgressView(value: Double(progress), total: 100)
-                                                .controlSize(.mini)
-                                                .frame(maxWidth: .infinity)
-                                            Text(
-                                                panelMode == .audioSounds
-                                                    ? "Generating sound \(progress)%"
-                                                    : "Rendering \(progress)%"
-                                            )
-                                                .font(CinefuseTokens.Typography.nano)
-                                                .foregroundStyle(CinefuseTokens.ColorRole.textSecondary)
-                                        }
-                                    }
+                                    )
                                 }
                                 if let diagnostics = diagnosticsLine(for: shot) {
                                     let diagnosticsText = diagnostics
@@ -7006,16 +6995,14 @@ struct JobsPanel: View {
                                                     }
                                                 }
                                         }
-                                        if let progress = job.progressPct,
-                                           !terminalJobStatusesForProgress.contains(job.status.lowercased()) {
-                                            HStack(spacing: CinefuseTokens.Spacing.xs) {
-                                                ProgressView(value: Double(progress), total: 100)
-                                                    .controlSize(.mini)
-                                                    .frame(maxWidth: .infinity)
-                                                Text("\(progress)%")
-                                                    .font(CinefuseTokens.Typography.nano)
-                                                    .foregroundStyle(CinefuseTokens.ColorRole.textSecondary)
-                                            }
+                                        if !terminalJobStatusesForProgress.contains(job.status.lowercased()) {
+                                            GenerationActivityProgressRow(
+                                                determinatePercent: job.progressPct.map {
+                                                    max(0, min(100, $0))
+                                                },
+                                                waitingLabel: "Working…",
+                                                determinateLabel: { "\($0)%" }
+                                            )
                                         }
                                     }
                                     .cinefuseReadableOnMediaBackground()

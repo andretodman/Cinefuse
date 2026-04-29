@@ -41,6 +41,10 @@
         },
         {
           "kind" : "file",
+          "name" : "/Users/atodman/Documents/GitHub/Cinefuse/packages/cinefuse-apple-core/Sources/CinefuseAppleCore/AnimatedWaitingProgressBar.swift"
+        },
+        {
+          "kind" : "file",
           "name" : "/Users/atodman/Documents/GitHub/Cinefuse/packages/cinefuse-apple-core/Sources/CinefuseAppleCore/AppComponents.swift"
         },
         {
@@ -93,6 +97,7 @@
       "moduleOutputPath" : "/Users/atodman/Documents/GitHub/Cinefuse/packages/cinefuse-apple-core/.build/arm64-apple-macosx/debug/Modules/CinefuseAppleCore.swiftmodule",
       "objects" : [
         "/Users/atodman/Documents/GitHub/Cinefuse/packages/cinefuse-apple-core/.build/arm64-apple-macosx/debug/CinefuseAppleCore.build/APIClient.swift.o",
+        "/Users/atodman/Documents/GitHub/Cinefuse/packages/cinefuse-apple-core/.build/arm64-apple-macosx/debug/CinefuseAppleCore.build/AnimatedWaitingProgressBar.swift.o",
         "/Users/atodman/Documents/GitHub/Cinefuse/packages/cinefuse-apple-core/.build/arm64-apple-macosx/debug/CinefuseAppleCore.build/AppComponents.swift.o",
         "/Users/atodman/Documents/GitHub/Cinefuse/packages/cinefuse-apple-core/.build/arm64-apple-macosx/debug/CinefuseAppleCore.build/DesignTokens.swift.o",
         "/Users/atodman/Documents/GitHub/Cinefuse/packages/cinefuse-apple-core/.build/arm64-apple-macosx/debug/CinefuseAppleCore.build/DiagnosticsLogger.swift.o",
@@ -160,6 +165,10 @@
         },
         {
           "kind" : "file",
+          "name" : "/Users/atodman/Documents/GitHub/Cinefuse/packages/cinefuse-apple-core/.build/arm64-apple-macosx/debug/CinefuseAppleCore.build/AnimatedWaitingProgressBar.swift.o"
+        },
+        {
+          "kind" : "file",
           "name" : "/Users/atodman/Documents/GitHub/Cinefuse/packages/cinefuse-apple-core/.build/arm64-apple-macosx/debug/CinefuseAppleCore.build/AppComponents.swift.o"
         },
         {
@@ -202,6 +211,7 @@
       "prepareForIndexing" : false,
       "sources" : [
         "/Users/atodman/Documents/GitHub/Cinefuse/packages/cinefuse-apple-core/Sources/CinefuseAppleCore/APIClient.swift",
+        "/Users/atodman/Documents/GitHub/Cinefuse/packages/cinefuse-apple-core/Sources/CinefuseAppleCore/AnimatedWaitingProgressBar.swift",
         "/Users/atodman/Documents/GitHub/Cinefuse/packages/cinefuse-apple-core/Sources/CinefuseAppleCore/AppComponents.swift",
         "/Users/atodman/Documents/GitHub/Cinefuse/packages/cinefuse-apple-core/Sources/CinefuseAppleCore/DesignTokens.swift",
         "/Users/atodman/Documents/GitHub/Cinefuse/packages/cinefuse-apple-core/Sources/CinefuseAppleCore/DiagnosticsLogger.swift",
@@ -228,6 +238,7 @@
       "cinefuse_apple_core",
       "-c",
       "/Users/atodman/Documents/GitHub/Cinefuse/packages/cinefuse-apple-core/Sources/CinefuseAppleCore/APIClient.swift",
+      "/Users/atodman/Documents/GitHub/Cinefuse/packages/cinefuse-apple-core/Sources/CinefuseAppleCore/AnimatedWaitingProgressBar.swift",
       "/Users/atodman/Documents/GitHub/Cinefuse/packages/cinefuse-apple-core/Sources/CinefuseAppleCore/AppComponents.swift",
       "/Users/atodman/Documents/GitHub/Cinefuse/packages/cinefuse-apple-core/Sources/CinefuseAppleCore/DesignTokens.swift",
       "/Users/atodman/Documents/GitHub/Cinefuse/packages/cinefuse-apple-core/Sources/CinefuseAppleCore/DiagnosticsLogger.swift",
@@ -317,6 +328,10 @@
         {
           "kind" : "file",
           "name" : "/Users/atodman/Documents/GitHub/Cinefuse/packages/cinefuse-apple-core/Sources/CinefuseAppleCore/APIClient.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/atodman/Documents/GitHub/Cinefuse/packages/cinefuse-apple-core/Sources/CinefuseAppleCore/AnimatedWaitingProgressBar.swift"
         },
         {
           "kind" : "file",
