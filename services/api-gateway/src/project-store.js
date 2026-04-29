@@ -16,25 +16,58 @@ const uploadedProjectFileBuffers = new Map();
 
 let pool;
 
-export function registerUploadedProjectFile({ projectId, filename, byteSize, buffer }) {
+export async function registerUploadedProjectFile({ projectId, filename, byteSize, buffer }) {
   const id = randomUUID();
   const safeName = typeof filename === "string" && filename.length > 0 ? filename : "upload.bin";
+  const buf = buffer != null && Buffer.isBuffer(buffer) ? buffer : Buffer.alloc(0);
+  const size = Number(byteSize) || buf.length;
+  const db = getPool();
+  if (db) {
+    await db.query(
+      `INSERT INTO cinefuse_project_files (id, project_id, filename, byte_size, content)
+       VALUES ($1, $2, $3, $4, $5)`,
+      [id, projectId, safeName, size, buf]
+    );
+    return { id, filename: safeName, byteSize: size };
+  }
   uploadedProjectFiles.set(id, {
     projectId,
     filename: safeName,
-    byteSize: Number(byteSize) || 0,
+    byteSize: size,
     createdAt: new Date().toISOString()
   });
-  if (buffer != null && Buffer.isBuffer(buffer)) {
-    uploadedProjectFileBuffers.set(id, buffer);
+  if (buf.length > 0) {
+    uploadedProjectFileBuffers.set(id, buf);
   }
-  return { id, filename: safeName, byteSize: Number(byteSize) || 0 };
+  return { id, filename: safeName, byteSize: size };
 }
 
 /**
- * @returns {{ meta: object, buffer: Buffer } | null}
+ * @returns {Promise<{ meta: object, buffer: Buffer } | null>}
  */
-export function getUploadedProjectFileForDownload(projectId, fileId) {
+export async function getUploadedProjectFileForDownload(projectId, fileId) {
+  const db = getPool();
+  if (db) {
+    const { rows } = await db.query(
+      `SELECT filename, byte_size, content, created_at
+       FROM cinefuse_project_files
+       WHERE id = $1 AND project_id = $2
+       LIMIT 1`,
+      [fileId, projectId]
+    );
+    if (rows.length === 0) {
+      return null;
+    }
+    const row = rows[0];
+    const buffer = Buffer.isBuffer(row.content) ? row.content : Buffer.from(row.content ?? []);
+    const meta = {
+      projectId,
+      filename: row.filename,
+      byteSize: row.byte_size,
+      createdAt: row.created_at ? new Date(row.created_at).toISOString() : null
+    };
+    return { meta, buffer };
+  }
   const meta = uploadedProjectFiles.get(fileId);
   if (!meta || meta.projectId !== projectId) {
     return null;
@@ -46,17 +79,28 @@ export function getUploadedProjectFileForDownload(projectId, fileId) {
   return { meta, buffer };
 }
 
-export function validateUploadedFileIdsForProject(projectId, fileIds) {
+export async function validateUploadedFileIdsForProject(projectId, fileIds) {
   if (!Array.isArray(fileIds)) {
     return;
   }
+  const db = getPool();
   for (const fid of fileIds) {
     if (typeof fid !== "string" || fid.length === 0) {
       throw new Error("invalid file id");
     }
-    const meta = uploadedProjectFiles.get(fid);
-    if (!meta || meta.projectId !== projectId) {
-      throw new Error(`unknown file id ${fid}`);
+    if (db) {
+      const { rows } = await db.query(
+        `SELECT 1 FROM cinefuse_project_files WHERE id = $1 AND project_id = $2 LIMIT 1`,
+        [fid, projectId]
+      );
+      if (rows.length === 0) {
+        throw new Error(`unknown file id ${fid}`);
+      }
+    } else {
+      const meta = uploadedProjectFiles.get(fid);
+      if (!meta || meta.projectId !== projectId) {
+        throw new Error(`unknown file id ${fid}`);
+      }
     }
   }
 }

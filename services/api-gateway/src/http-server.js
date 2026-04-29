@@ -1039,7 +1039,7 @@ export function createHttpServer() {
           chunks.push(chunk);
         }
         const buffer = Buffer.concat(chunks);
-        const file = registerUploadedProjectFile({
+        const file = await registerUploadedProjectFile({
           projectId,
           filename,
           byteSize: buffer.length,
@@ -1132,7 +1132,7 @@ export function createHttpServer() {
         chunks.push(chunk);
       }
       const buffer = Buffer.concat(chunks);
-      const file = registerUploadedProjectFile({
+      const file = await registerUploadedProjectFile({
         projectId,
         filename,
         byteSize: buffer.length,
@@ -1153,7 +1153,7 @@ export function createHttpServer() {
       if (!project) {
         return writeError(response, 404, "project not found", "PROJECT_NOT_FOUND");
       }
-      const payload = getUploadedProjectFileForDownload(projectId, fileId);
+      const payload = await getUploadedProjectFileForDownload(projectId, fileId);
       if (!payload) {
         return writeError(response, 404, "file not found", "FILE_NOT_FOUND");
       }
@@ -1497,7 +1497,7 @@ export function createHttpServer() {
         ? rawTrainRefs.filter((id) => typeof id === "string" && id.length > 0)
         : [];
       try {
-        validateUploadedFileIdsForProject(projectId, referenceFileIds);
+        await validateUploadedFileIdsForProject(projectId, referenceFileIds);
       } catch (error) {
         return writeError(response, 400, error?.message ?? "invalid file reference", "INVALID_FILE_REFERENCE");
       }
@@ -1644,7 +1644,7 @@ export function createHttpServer() {
         ? rawBlueprintRefs.filter((id) => typeof id === "string" && id.length > 0)
         : [];
       try {
-        validateUploadedFileIdsForProject(projectId, referenceFileIds);
+        await validateUploadedFileIdsForProject(projectId, referenceFileIds);
       } catch (error) {
         return writeError(response, 400, error?.message ?? "invalid file reference", "INVALID_FILE_REFERENCE");
       }

@@ -636,6 +636,8 @@ test("api contract: timeline reorder and audio track persistence", async () => {
 });
 
 test("api contract: audio generation and final export flow", async () => {
+  const prevStubMode = process.env.CINEFUSE_ALLOW_STUB_MEDIA;
+  process.env.CINEFUSE_ALLOW_STUB_MEDIA = "true";
   const headers = authHeaders("usr_contract_export");
   await clearProjects();
   const server = createHttpServer();
@@ -805,6 +807,11 @@ test("api contract: audio generation and final export flow", async () => {
       resolve();
     });
   });
+  if (typeof prevStubMode === "string") {
+    process.env.CINEFUSE_ALLOW_STUB_MEDIA = prevStubMode;
+  } else {
+    delete process.env.CINEFUSE_ALLOW_STUB_MEDIA;
+  }
 });
 
 test("api contract: clip generation debit is idempotent with caller key", async () => {
