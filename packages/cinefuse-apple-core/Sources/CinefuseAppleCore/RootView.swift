@@ -5709,8 +5709,6 @@ struct ShotsPanel: View {
                     .font(CinefuseTokens.Typography.micro)
                     .foregroundStyle(CinefuseTokens.ColorRole.textSecondary)
                     .fixedSize(horizontal: false, vertical: true)
-            }
-            if soundBlueprints.isEmpty {
                 Button {
                     blueprintFileImportShotId = shot.id
                 } label: {
@@ -5753,7 +5751,6 @@ struct ShotsPanel: View {
                             .fill(CinefuseTokens.ColorRole.surfacePrimary.opacity(0.95))
                     )
                 }
-                .menuStyle(.button)
                 Button {
                     blueprintFileImportShotId = shot.id
                 } label: {
@@ -6032,6 +6029,24 @@ struct ShotsPanel: View {
         }
         .padding(CinefuseTokens.Spacing.s)
         .animation(CinefuseTokens.Motion.standard, value: shots.map(\.id))
+        .fileImporter(
+            isPresented: Binding(
+                get: { panelMode == .audioSounds && blueprintFileImportShotId != nil },
+                set: { if !$0 { blueprintFileImportShotId = nil } }
+            ),
+            allowedContentTypes: [.audio, .movie, .mpeg4Movie, UTType(filenameExtension: "wav") ?? .audio],
+            allowsMultipleSelection: true
+        ) { result in
+            guard let shotId = blueprintFileImportShotId else { return }
+            blueprintFileImportShotId = nil
+            switch result {
+            case .success(let urls):
+                guard !urls.isEmpty else { return }
+                onImportSoundBlueprintRefs(shotId, urls)
+            case .failure:
+                break
+            }
+        }
         .onChange(of: shots.map(\.id)) { _, ids in
             let allowed = Set(ids)
             soundTagsByShotId = soundTagsByShotId.filter { allowed.contains($0.key) }
