@@ -80,6 +80,48 @@ function renderLog(level, event, fields) {
   }
 }
 
+/** No trailing slash. Env only (used when building outbound upload URLs without an HTTP request). */
+function gatewayPublicOriginFromEnv() {
+  return (
+    (process.env.CINEFUSE_GATEWAY_PUBLIC_ORIGIN ?? process.env.CINEFUSE_API_BASE_URL ?? "")
+      .trim()
+      .replace(/\/+$/, "")
+  );
+}
+
+/**
+ * Public base URL for file URLs in JSON responses. Uses env first, then `Host` / `X-Forwarded-*`
+ * so internal ingest works when `CINEFUSE_GATEWAY_PUBLIC_ORIGIN` is unset behind a reverse proxy.
+ */
+function resolvedGatewayPublicBase(request) {
+  const fromEnv = gatewayPublicOriginFromEnv();
+  if (fromEnv.length > 0) {
+    return fromEnv;
+  }
+  if (!request?.headers) {
+    return "";
+  }
+  const host = String(request.headers["x-forwarded-host"] ?? request.headers.host ?? "")
+    .split(",")[0]
+    .trim();
+  if (!host) {
+    return "";
+  }
+  const protoRaw = String(request.headers["x-forwarded-proto"] ?? "")
+    .split(",")[0]
+    .trim()
+    .toLowerCase();
+  const scheme = protoRaw === "https" || protoRaw === "http" ? protoRaw : "https";
+  return `${scheme}://${host}`.replace(/\/+$/, "");
+}
+
+function projectFilePublicUrl(base, projectId, fileId) {
+  if (!base || !projectId || !fileId) {
+    return null;
+  }
+  return `${base}/api/v1/cinefuse/projects/${encodeURIComponent(projectId)}/files/${encodeURIComponent(fileId)}`;
+}
+
 function deriveThumbnailUrl(clipUrl) {
   if (typeof clipUrl !== "string" || clipUrl.length === 0) {
     return null;
@@ -515,15 +557,9 @@ export function createHttpServer() {
    * Persists ElevenLabs MP3 bytes to project files. Custom `CINEFUSE_AUDIO_UPLOAD_URL` keeps prior behavior.
    * Otherwise uses worker-authenticated internal ingest (avoids the render task HTTP-calling itself with user Bearer).
    */
-  function gatewayPublicOrigin() {
-    const raw =
-      (process.env.CINEFUSE_GATEWAY_PUBLIC_ORIGIN ?? process.env.CINEFUSE_API_BASE_URL ?? "").trim();
-    return raw.replace(/\/$/, "");
-  }
-
   function resolveSoundGenerationUploadContext(projectId, userId) {
     const explicitUpload = (process.env.CINEFUSE_AUDIO_UPLOAD_URL ?? "").trim();
-    const origin = gatewayPublicOrigin();
+    const origin = gatewayPublicOriginFromEnv();
     const defaultGatewayUpload =
       origin.length > 0
         ? `${origin}/api/v1/cinefuse/projects/${encodeURIComponent(projectId)}/files`
@@ -560,7 +596,7 @@ export function createHttpServer() {
   /** Which sound upload branch is active (no secrets / URLs). */
   function soundUploadLogMode(projectId, userId) {
     const explicitUpload = (process.env.CINEFUSE_AUDIO_UPLOAD_URL ?? "").trim();
-    const origin = gatewayPublicOrigin();
+    const origin = gatewayPublicOriginFromEnv();
     const defaultGatewayUpload =
       origin.length > 0
         ? `${origin}/api/v1/cinefuse/projects/${encodeURIComponent(projectId)}/files`
@@ -1036,14 +1072,21 @@ export function createHttpServer() {
           byteSize: buffer.length,
           buffer
         });
-        const publicOrigin = (process.env.CINEFUSE_GATEWAY_PUBLIC_ORIGIN ?? "").replace(/\/$/, "");
+        const publicBase = resolvedGatewayPublicBase(request);
+        const fileUrl = projectFilePublicUrl(publicBase, projectId, file.id);
         const filePayload =
-          publicOrigin.length > 0
-            ? {
-                ...file,
-                url: `${publicOrigin}/api/v1/cinefuse/projects/${encodeURIComponent(projectId)}/files/${encodeURIComponent(file.id)}`
-              }
-            : file;
+          typeof fileUrl === "string" && fileUrl.length > 0 ? { ...file, url: fileUrl } : file;
+        if (!fileUrl) {
+          renderLog("warn", "project_audio_ingest_missing_public_file_url", {
+            projectId,
+            fileId: file.id,
+            host: request.headers?.host ?? null,
+            hasGatewayPublicOriginEnv: Boolean(
+              (process.env.CINEFUSE_GATEWAY_PUBLIC_ORIGIN ?? "").trim()
+            ),
+            hasApiBaseUrlEnv: Boolean((process.env.CINEFUSE_API_BASE_URL ?? "").trim())
+          });
+        }
         return json(response, 201, { file: filePayload });
       }
 
@@ -1122,14 +1165,10 @@ export function createHttpServer() {
         byteSize: buffer.length,
         buffer
       });
-      const publicOrigin = (process.env.CINEFUSE_GATEWAY_PUBLIC_ORIGIN ?? "").replace(/\/$/, "");
+      const publicBase = resolvedGatewayPublicBase(request);
+      const fileUrl = projectFilePublicUrl(publicBase, projectId, file.id);
       const filePayload =
-        publicOrigin.length > 0
-          ? {
-              ...file,
-              url: `${publicOrigin}/api/v1/cinefuse/projects/${encodeURIComponent(projectId)}/files/${encodeURIComponent(file.id)}`
-            }
-          : file;
+        typeof fileUrl === "string" && fileUrl.length > 0 ? { ...file, url: fileUrl } : file;
       return json(response, 201, { file: filePayload });
     }
 

@@ -297,7 +297,7 @@ async function elevenLabsTextToSpeech(text) {
   return Buffer.from(await response.arrayBuffer());
 }
 
-function resolveUploadedAssetUrl(payload, uploadPostUrl) {
+function resolveUploadedAssetUrl(payload, uploadPostUrl, meta = {}) {
   if (!payload || typeof payload !== "object") {
     return null;
   }
@@ -319,6 +319,19 @@ function resolveUploadedAssetUrl(payload, uploadPostUrl) {
       const base = uploadPostUrl.replace(/\/+$/, "");
       if (base.endsWith("/files")) {
         return `${base}/${encodeURIComponent(file.id)}`;
+      }
+      if (
+        uploadPostUrl.includes("project-audio")
+        && typeof meta.projectId === "string"
+        && meta.projectId.length > 0
+      ) {
+        try {
+          const u = new URL(uploadPostUrl);
+          const origin = `${u.protocol}//${u.host}`;
+          return `${origin}/api/v1/cinefuse/projects/${encodeURIComponent(meta.projectId)}/files/${encodeURIComponent(file.id)}`;
+        } catch {
+          return null;
+        }
       }
     }
   }
@@ -390,7 +403,9 @@ async function uploadAudioBuffer(buffer, contentType = "audio/mpeg", options = {
     throw new Error(`audio_upload_error (${response.status}): ${await response.text()}`);
   }
   const payload = await response.json().catch(() => ({}));
-  const uploaded = resolveUploadedAssetUrl(payload, uploadUrl);
+  const uploaded = resolveUploadedAssetUrl(payload, uploadUrl, {
+    projectId: useWorkerIngest ? options.uploadProjectId : undefined
+  });
   if (typeof uploaded !== "string" || uploaded.length === 0) {
     throw new Error("audio_upload_missing_url_in_response");
   }
