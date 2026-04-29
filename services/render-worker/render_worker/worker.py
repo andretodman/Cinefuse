@@ -66,7 +66,13 @@ class RenderWorker:
         self.stop_event.set()
 
     def _process(self, job: RenderJob) -> None:
-        logger.info("stub job processed id=%s kind=%s payload=%s", job.id, job.kind, job.payload)
+        # `worker.py` enqueues a warmup RenderJob before Redis BLPOP — not user work, not MCP stub media.
+        logger.info(
+            "in-process warmup job drained id=%s kind=%s payload=%s",
+            job.id,
+            job.kind,
+            job.payload,
+        )
 
     def run_once_redis(self) -> bool:
         try:

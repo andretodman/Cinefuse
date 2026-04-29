@@ -637,7 +637,7 @@ export function createHttpServer() {
     /** Set when `audio.generate_score` returns; used for failed-job diagnostics and refunds. */
     let soundMcpInvokeResult = null;
     let runningProgress = 15;
-    const progressTimer = setInterval(() => {
+    const bumpRenderProgress = () => {
       if (runningProgress >= 90) {
         return;
       }
@@ -655,7 +655,16 @@ export function createHttpServer() {
         status: "running",
         progressPct: runningProgress
       });
-    }, 4000);
+    };
+    // First interval tick was 4s out — UIs polling faster looked frozen at 15% until then.
+    const progressTimer = setInterval(bumpRenderProgress, 2800);
+    const progressKickoff = setTimeout(() => {
+      void bumpRenderProgress();
+    }, 700);
+    const clearProgressSchedule = () => {
+      clearInterval(progressTimer);
+      clearTimeout(progressKickoff);
+    };
 
     try {
       if (generationKind === "sound") {
@@ -679,7 +688,7 @@ export function createHttpServer() {
           ...uploadCtx
         });
         soundMcpInvokeResult = audioGeneration;
-        clearInterval(progressTimer);
+        clearProgressSchedule();
         const track = audioGeneration.track ?? null;
         if (audioGeneration.skipped || !track?.sourceUrl) {
           const detail = audioGeneration.featureError?.detail ?? "audio generation skipped or missing url";
@@ -734,7 +743,7 @@ export function createHttpServer() {
           userId: task.userId,
           audioRefs
         });
-        clearInterval(progressTimer);
+        clearProgressSchedule();
         renderLog("info", "clip_invoke_done", {
           projectId: task.projectId,
           shotId: task.shotId,
@@ -783,7 +792,7 @@ export function createHttpServer() {
         generationKind
       });
     } catch (error) {
-      clearInterval(progressTimer);
+      clearProgressSchedule();
       const message = error instanceof Error ? error.message : "generation failed";
       const falContext = parseFalContext(message);
       renderLog("error", "task_failed", {
