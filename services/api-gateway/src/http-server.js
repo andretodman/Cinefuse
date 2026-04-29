@@ -530,7 +530,8 @@ export function createHttpServer() {
         status,
         progressPct,
         outputPayload: {
-          invokeState: status === "failed" ? "failed" : "running",
+          invokeState:
+            status === "failed" ? "failed" : status === "done" ? "done" : "running",
           lastProgressAt: new Date().toISOString()
         }
       });
