@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 
 const TOOLS = [
+  "quote_sound",
   "generate_dialogue",
   "generate_score",
   "lookup_sfx",
@@ -8,6 +9,17 @@ const TOOLS = [
   "mix_scene",
   "lipsync"
 ];
+
+/** Match clip tier sparks for UX parity; cost curve targets instrumental/score generation. */
+const SOUND_TIER_CONFIG = {
+  budget: { sparks: 50, modelId: "audio-score-budget", estimatedDurationSec: 5, costToUsCents: 28 },
+  standard: { sparks: 70, modelId: "audio-score-standard", estimatedDurationSec: 5, costToUsCents: 40 },
+  premium: { sparks: 250, modelId: "audio-score-premium", estimatedDurationSec: 5, costToUsCents: 120 }
+};
+
+function resolveSoundTierConfig(modelTier) {
+  return SOUND_TIER_CONFIG[modelTier] ?? SOUND_TIER_CONFIG.budget;
+}
 
 function isTestMode() {
   return process.env.NODE_ENV === "test"
@@ -382,6 +394,20 @@ export function createServer() {
     async invoke(tool, input = {}) {
       if (!TOOLS.includes(tool)) {
         throw new Error(`Unknown tool: ${tool}`);
+      }
+      if (tool === "quote_sound") {
+        const modelTier = input?.modelTier ?? "budget";
+        const cfg = resolveSoundTierConfig(modelTier);
+        return {
+          ok: true,
+          server: "audio",
+          tool,
+          modelTier,
+          modelId: cfg.modelId,
+          sparksCost: cfg.sparks,
+          estimatedDurationSec: cfg.estimatedDurationSec,
+          costToUsCents: cfg.costToUsCents
+        };
       }
       if (tool === "lookup_sfx") {
         return {

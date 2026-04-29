@@ -7,6 +7,10 @@ process.env.CINEFUSE_ALLOW_STUB_MEDIA = "true";
 test("audio contract: list_tools and invoke", async () => {
   const server = createServer();
   assert.equal(server.listTools().includes("generate_dialogue"), true);
+  assert.equal(server.listTools().includes("quote_sound"), true);
+  const quote = await server.invoke("quote_sound", { modelTier: "standard" });
+  assert.equal(quote.ok, true);
+  assert.equal(quote.sparksCost, 70);
   const result = await server.invoke("generate_score", { mood: "tense" });
   assert.equal(result.ok, true);
 });

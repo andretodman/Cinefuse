@@ -650,17 +650,26 @@ export function createHttpServer() {
     });
   }
 
-  async function queueShotGeneration({ projectId, shot, userId, idempotencyKey }) {
+  async function queueShotGeneration({ projectId, shot, userId, idempotencyKey, generationKind = "video" }) {
     const audioRefs = Array.isArray(shot.audioRefs) ? shot.audioRefs : [];
-    const quote = await mcpHost.invoke("clip", "quote_clip", {
-      shotId: shot.id,
-      projectId,
-      prompt: shot.prompt,
-      modelTier: shot.modelTier,
-      characterLocks: shot.characterLocks ?? [],
-      userId,
-      audioRefs
-    });
+    const isSound = generationKind === "sound";
+    const quote = isSound
+      ? await mcpHost.invoke("audio", "quote_sound", {
+          shotId: shot.id,
+          projectId,
+          prompt: shot.prompt,
+          modelTier: shot.modelTier,
+          userId
+        })
+      : await mcpHost.invoke("clip", "quote_clip", {
+          shotId: shot.id,
+          projectId,
+          prompt: shot.prompt,
+          modelTier: shot.modelTier,
+          characterLocks: shot.characterLocks ?? [],
+          userId,
+          audioRefs
+        });
     const jobId = randomUUID();
     const generationIdempotencyKey = idempotencyKey ?? `shot-generate:${shot.id}:${jobId}`;
 
@@ -680,7 +689,7 @@ export function createHttpServer() {
       id: jobId,
       projectId,
       shotId: queuedShot.id,
-      kind: "clip",
+      kind: isSound ? "audio" : "clip",
       status: "queued",
       progressPct: 0,
       inputPayload: {
@@ -688,7 +697,8 @@ export function createHttpServer() {
         modelTier: queuedShot.modelTier,
         sparksCost: quote.sparksCost,
         idempotencyKey: generationIdempotencyKey,
-        apiRequestSentAt: new Date().toISOString()
+        apiRequestSentAt: new Date().toISOString(),
+        generationKind: isSound ? "sound" : "video"
       },
       outputPayload: {
         invokeState: "queued"
@@ -715,7 +725,8 @@ export function createHttpServer() {
       projectId,
       userId,
       quote,
-      debitIdempotencyKey: generationIdempotencyKey
+      debitIdempotencyKey: generationIdempotencyKey,
+      generationKind: isSound ? "sound" : "video"
     });
 
     return { queuedShot, job, quote, generationIdempotencyKey };

@@ -3405,6 +3405,18 @@ struct ProjectDetailScreen: View {
         return sortedShots
     }
 
+    /// Sounds panel in audio mode: same “audible” signal as the timeline, plus drafts and in-flight rows (no `clipUrl` yet). Hides finished silent video (`clipUrl` set, no sound linkage).
+    private var shotsForSoundsPanelIfNeeded: [Shot] {
+        guard isAudioCreationMode else { return sortedShots }
+        return sortedShots.filter { shot in
+            if shot.hasSoundContent(audioTracks: audioTracks) {
+                return true
+            }
+            let clip = shot.clipUrl?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            return clip.isEmpty
+        }
+    }
+
     private var timelineShotBoundaries: [TimelineShotBoundary] {
         var cursorMs = 0
         return shotBoundarySource.map { shot in
@@ -3552,7 +3564,7 @@ struct ProjectDetailScreen: View {
         ScrollView {
             VStack(alignment: .leading, spacing: CinefuseTokens.Spacing.s) {
                 ShotsPanel(
-                    shots: shots,
+                    shots: shotsForSoundsPanelIfNeeded,
                     jobs: jobs,
                     localFileRecordsByRemoteURL: localFileRecordsByRemoteURL,
                     localThumbnailURLByShotId: localThumbnailURLByShotId,
