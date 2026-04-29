@@ -64,6 +64,8 @@ enum CinefuseTokens {
         static let label = Font.subheadline.weight(.medium)
         static let caption = Font.caption
         static let micro = Font.caption2.weight(.medium)
+        /// Processing % / status beside compact progress controls (timeline, shots, jobs).
+        static let nano = Font.system(size: 9, weight: .medium)
     }
 
     enum ColorRole {

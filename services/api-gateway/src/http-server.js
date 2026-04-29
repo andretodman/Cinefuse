@@ -101,6 +101,45 @@ function coerceProviderStatusCode(value) {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
+/** Minimal valid PCM WAV (~0.25s silence) for dev stub URLs (`files.cinefuse.test` replacement via gateway). */
+function minimalSilentWavBuffer() {
+  const sampleRate = 44100;
+  const channels = 1;
+  const bitsPerSample = 16;
+  const durationSec = 0.25;
+  const numSamples = Math.floor(sampleRate * durationSec);
+  const blockAlign = (channels * bitsPerSample) / 8;
+  const byteRate = sampleRate * blockAlign;
+  const dataSize = numSamples * blockAlign;
+  const buffer = Buffer.alloc(44 + dataSize);
+  buffer.write("RIFF", 0);
+  buffer.writeUInt32LE(36 + dataSize, 4);
+  buffer.write("WAVE", 8);
+  buffer.write("fmt ", 12);
+  buffer.writeUInt32LE(16, 16);
+  buffer.writeUInt16LE(1, 20);
+  buffer.writeUInt16LE(channels, 22);
+  buffer.writeUInt32LE(sampleRate, 24);
+  buffer.writeUInt32LE(byteRate, 28);
+  buffer.writeUInt16LE(blockAlign, 32);
+  buffer.writeUInt16LE(bitsPerSample, 34);
+  buffer.write("data", 36);
+  buffer.writeUInt32LE(dataSize, 40);
+  return buffer;
+}
+
+/** 1×1 transparent PNG for stub waveform URLs. */
+function minimalPngBuffer() {
+  return Buffer.from(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M/wHwAEgwJ/lVntKQAAAABJRU5ErkJggg==",
+    "base64"
+  );
+}
+
+function stubMediaDownloadAllowed() {
+  return process.env.CINEFUSE_ENABLE_STUB_MEDIA_DOWNLOAD !== "false";
+}
+
 /**
  * Resolves reference file IDs from project sound blueprints in request order, deduped.
  * @returns {{ merged: string[] } | { error: string, message: string }}
@@ -807,6 +846,36 @@ export function createHttpServer() {
 
       if (method === "GET" && url.pathname === "/api/v1/cinefuse/health") {
         return json(response, 200, { ok: true, service: "api-gateway", domain: "cinefuse" });
+      }
+
+      const stubMediaPrefix = "/api/v1/cinefuse/stub-media";
+      if (method === "GET" && url.pathname.startsWith(`${stubMediaPrefix}/`)) {
+        if (!stubMediaDownloadAllowed()) {
+          return writeError(response, 404, "stub media download disabled", "STUB_MEDIA_DISABLED");
+        }
+        const rest = url.pathname.slice(stubMediaPrefix.length);
+        const lower = rest.toLowerCase();
+        if (lower.endsWith(".wav")) {
+          const buf = minimalSilentWavBuffer();
+          response.writeHead(200, {
+            "content-type": "audio/wav",
+            "content-length": String(buf.length),
+            "cache-control": "no-store"
+          });
+          response.end(buf);
+          return;
+        }
+        if (lower.endsWith(".png")) {
+          const buf = minimalPngBuffer();
+          response.writeHead(200, {
+            "content-type": "image/png",
+            "content-length": String(buf.length),
+            "cache-control": "no-store"
+          });
+          response.end(buf);
+          return;
+        }
+        return writeError(response, 404, "stub asset type not supported", "STUB_MEDIA_UNSUPPORTED");
       }
 
       if (method === "GET" && (url.pathname === "/" || url.pathname === "/index.html")) {

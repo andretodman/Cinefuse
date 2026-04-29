@@ -45,14 +45,27 @@ function structuredLog(level, event, fields) {
   }
 }
 
+function stubMediaRootUrl() {
+  const explicit = process.env.CINEFUSE_PUBLIC_FILES_BASE_URL?.replace(/\/$/, "");
+  if (explicit) {
+    return explicit;
+  }
+  const gw = process.env.CINEFUSE_GATEWAY_PUBLIC_ORIGIN?.replace(/\/$/, "");
+  if (gw) {
+    return `${gw}/api/v1/cinefuse/stub-media`;
+  }
+  return "https://files.cinefuse.test";
+}
+
 function fallbackTrack(kind, input = {}) {
   const id = randomUUID();
+  const root = stubMediaRootUrl();
   return {
     id,
     kind,
     status: "ready",
-    sourceUrl: `https://files.cinefuse.test/audio/${kind}/${id}.wav`,
-    waveformUrl: `https://files.cinefuse.test/audio/${kind}/${id}.png`,
+    sourceUrl: `${root}/audio/${kind}/${id}.wav`,
+    waveformUrl: `${root}/audio/${kind}/${id}.png`,
     durationMs: Number(input.durationMs ?? 4000),
     laneIndex: Number(input.laneIndex ?? 0),
     startMs: Number(input.startMs ?? 0),

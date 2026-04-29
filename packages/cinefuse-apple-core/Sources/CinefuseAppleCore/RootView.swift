@@ -1700,13 +1700,30 @@ struct ProjectWorkspaceScreen: View {
         }
     }
 
+    private func syncArtifactFromRemoteURL(
+        projectId: String,
+        remoteURLString: String,
+        preferredBaseName: String
+    ) async -> LocalFileRecord {
+        let fetchStr = GeneratedFilesStore.fetchURLStringForRemoteArtifact(
+            remoteURLString: remoteURLString,
+            apiGatewayBaseURLString: activeServerBaseURL
+        )
+        return await generatedFilesStore.syncFile(
+            projectId: projectId,
+            remoteURLString: remoteURLString,
+            preferredBaseName: preferredBaseName,
+            fetchURLString: fetchStr != remoteURLString ? fetchStr : nil
+        )
+    }
+
     private func syncGeneratedFiles(projectId: String, shots: [Shot], jobs: [Job]) async {
         var refreshedShotThumbnails: [String: URL] = [:]
         var refreshedJobThumbnails: [String: URL] = [:]
 
         for shot in shots {
             guard let clipUrl = shot.clipUrl, !clipUrl.isEmpty else { continue }
-            let localRecord = await generatedFilesStore.syncFile(
+            let localRecord = await syncArtifactFromRemoteURL(
                 projectId: projectId,
                 remoteURLString: clipUrl,
                 preferredBaseName: "shot-\(shot.orderIndex ?? 0)-\(shot.id)"
@@ -1732,7 +1749,7 @@ struct ProjectWorkspaceScreen: View {
                let outputUrl = job.outputUrl,
                !outputUrl.isEmpty {
                 let baseName = job.kind == "audio_export" ? "audio-export-\(job.id)" : "audio-\(job.id)"
-                let localRecord = await generatedFilesStore.syncFile(
+                let localRecord = await syncArtifactFromRemoteURL(
                     projectId: projectId,
                     remoteURLString: outputUrl,
                     preferredBaseName: baseName
@@ -1744,7 +1761,7 @@ struct ProjectWorkspaceScreen: View {
             }
             guard job.kind == "export" else { continue }
             guard let outputUrl = job.outputUrl, !outputUrl.isEmpty else { continue }
-            let localRecord = await generatedFilesStore.syncFile(
+            let localRecord = await syncArtifactFromRemoteURL(
                 projectId: projectId,
                 remoteURLString: outputUrl,
                 preferredBaseName: "export-\(job.id)"
@@ -4479,8 +4496,9 @@ struct TimelineClipCard: View {
             if ["queued", "generating", "running", "processing"].contains(shot.status), let progressPct {
                 HStack(spacing: CinefuseTokens.Spacing.xxs) {
                     ProgressView(value: Double(progressPct), total: 100)
+                        .controlSize(.mini)
                     Text("\(progressPct)%")
-                        .font(CinefuseTokens.Typography.micro)
+                        .font(CinefuseTokens.Typography.nano)
                         .foregroundStyle(CinefuseTokens.ColorRole.textSecondary)
                 }
             }
@@ -6484,21 +6502,23 @@ struct ShotsPanel: View {
                                     if showsIndeterminateSoundProgress(for: shot) {
                                         HStack(spacing: CinefuseTokens.Spacing.xs) {
                                             ProgressView()
+                                                .controlSize(.mini)
                                                 .frame(maxWidth: .infinity)
                                             Text("Generating sound…")
-                                                .font(CinefuseTokens.Typography.caption)
+                                                .font(CinefuseTokens.Typography.nano)
                                                 .foregroundStyle(CinefuseTokens.ColorRole.textSecondary)
                                         }
                                     } else if let progress = renderProgress(for: shot) {
                                         HStack(spacing: CinefuseTokens.Spacing.xs) {
                                             ProgressView(value: Double(progress), total: 100)
+                                                .controlSize(.mini)
                                                 .frame(maxWidth: .infinity)
                                             Text(
                                                 panelMode == .audioSounds
                                                     ? "Generating sound \(progress)%"
                                                     : "Rendering \(progress)%"
                                             )
-                                                .font(CinefuseTokens.Typography.caption)
+                                                .font(CinefuseTokens.Typography.nano)
                                                 .foregroundStyle(CinefuseTokens.ColorRole.textSecondary)
                                         }
                                     }
@@ -6819,9 +6839,10 @@ struct JobsPanel: View {
                                            !terminalJobStatusesForProgress.contains(job.status.lowercased()) {
                                             HStack(spacing: CinefuseTokens.Spacing.xs) {
                                                 ProgressView(value: Double(progress), total: 100)
+                                                    .controlSize(.mini)
                                                     .frame(maxWidth: .infinity)
                                                 Text("\(progress)%")
-                                                    .font(CinefuseTokens.Typography.caption)
+                                                    .font(CinefuseTokens.Typography.nano)
                                                     .foregroundStyle(CinefuseTokens.ColorRole.textSecondary)
                                             }
                                         }

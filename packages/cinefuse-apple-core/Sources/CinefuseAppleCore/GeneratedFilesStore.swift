@@ -59,10 +59,12 @@ public actor GeneratedFilesStore {
         return root
     }
 
+    /// When set, used for the HTTP fetch only; manifest keys remain `remoteURLString` (canonical artifact URL from API).
     public func syncFile(
         projectId: String,
         remoteURLString: String,
-        preferredBaseName: String
+        preferredBaseName: String,
+        fetchURLString: String? = nil
     ) async -> LocalFileRecord {
         guard let remoteURL = URL(string: remoteURLString) else {
             return LocalFileRecord(
@@ -73,6 +75,8 @@ public actor GeneratedFilesStore {
                 errorMessage: "Invalid remote URL."
             )
         }
+
+        let fetchURLResolved = fetchURLString.flatMap { URL(string: $0) } ?? remoteURL
 
         do {
             let projectFolder = try ensureProjectFolder(projectId: projectId)
@@ -102,7 +106,7 @@ public actor GeneratedFilesStore {
             )
 
             DiagnosticsLogger.fileSyncStart(remoteURL: remoteURLString, destination: destinationURL.path)
-            let (data, response) = try await session.data(from: remoteURL)
+            let (data, response) = try await session.data(from: fetchURLResolved)
             if let http = response as? HTTPURLResponse, !(200...299).contains(http.statusCode) {
                 let message = "HTTP \(http.statusCode)"
                 DiagnosticsLogger.fileSyncFailure(remoteURL: remoteURLString, destination: destinationURL.path, message: message)
@@ -274,5 +278,28 @@ public actor GeneratedFilesStore {
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         let data = try encoder.encode(manifest)
         try data.write(to: url, options: .atomic)
+    }
+}
+
+extension GeneratedFilesStore {
+    /// Dev stub URLs use hostname `files.cinefuse.test`, which does not resolve on-device. Map them to the API gateway ``/api/v1/cinefuse/stub-media`` route using the same origin as ``APIClient``.
+    public static func fetchURLStringForRemoteArtifact(
+        remoteURLString: String,
+        apiGatewayBaseURLString: String?
+    ) -> String {
+        guard let remote = URL(string: remoteURLString),
+              let host = remote.host?.lowercased(),
+              host == "files.cinefuse.test",
+              let baseStr = apiGatewayBaseURLString?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !baseStr.isEmpty,
+              let base = URL(string: baseStr)
+        else {
+            return remoteURLString
+        }
+        let suffix = "/stub-media" + remote.path
+        guard let resolved = URL(string: APIClient.cinefusePrefix + suffix, relativeTo: base) else {
+            return remoteURLString
+        }
+        return resolved.absoluteURL.absoluteString
     }
 }
