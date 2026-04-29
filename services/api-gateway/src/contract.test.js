@@ -1184,6 +1184,89 @@ test("api contract: sound generation uses audio MCP stub (wav url on shot)", asy
   }
 });
 
+test("api contract: sound generation rejects stub output outside development/test", async () => {
+  const prevNodeEnv = process.env.NODE_ENV;
+  const prevStubMode = process.env.CINEFUSE_ALLOW_STUB_MEDIA;
+  process.env.NODE_ENV = "production";
+  process.env.CINEFUSE_ALLOW_STUB_MEDIA = "true";
+  const headers = authHeaders("usr_contract_sound_gen_prod_block");
+  await clearProjects();
+  const server = createHttpServer();
+  await new Promise((resolve) => server.listen(0, resolve));
+  const address = server.address();
+  const port = typeof address === "object" && address ? address.port : 0;
+  const baseUrl = `http://127.0.0.1:${port}`;
+
+  const createResponse = await fetch(`${baseUrl}/api/v1/cinefuse/projects`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ title: "Sound generation production stub guard" })
+  });
+  assert.equal(createResponse.status, 201);
+  const projectId = (await createResponse.json()).project.id;
+
+  const shotCreateResponse = await fetch(`${baseUrl}/api/v1/cinefuse/projects/${projectId}/shots`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ prompt: "ambient tension bed", modelTier: "standard" })
+  });
+  assert.equal(shotCreateResponse.status, 201);
+  const shotId = (await shotCreateResponse.json()).shot.id;
+
+  const generateResponse = await fetch(
+    `${baseUrl}/api/v1/cinefuse/projects/${projectId}/shots/${shotId}/generate`,
+    {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ generationKind: "sound", soundBlueprintIds: [] })
+    }
+  );
+  assert.equal(generateResponse.status, 200);
+
+  let shotStatus = "queued";
+  let retries = 40;
+  while (retries > 0) {
+    const shotListResponse = await fetch(`${baseUrl}/api/v1/cinefuse/projects/${projectId}/shots`, {
+      headers
+    });
+    assert.equal(shotListResponse.status, 200);
+    const shotsBody = await shotListResponse.json();
+    shotStatus = shotsBody.shots[0].status;
+    if (shotStatus === "failed") {
+      break;
+    }
+    retries -= 1;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  assert.equal(shotStatus, "failed");
+
+  const jobListResponse = await fetch(`${baseUrl}/api/v1/cinefuse/projects/${projectId}/jobs`, {
+    headers
+  });
+  assert.equal(jobListResponse.status, 200);
+  const jobsBody = await jobListResponse.json();
+  const audioJob = jobsBody.jobs.find((job) => job.kind === "audio" && job.shotId === shotId);
+  assert.ok(audioJob);
+  assert.equal(audioJob.status, "failed");
+  assert.match(audioJob.outputPayload?.error ?? "", /stub sound output is blocked/i);
+
+  await new Promise((resolve, reject) => {
+    server.close((error) => {
+      if (error) {
+        reject(error);
+        return;
+      }
+      resolve();
+    });
+  });
+  process.env.NODE_ENV = prevNodeEnv;
+  if (typeof prevStubMode === "string") {
+    process.env.CINEFUSE_ALLOW_STUB_MEDIA = prevStubMode;
+  } else {
+    delete process.env.CINEFUSE_ALLOW_STUB_MEDIA;
+  }
+});
+
 test(
   "api contract: live ElevenLabs sound generation (gated; costs API credits)",
   {

@@ -101,6 +101,26 @@ function coerceProviderStatusCode(value) {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
+function isStubSoundGenerationResult(audioGeneration, track) {
+  const providerEndpoint = typeof audioGeneration?.providerEndpoint === "string"
+    ? audioGeneration.providerEndpoint
+    : "";
+  const sourceUrl = typeof track?.sourceUrl === "string" ? track.sourceUrl : "";
+  const providerAdapter = typeof audioGeneration?.providerAdapter === "string"
+    ? audioGeneration.providerAdapter
+    : (typeof audioGeneration?.adapter === "string" ? audioGeneration.adapter : "");
+  return providerAdapter === "stub"
+    || providerEndpoint.startsWith("stub://")
+    || providerEndpoint.includes("files.cinefuse.test")
+    || sourceUrl.includes("files.cinefuse.test")
+    || sourceUrl.includes("/api/v1/cinefuse/stub-media/");
+}
+
+function shouldRejectStubSoundReady() {
+  const nodeEnv = (process.env.NODE_ENV ?? "").toLowerCase();
+  return nodeEnv !== "development" && nodeEnv !== "test";
+}
+
 /** Minimal valid PCM WAV (~0.35s) for dev stub URLs — quiet tone so files are audibly non-empty (not silent zeros mistaken for corruption). */
 function minimalSilentWavBuffer() {
   const sampleRate = 44100;
@@ -614,6 +634,9 @@ export function createHttpServer() {
         if (audioGeneration.skipped || !track?.sourceUrl) {
           const detail = audioGeneration.featureError?.detail ?? "audio generation skipped or missing url";
           throw new Error(`audio_score_failed: ${detail}`);
+        }
+        if (shouldRejectStubSoundReady() && isStubSoundGenerationResult(audioGeneration, track)) {
+          throw new Error("audio_score_failed: stub sound output is blocked outside development/test");
         }
         console.info("[render] audio.generate_score completed", {
           projectId: task.projectId,
