@@ -3,6 +3,8 @@ import assert from "node:assert/strict";
 import { createHttpServer } from "./http-server.js";
 import { clearProjects } from "./project-store.js";
 
+process.env.NODE_ENV = "test";
+
 function authHeaders(userId) {
   return {
     authorization: `Bearer user:${userId}`,

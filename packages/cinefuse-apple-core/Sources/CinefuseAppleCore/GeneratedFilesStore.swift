@@ -226,10 +226,20 @@ public actor GeneratedFilesStore {
 
     private func inferredExtension(from remoteURL: URL) -> String {
         let ext = remoteURL.pathExtension.trimmingCharacters(in: .whitespacesAndNewlines)
-        if ext.isEmpty {
-            return "mp4"
+        if !ext.isEmpty {
+            return sanitizeFileName(ext).lowercased()
         }
-        return sanitizeFileName(ext).lowercased()
+        let s = remoteURL.absoluteString.lowercased()
+        if s.contains(".mp3") || s.contains("/mpeg") || s.contains("audio/mpeg") {
+            return "mp3"
+        }
+        if s.contains(".wav") || s.contains("audio/wav") {
+            return "wav"
+        }
+        if s.contains(".m4a") || s.contains(".aac") {
+            return "m4a"
+        }
+        return "mp4"
     }
 
     private func uniqueDestinationURL(in directory: URL, baseName: String, fileExtension: String) -> URL {

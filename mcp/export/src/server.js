@@ -37,6 +37,8 @@ function isTestMode() {
     || process.argv.includes("--test");
 }
 
+// In non-test runs, encode_final / encode_audio_mixdown require CINEFUSE_EXPORT_PROVIDER_URL (no stub fallback).
+
 function fallbackExport(tool, input = {}) {
   const id = randomUUID();
   const base = `https://files.cinefuse.test/exports/${id}`;

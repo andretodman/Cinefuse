@@ -41,6 +41,47 @@ All clients and services should target these routes.
 - `POST /api/v1/cinefuse/projects/{projectId}/sound-blueprints` → `{ "soundBlueprint": { ... } }`  
   Body: `{ "name": string, "templateId"?: string, "referenceFileIds"?: string[] }`
 
+### Audio generation (MCP-backed)
+
+Each route invokes the `audio` MCP with a deterministic idempotency key. Responses are **`200`** with either a persisted track or a **non-blocking skip** (workflow continues).
+
+- `POST /api/v1/cinefuse/projects/{projectId}/audio/dialogue`
+- `POST /api/v1/cinefuse/projects/{projectId}/audio/score`
+- `POST /api/v1/cinefuse/projects/{projectId}/audio/sfx`
+- `POST /api/v1/cinefuse/projects/{projectId}/audio/mix`
+- `POST /api/v1/cinefuse/projects/{projectId}/audio/lipsync`
+
+**Success with artifact**
+
+```json
+{
+  "audioTrack": { "...": "..." },
+  "job": { "kind": "audio", "status": "done", "outputUrl": "...", "skippedFeature": false, "...": "..." },
+  "sparksCost": 15,
+  "skipped": false
+}
+```
+
+**Skipped feature (provider cannot fulfill; no Spark debit)**
+
+```json
+{
+  "audioTrack": null,
+  "job": {
+    "kind": "audio",
+    "status": "done",
+    "skippedFeature": true,
+    "featureError": { "provider": "...", "reason": "...", "detail": "..." },
+    "providerAdapter": "...",
+    "outputCreated": false
+  },
+  "sparksCost": 0,
+  "skipped": true
+}
+```
+
+Clients should refresh jobs/timeline and surface `skippedFeature` / `featureError` in diagnostics (same pattern as clip/export jobs).
+
 ### Audio export (layered mixdown)
 
 - `POST /api/v1/cinefuse/projects/{projectId}/export/audio-mix` → `{ "job": {...}, "export": { "fileUrl", "sparksCost", "costToUsCents" } }`  

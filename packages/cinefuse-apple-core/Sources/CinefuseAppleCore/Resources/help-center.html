@@ -202,6 +202,8 @@
             <li>Dialogue, score, and SFX generation lanes.</li>
             <li>Mix and lipsync passes can be queued as jobs.</li>
             <li>Audio outputs are attached to timeline context.</li>
+            <li>Successful generations persist remote URLs; the app syncs audio artifacts into <strong>Documents → Cinefuse Generated → &lt;project&gt;</strong> alongside video exports.</li>
+            <li>If an upstream provider cannot fulfill a specific audio tool, the job may record a <strong>skipped feature</strong> (zero Sparks debited). Open the status/diagnostics panel on that job for provider, reason, and whether any file was still produced.</li>
           </ul>
         </section>
 
@@ -220,6 +222,7 @@
             <li><strong>Queued too long:</strong> likely worker backlog/offline.</li>
             <li><strong>Retry conflict:</strong> backend says current status is no longer failed.</li>
             <li><strong>Timed out:</strong> no meaningful progress transition in timeout window.</li>
+            <li><strong>Audio feature skipped:</strong> provider adapter could not complete that tool; check provider name, precise reason, and whether <code>outputCreated</code> is still true for partial artifacts.</li>
           </ul>
           <pre>{
   "requestStage": "queued",
@@ -246,6 +249,8 @@
               <tr><td>Delete Job</td><td>DELETE <code>/api/v1/cinefuse/projects/{projectId}/jobs/{jobId}</code></td><td>path ids</td><td><code>{ ok: true }</code></td></tr>
               <tr><td>Events</td><td>GET SSE <code>/api/v1/cinefuse/projects/{projectId}/events</code></td><td>path <code>projectId</code></td><td>event stream updates</td></tr>
               <tr><td>Export</td><td>POST <code>/api/v1/cinefuse/projects/{projectId}/export/final</code></td><td><code>resolution</code>, <code>captions</code></td><td><code>{ job }</code></td></tr>
+              <tr><td>Audio tools</td><td>POST <code>.../audio/dialogue|score|sfx|mix|lipsync</code></td><td>lane/title/duration fields</td><td><code>{ audioTrack?, job, sparksCost, skipped?, featureError? }</code></td></tr>
+              <tr><td>Audio mix export</td><td>POST <code>/api/v1/cinefuse/projects/{projectId}/export/audio-mix</code></td><td>none (uses timeline tracks)</td><td><code>{ job, export }</code></td></tr>
             </tbody>
           </table>
 

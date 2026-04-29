@@ -1622,6 +1622,20 @@ struct ProjectWorkspaceScreen: View {
             if let shotId = job.shotId, let thumbnailURL = refreshedShotThumbnails[shotId] {
                 refreshedJobThumbnails[job.id] = thumbnailURL
             }
+            if (job.kind == "audio" || job.kind == "audio_export"),
+               let outputUrl = job.outputUrl,
+               !outputUrl.isEmpty {
+                let baseName = job.kind == "audio_export" ? "audio-export-\(job.id)" : "audio-\(job.id)"
+                let localRecord = await generatedFilesStore.syncFile(
+                    projectId: projectId,
+                    remoteURLString: outputUrl,
+                    preferredBaseName: baseName
+                )
+                await MainActor.run {
+                    localFileRecordsByRemoteURL[outputUrl] = localRecord
+                    appendDebugEvent("audio file sync \(localRecord.status.rawValue) job=\(job.id)")
+                }
+            }
             guard job.kind == "export" else { continue }
             guard let outputUrl = job.outputUrl, !outputUrl.isEmpty else { continue }
             let localRecord = await generatedFilesStore.syncFile(
@@ -2470,7 +2484,7 @@ struct ProjectWorkspaceScreen: View {
     private func generateDialogueTrack() async {
         guard let selectedProjectId else { return }
         do {
-            _ = try await api.generateDialogue(
+            let result = try await api.generateDialogue(
                 token: model.bearerToken,
                 projectId: selectedProjectId,
                 shotId: shots.first?.id,
@@ -2479,6 +2493,7 @@ struct ProjectWorkspaceScreen: View {
                 startMs: 0,
                 durationMs: 4000
             )
+            noteAudioGenerationOutcome(result, label: "Dialogue")
             await loadSelectedProjectDetails(showLoadingIndicator: false)
         } catch {
             model.errorMessage = error.localizedDescription
@@ -2488,7 +2503,7 @@ struct ProjectWorkspaceScreen: View {
     private func generateScoreTrack() async {
         guard let selectedProjectId else { return }
         do {
-            _ = try await api.generateScore(
+            let result = try await api.generateScore(
                 token: model.bearerToken,
                 projectId: selectedProjectId,
                 title: "Score bed",
@@ -2496,6 +2511,7 @@ struct ProjectWorkspaceScreen: View {
                 startMs: 0,
                 durationMs: 10000
             )
+            noteAudioGenerationOutcome(result, label: "Score")
             await loadSelectedProjectDetails(showLoadingIndicator: false)
         } catch {
             model.errorMessage = error.localizedDescription
@@ -2505,7 +2521,7 @@ struct ProjectWorkspaceScreen: View {
     private func generateSFXTrack() async {
         guard let selectedProjectId else { return }
         do {
-            _ = try await api.generateSFX(
+            let result = try await api.generateSFX(
                 token: model.bearerToken,
                 projectId: selectedProjectId,
                 title: audioTrackTitleDraft.isEmpty ? "Foley accent" : audioTrackTitleDraft,
@@ -2513,6 +2529,7 @@ struct ProjectWorkspaceScreen: View {
                 startMs: 0,
                 durationMs: 2500
             )
+            noteAudioGenerationOutcome(result, label: "SFX")
             await loadSelectedProjectDetails(showLoadingIndicator: false)
         } catch {
             model.errorMessage = error.localizedDescription
@@ -2522,7 +2539,7 @@ struct ProjectWorkspaceScreen: View {
     private func mixAudioTrack() async {
         guard let selectedProjectId else { return }
         do {
-            _ = try await api.mixAudio(
+            let result = try await api.mixAudio(
                 token: model.bearerToken,
                 projectId: selectedProjectId,
                 title: "Scene mixdown",
@@ -2530,6 +2547,7 @@ struct ProjectWorkspaceScreen: View {
                 startMs: 0,
                 durationMs: 10000
             )
+            noteAudioGenerationOutcome(result, label: "Mix")
             await loadSelectedProjectDetails(showLoadingIndicator: false)
         } catch {
             model.errorMessage = error.localizedDescription
@@ -2539,7 +2557,7 @@ struct ProjectWorkspaceScreen: View {
     private func generateLipSyncTrack() async {
         guard let selectedProjectId else { return }
         do {
-            _ = try await api.lipsyncAudio(
+            let result = try await api.lipsyncAudio(
                 token: model.bearerToken,
                 projectId: selectedProjectId,
                 shotId: shots.first?.id,
@@ -2548,9 +2566,19 @@ struct ProjectWorkspaceScreen: View {
                 startMs: 0,
                 durationMs: 4000
             )
+            noteAudioGenerationOutcome(result, label: "Lip-sync")
             await loadSelectedProjectDetails(showLoadingIndicator: false)
         } catch {
             model.errorMessage = error.localizedDescription
+        }
+    }
+
+    private func noteAudioGenerationOutcome(_ result: AudioGenerationAPIResponse, label: String) {
+        if result.skipped == true {
+            let detail = result.featureError?.detail
+                ?? result.featureError?.reason
+                ?? "Provider could not complete this feature."
+            appendDebugEvent("audio skipped \(label) job=\(result.job.id) detail=\(detail)")
         }
     }
 
@@ -5958,6 +5986,25 @@ private func artifactStatusPresentation(
     requestState: RenderRequestState?
 ) -> ArtifactStatusPresentation {
     let requestLines = requestTimelineLines(requestState)
+    if job.skippedFeature == true {
+        let reason = job.featureError?.detail
+            ?? job.featureError?.reason
+            ?? "Feature skipped by provider adapter."
+        let detailLines = [
+            "Job: \(job.kind) / \(job.status)",
+            "Provider adapter: \(job.providerAdapter ?? job.featureError?.provider ?? "unknown")",
+            "Feature status: skipped (workflow continues)",
+            "Reason: \(reason)",
+            "Output file created: \(job.outputCreated == true ? "yes" : (job.outputCreated == false ? "no" : "n/a"))",
+            "Remote URL: \(job.outputUrl ?? "none")",
+            "Local file: \(localRecord?.localPath ?? "not applicable")"
+        ] + requestLines
+        return ArtifactStatusPresentation(
+            level: .warning,
+            summary: "Audio feature skipped (non-blocking)",
+            details: detailLines.joined(separator: "\n")
+        )
+    }
     let apiEvidence = [
         "Job ID: \(job.id)",
         "Request ID: \(job.requestId ?? "n/a")",

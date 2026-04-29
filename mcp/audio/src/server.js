@@ -247,6 +247,17 @@ async function runGenerateDialogue(tool, kind, input) {
     }
   }
 
+  if (isTestMode()) {
+    const track = fallbackTrack(kind, input);
+    return {
+      ok: true,
+      skipped: false,
+      outputCreated: true,
+      providerAdapter: "stub",
+      track: { ...track, providerAdapter: "stub" }
+    };
+  }
+
   const text = extractDialogueText(input);
   if (!text) {
     return skipResult({
@@ -260,16 +271,6 @@ async function runGenerateDialogue(tool, kind, input) {
   }
 
   if (!process.env.ELEVENLABS_API_KEY) {
-    if (isTestMode()) {
-      const track = fallbackTrack(kind, input);
-      return {
-        ok: true,
-        skipped: false,
-        outputCreated: true,
-        providerAdapter: "stub",
-        track: { ...track, providerAdapter: "stub" }
-      };
-    }
     return skipResult({
       tool,
       input,
