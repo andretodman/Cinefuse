@@ -1797,7 +1797,9 @@ struct ProjectWorkspaceScreen: View {
             projectId: projectId,
             remoteURLString: remoteURLString,
             preferredBaseName: preferredBaseName,
-            fetchURLString: fetchStr != remoteURLString ? fetchStr : nil
+            fetchURLString: fetchStr != remoteURLString ? fetchStr : nil,
+            bearerToken: model.bearerToken,
+            authorizedApiBaseURLString: activeServerBaseURL
         )
     }
 

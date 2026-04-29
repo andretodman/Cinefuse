@@ -60,11 +60,14 @@ public actor GeneratedFilesStore {
     }
 
     /// When set, used for the HTTP fetch only; manifest keys remain `remoteURLString` (canonical artifact URL from API).
+    /// For same-host ``…/api/v1/cinefuse/projects/…/files/…`` URLs, pass ``bearerToken`` and ``authorizedApiBaseURLString`` so the download matches authenticated API access (otherwise the gateway returns 401).
     public func syncFile(
         projectId: String,
         remoteURLString: String,
         preferredBaseName: String,
-        fetchURLString: String? = nil
+        fetchURLString: String? = nil,
+        bearerToken: String? = nil,
+        authorizedApiBaseURLString: String? = nil
     ) async -> LocalFileRecord {
         guard let remoteURL = URL(string: remoteURLString) else {
             return LocalFileRecord(
@@ -106,7 +109,19 @@ public actor GeneratedFilesStore {
             )
 
             DiagnosticsLogger.fileSyncStart(remoteURL: remoteURLString, destination: destinationURL.path)
-            let (data, response) = try await session.data(from: fetchURLResolved)
+            let (data, response): (Data, URLResponse)
+            if let authToken = Self.bearerTokenForProjectFileFetch(
+                url: fetchURLResolved,
+                bearerToken: bearerToken,
+                authorizedApiBaseURLString: authorizedApiBaseURLString
+            ) {
+                var request = URLRequest(url: fetchURLResolved)
+                request.httpMethod = "GET"
+                request.setValue("Bearer \(authToken)", forHTTPHeaderField: "Authorization")
+                (data, response) = try await session.data(for: request)
+            } else {
+                (data, response) = try await session.data(from: fetchURLResolved)
+            }
             if let http = response as? HTTPURLResponse, !(200...299).contains(http.statusCode) {
                 let message = "HTTP \(http.statusCode)"
                 DiagnosticsLogger.fileSyncFailure(remoteURL: remoteURLString, destination: destinationURL.path, message: message)
@@ -152,6 +167,24 @@ public actor GeneratedFilesStore {
                 errorMessage: error.localizedDescription
             )
         }
+    }
+
+    /// Returns the trimmed bearer token when the fetch URL is a Cinefuse project file on the same host as ``authorizedApiBaseURLString``.
+    private nonisolated static func bearerTokenForProjectFileFetch(
+        url: URL,
+        bearerToken: String?,
+        authorizedApiBaseURLString: String?
+    ) -> String? {
+        let token = bearerToken?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !token.isEmpty else { return nil }
+        let baseStr = authorizedApiBaseURLString?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !baseStr.isEmpty, let baseURL = URL(string: baseStr), let baseHost = baseURL.host, let urlHost = url.host else {
+            return nil
+        }
+        guard baseHost.caseInsensitiveCompare(urlHost) == .orderedSame else { return nil }
+        let path = url.path.lowercased()
+        guard path.contains("/api/v1/cinefuse/projects/"), path.contains("/files/") else { return nil }
+        return token
     }
 
     public func thumbnailURL(
