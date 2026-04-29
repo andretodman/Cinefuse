@@ -584,6 +584,8 @@ struct ProjectWorkspaceScreen: View {
     @State private var jobKindDraft = "clip"
     @State private var isLoadingProjectDetails = false
     @State private var isRefreshingProjectDetails = false
+    /// When true, the next `loadSelectedProjectDetails` exit will run another refresh (coalesces concurrent callers).
+    @State private var pendingReloadSelectedProjectDetails = false
     @State private var isRefreshingStatusSnapshot = false
     @State private var hasLiveEventsConnection = false
     @State private var editorSettings = EditorSettingsModel()
@@ -1552,6 +1554,7 @@ struct ProjectWorkspaceScreen: View {
 
     private func closeProject() {
         selectedProjectId = nil
+        pendingReloadSelectedProjectDetails = false
         scenes = []
         characters = []
         quotedShotCost = nil
@@ -1956,6 +1959,8 @@ struct ProjectWorkspaceScreen: View {
             return
         }
         if isRefreshingProjectDetails {
+            pendingReloadSelectedProjectDetails = true
+            appendDebugEvent("project refresh coalesced (already refreshing)")
             return
         }
         isRefreshingProjectDetails = true
@@ -2019,6 +2024,10 @@ struct ProjectWorkspaceScreen: View {
             appendDebugEvent("project refresh failed reason=\(error.localizedDescription)")
             model.errorMessage = error.localizedDescription
         }
+        if pendingReloadSelectedProjectDetails {
+            pendingReloadSelectedProjectDetails = false
+            await loadSelectedProjectDetails(showLoadingIndicator: false)
+        }
     }
 
     private func monitorInFlightJobs() async {
@@ -2027,8 +2036,14 @@ struct ProjectWorkspaceScreen: View {
             await MainActor.run {
                 updateLifecycleTimeouts()
             }
-            if scenePhase == .active && hasInFlightWork && !hasLiveEventsConnection {
-                await loadSelectedProjectDetails(showLoadingIndicator: false)
+            // SSE does not guarantee delivery (proxies, reconnects). Poll timeline+jobs while work is in flight,
+            // even when the event stream is connected, so UI cannot stick at an early progress tick.
+            if scenePhase == .active && hasInFlightWork {
+                if hasLiveEventsConnection {
+                    await refreshGenerationStatusSnapshot()
+                } else {
+                    await loadSelectedProjectDetails(showLoadingIndicator: false)
+                }
             }
             try? await Task.sleep(nanoseconds: 1_200_000_000)
         }
@@ -2175,14 +2190,24 @@ struct ProjectWorkspaceScreen: View {
                     state.lastMeaningfulTransitionAt = eventDate
                 }
             }
-            let clipKind = priorJob?.kind ?? "clip"
-            if clipKind == "clip",
+            let jobKind = priorJob?.kind ?? "clip"
+            if ["clip", "audio"].contains(jobKind),
                let shotIdForClip = event.shotId ?? priorJob?.shotId {
                 let statusMoved = (event.status ?? priorJobStatus) != priorJobStatus
                 let progressMoved = event.progressPct != nil && event.progressPct != priorJobProgress
                 if statusMoved || progressMoved {
                     let eventDate = parseISODate(event.timestamp)
                     upsertShotRequestState(shotIdForClip) { s in
+                        s.lastMeaningfulTransitionAt = eventDate
+                        s.lastEventAt = eventDate
+                        s.source = "events"
+                    }
+                }
+                if event.status == "done" || event.status == "failed" {
+                    let eventDate = parseISODate(event.timestamp)
+                    upsertShotRequestState(shotIdForClip) { s in
+                        s.stage = event.status == "done" ? .done : .failed
+                        s.lastKnownStatus = event.status == "done" ? "ready" : "failed"
                         s.lastMeaningfulTransitionAt = eventDate
                         s.lastEventAt = eventDate
                         s.source = "events"
@@ -2217,43 +2242,24 @@ struct ProjectWorkspaceScreen: View {
                     outputCreated: job.outputCreated,
                     updatedAt: event.timestamp
                 )
-            } else if let shotId = event.shotId {
-                jobs.append(
-                    Job(
-                        id: jobId,
-                        projectId: event.projectId,
-                        shotId: shotId,
-                        kind: "clip",
-                        status: event.status ?? "queued",
-                        progressPct: event.progressPct,
-                        costToUsCents: 0,
-                        promptText: nil,
-                        modelId: nil,
-                        errorMessage: nil,
-                        outputUrl: nil,
-                        requestId: nil,
-                        idempotencyKey: nil,
-                        invokeState: nil,
-                        falEndpoint: nil,
-                        falStatusUrl: nil,
-                        providerEndpoint: nil,
-                        providerStatusCode: nil,
-                        providerResponseSnippet: nil,
-                        skippedFeature: nil,
-                        featureError: nil,
-                        providerAdapter: nil,
-                        outputCreated: nil,
-                        updatedAt: event.timestamp
-                    )
-                )
+            } else if event.shotId != nil {
+                appendDebugEvent("job event for unknown job id=\(jobId); refreshing snapshot")
+                Task {
+                    await refreshGenerationStatusSnapshot()
+                }
             }
             if event.status == "done" {
                 appendDebugEvent("job final job=\(jobId) status=done progress=\(event.progressPct.map(String.init) ?? "n/a")")
                 Task {
+                    await refreshGenerationStatusSnapshot()
                     await loadSelectedProjectDetails(showLoadingIndicator: false)
                 }
             } else if event.status == "failed" {
                 appendDebugEvent("job final job=\(jobId) status=failed progress=\(event.progressPct.map(String.init) ?? "n/a")")
+                Task {
+                    await refreshGenerationStatusSnapshot()
+                    await loadSelectedProjectDetails(showLoadingIndicator: false)
+                }
             }
         case "shot_deleted":
             guard let shotId = event.shotId else { return }
@@ -6360,9 +6366,8 @@ struct ShotsPanel: View {
     }
 
     private func renderProgress(for shot: Shot) -> Int? {
-        let candidates = jobs.filter { $0.shotId == shot.id }.compactMap(\.progressPct)
-        if let latest = candidates.last {
-            return max(0, min(100, latest))
+        if let p = latestJob(for: shot.id)?.progressPct {
+            return max(0, min(100, p))
         }
         switch shot.status {
         case "queued":
@@ -7659,6 +7664,26 @@ private func shotArtifactStatusPresentation(
             "Error: \(localRecord?.errorMessage ?? "file sync failed")"
         ] + requestLines
         return ArtifactStatusPresentation(level: .error, summary: "\(artifactNoun) rendered but local file sync failed", details: details.joined(separator: "\n"))
+    }
+
+    if shotJobCompleted, shot.status != "ready", shot.status != "failed" {
+        let details = [
+            "\(artifactNoun): \(shot.id)",
+            "Status: \(shot.status) (timeline row may lag after job completes)",
+            "Prompt: \(shot.prompt)",
+            "Model tier: \(shot.modelTier)",
+            "Job: \(job?.status ?? "unknown") / invoke: \(displayValue(job?.invokeState, missing: "unknown"))",
+            "Remote URL: \(displayValue(shot.clipUrl, missing: "not produced"))",
+            "Request ID: \(displayValue(job?.requestId, missing: "not provided by provider"))",
+            "Idempotency key: \(displayValue(job?.idempotencyKey, missing: "not set"))",
+            "Provider adapter: \(displayValue(job?.providerAdapter, missing: "not reported"))",
+            "Provider endpoint: \(displayValue(job?.providerEndpoint ?? job?.falEndpoint, missing: "unknown"))"
+        ] + requestLines
+        return ArtifactStatusPresentation(
+            level: .warning,
+            summary: "\(artifactNoun) finished on server — refreshing timeline",
+            details: details.joined(separator: "\n")
+        )
     }
 
     let details = [
