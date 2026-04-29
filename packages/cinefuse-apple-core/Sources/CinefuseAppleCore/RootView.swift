@@ -584,6 +584,7 @@ struct ProjectWorkspaceScreen: View {
     @State private var jobKindDraft = "clip"
     @State private var isLoadingProjectDetails = false
     @State private var isRefreshingProjectDetails = false
+    @State private var isRefreshingStatusSnapshot = false
     @State private var hasLiveEventsConnection = false
     @State private var editorSettings = EditorSettingsModel()
     @State private var showSettingsPanel = false
@@ -769,8 +770,47 @@ struct ProjectWorkspaceScreen: View {
             },
             onExportAudioMix: { Task { await exportLayeredAudioMix() } },
             onAddAudioTrack: { Task { await addEmptyAudioLane() } },
-            onRefreshStatusDetails: { Task { await loadSelectedProjectDetails(showLoadingIndicator: true) } }
+            onRefreshStatusDetails: { await refreshGenerationStatusSnapshot() }
         )
+    }
+
+    /// Re-fetches timeline + jobs only (no scenes/characters/blueprints, no file sync, no full-page loading).
+    private func refreshGenerationStatusSnapshot() async {
+        guard let selectedProjectId else { return }
+        if isRefreshingProjectDetails || isRefreshingStatusSnapshot {
+            return
+        }
+        isRefreshingStatusSnapshot = true
+        defer { isRefreshingStatusSnapshot = false }
+        do {
+            async let timeline = api.listTimeline(token: model.bearerToken, projectId: selectedProjectId)
+            async let projectJobs = api.listJobs(token: model.bearerToken, projectId: selectedProjectId)
+            let latestTimeline = try await timeline
+            let latestJobs = try await projectJobs
+            let filteredJobs = latestJobs.filter { $0.status != "deleted" }
+            await MainActor.run {
+                var transaction = Transaction()
+                transaction.animation = nil
+                withTransaction(transaction) {
+                    shots = latestTimeline.shots
+                    audioTracks = latestTimeline.audioTracks
+                    jobs = filteredJobs
+                    let keptShotIds = Set(latestTimeline.shots.map(\.id))
+                    shotSoundSourceById = shotSoundSourceById.filter { keptShotIds.contains($0.key) }
+                    selectedSoundBlueprintIdsByShotId = selectedSoundBlueprintIdsByShotId.filter {
+                        keptShotIds.contains($0.key)
+                    }
+                }
+                syncRequestStatesFromSnapshot(shots: latestTimeline.shots, jobs: filteredJobs)
+                appendDebugEvent("status snapshot refresh shots=\(latestTimeline.shots.count) jobs=\(filteredJobs.count)")
+                model.errorMessage = nil
+            }
+        } catch {
+            await MainActor.run {
+                appendDebugEvent("status snapshot refresh failed reason=\(error.localizedDescription)")
+                model.errorMessage = error.localizedDescription
+            }
+        }
     }
 
     private func createSoundBlueprint(request: CreateSoundBlueprintRequest) async {
@@ -3084,7 +3124,7 @@ struct ProjectDetailScreen: View {
     let onPlayBlueprintReferenceFile: (String) -> Void
     let onExportAudioMix: () -> Void
     let onAddAudioTrack: () -> Void
-    let onRefreshStatusDetails: () -> Void
+    let onRefreshStatusDetails: () async -> Void
     @AppStorage("cinefuse.editor.leftPaneWidth") private var leftPaneWidth: Double = 460
     @AppStorage("cinefuse.editor.rightPaneWidth") private var rightPaneWidth: Double = 460
     @AppStorage("cinefuse.editor.bottomPaneHeight") private var bottomPaneHeight: Double = 240
@@ -3892,8 +3932,8 @@ struct ProjectDetailScreen: View {
             onRetryJob: onRetryJob,
             onDeleteJob: onDeleteJob,
             showTooltips: showTooltips,
-                    isCollapsed: $collapseJobsPanel,
-                    onRefreshStatusDetails: onRefreshStatusDetails
+            isCollapsed: $collapseJobsPanel,
+            onRefreshStatusDetails: onRefreshStatusDetails
         )
     }
 
@@ -6156,9 +6196,10 @@ struct ShotsPanel: View {
     @Binding var selectedTimelineShotId: String?
     let soundSourceLabel: (Shot) -> String
     @Binding var soundTagsDraft: String
-    let onRefreshStatusDetails: () -> Void
+    let onRefreshStatusDetails: () async -> Void
     @State private var pendingDeleteShotId: String?
     @State private var selectedDiagnostics: ArtifactStatusPresentation?
+    @State private var diagnosticsSheetShotId: String?
     @State private var soundTagsByShotId: [String: String] = [:]
     @Environment(\.openURL) private var openURL
 
@@ -6168,6 +6209,11 @@ struct ShotsPanel: View {
         formatter.unitsStyle = .short
         return formatter
     }()
+
+    private var playRenderClipButtonLabel: some View {
+        Label("Play Render", systemImage: "play.circle")
+            .font(CinefuseTokens.Typography.caption.weight(.semibold))
+    }
 
     private func renderProgress(for shot: Shot) -> Int? {
         let candidates = jobs.filter { $0.shotId == shot.id }.compactMap(\.progressPct)
@@ -6503,6 +6549,7 @@ struct ShotsPanel: View {
                                             }
                                         }
                                         .onTapGesture {
+                                            diagnosticsSheetShotId = shot.id
                                             selectedDiagnostics = presentation
                                         }
                                     if shot.status.lowercased() != "ready" {
@@ -6655,8 +6702,7 @@ struct ShotsPanel: View {
                                         onPreviewShot(shot.id)
                                         openURL(url)
                                     } label: {
-                                        Label("Play Render", systemImage: "play.circle")
-                                            .font(CinefuseTokens.Typography.caption.weight(.semibold))
+                                        playRenderClipButtonLabel
                                     }
                                     .frame(maxWidth: .infinity, alignment: .leading)
                                     .tooltip("Open rendered clip playback", enabled: showTooltips)
@@ -6724,8 +6770,17 @@ struct ShotsPanel: View {
         } message: {
             Text("This removes the shot and related render jobs from the project.")
         }
-        .sheet(item: $selectedDiagnostics) { details in
-            StatusDetailsSheet(details: details, onRefresh: onRefreshStatusDetails)
+        .sheet(item: $selectedDiagnostics, onDismiss: {
+            diagnosticsSheetShotId = nil
+        }) { details in
+            StatusDetailsSheet(details: details, onRefresh: {
+                await onRefreshStatusDetails()
+                await MainActor.run {
+                    if let id = diagnosticsSheetShotId, let shot = shots.first(where: { $0.id == id }) {
+                        selectedDiagnostics = statusPresentation(for: shot)
+                    }
+                }
+            })
         }
     }
 }
@@ -6743,10 +6798,11 @@ struct JobsPanel: View {
     let onDeleteJob: (String) -> Void
     let showTooltips: Bool
     @Binding var isCollapsed: Bool
-    let onRefreshStatusDetails: () -> Void
+    let onRefreshStatusDetails: () async -> Void
     @AppStorage("cinefuse.editor.jobs.showCompleted") private var showCompletedJobs = false
     @State private var pendingDeleteJobId: String?
     @State private var selectedDiagnostics: ArtifactStatusPresentation?
+    @State private var diagnosticsSheetJobId: String?
 
     private let completedJobStatuses: Set<String> = ["done", "ready", "completed", "success"]
     private let terminalJobStatusesForProgress: Set<String> = [
@@ -6869,6 +6925,7 @@ struct JobsPanel: View {
                                             GenerationStatusDot(status: presentation)
                                                 .tooltip(presentation.summary, enabled: showTooltips)
                                                 .onTapGesture {
+                                                    diagnosticsSheetJobId = job.id
                                                     selectedDiagnostics = presentation
                                                 }
                                             Text(job.kind.capitalized)
@@ -6970,8 +7027,17 @@ struct JobsPanel: View {
         } message: {
             Text("This removes the job from the render track.")
         }
-        .sheet(item: $selectedDiagnostics) { details in
-            StatusDetailsSheet(details: details, onRefresh: onRefreshStatusDetails)
+        .sheet(item: $selectedDiagnostics, onDismiss: {
+            diagnosticsSheetJobId = nil
+        }) { details in
+            StatusDetailsSheet(details: details, onRefresh: {
+                await onRefreshStatusDetails()
+                await MainActor.run {
+                    if let id = diagnosticsSheetJobId, let job = jobs.first(where: { $0.id == id }) {
+                        selectedDiagnostics = statusPresentation(for: job)
+                    }
+                }
+            })
         }
     }
 }
@@ -7118,7 +7184,9 @@ private func requestTimelineLines(_ requestState: RenderRequestState?) -> [Strin
 
     if let sent = requestState.requestSentAt {
         let durationSeconds: Int
-        if let terminal = requestState.lastMeaningfulTransitionAt, !requestState.stage.isTimeoutCandidate {
+        if requestState.stage == .timedOut {
+            durationSeconds = max(0, Int(Date().timeIntervalSince(sent)))
+        } else if let terminal = requestState.lastMeaningfulTransitionAt, !requestState.stage.isTimeoutCandidate {
             durationSeconds = max(0, Int(terminal.timeIntervalSince(sent)))
         } else if let received = requestState.responseReceivedAt {
             durationSeconds = max(0, Int(received.timeIntervalSince(sent)))
@@ -7459,10 +7527,10 @@ struct GenerationStatusDot: View {
 
 struct StatusDetailsSheet: View {
     let details: ArtifactStatusPresentation
-    let onRefresh: (() -> Void)?
+    let onRefresh: (() async -> Void)?
     @Environment(\.dismiss) private var dismiss
 
-    init(details: ArtifactStatusPresentation, onRefresh: (() -> Void)? = nil) {
+    init(details: ArtifactStatusPresentation, onRefresh: (() async -> Void)? = nil) {
         self.details = details
         self.onRefresh = onRefresh
     }
@@ -7475,12 +7543,12 @@ struct StatusDetailsSheet: View {
                 Spacer()
                 if let onRefresh {
                     Button {
-                        onRefresh()
+                        Task { await onRefresh() }
                     } label: {
                         Image(systemName: "arrow.clockwise")
                     }
                     .buttonStyle(SecondaryActionButtonStyle())
-                    .help("Refresh status")
+                    .help("Refresh status from server")
                 }
                 Button("Copy Diagnostics") {
                     copyTextToClipboard(details.details)
