@@ -28,6 +28,13 @@ enum DiagnosticsLogger {
         renderLogger.info("\(message, privacy: .public)")
     }
 
+    /// Full diagnostics body when the user opens the status sheet (truncated for log size).
+    static func renderPipelineSheet(summary: String, details: String) {
+        let cap = 1600
+        let clipped = details.count > cap ? String(details.prefix(cap)) + "…" : details
+        renderLogger.info("[render_pipeline] sheet_open summary=\(summary, privacy: .public) details=\(clipped, privacy: .public)")
+    }
+
     static func fileSyncStart(remoteURL: String, destination: String) {
         fileSyncLogger.info("sync start remote=\(remoteURL, privacy: .public) destination=\(destination, privacy: .public)")
     }

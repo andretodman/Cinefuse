@@ -1708,8 +1708,14 @@ struct ProjectWorkspaceScreen: View {
                 }
                 if changed {
                     state.lastMeaningfulTransitionAt = Date()
-                    if shot.status == "ready" || shot.status == "failed" {
+                    if shot.status == "ready" {
                         appendDebugEvent("snapshot shot final shot=\(shot.id) status=\(shot.status)")
+                    } else if shot.status == "failed" {
+                        let j = latestJobByShotId[shot.id]
+                        let err = j?.errorMessage.map { String($0.prefix(220)) } ?? ""
+                        appendDebugEvent(
+                            "snapshot shot final shot=\(shot.id) status=failed job=\(j?.id ?? "-") kind=\(j?.kind ?? "-") err=\(err)"
+                        )
                     }
                 } else if progressAdvanced {
                     state.lastMeaningfulTransitionAt = Date()
@@ -1771,7 +1777,18 @@ struct ProjectWorkspaceScreen: View {
                     state.lastMeaningfulTransitionAt = stateDate ?? Date()
                     state.lastEventAt = stateDate ?? state.lastEventAt
                     if job.status == "done" || job.status == "failed" {
-                        appendDebugEvent("snapshot job final job=\(job.id) status=\(job.status) progress=\(job.progressPct.map(String.init) ?? "n/a")")
+                        let err = job.errorMessage.map { String($0.prefix(220)) } ?? ""
+                        let fe = [job.featureError?.reason, job.featureError?.detail]
+                            .compactMap { $0 }
+                            .joined(separator: " | ")
+                        appendDebugEvent(
+                            "snapshot job final job=\(job.id) kind=\(job.kind) status=\(job.status) progress=\(job.progressPct.map(String.init) ?? "n/a") shot=\(job.shotId ?? "-") err=\(err) featureErr=\(fe)"
+                        )
+                    } else if changed, job.status == "queued" {
+                        let started = !providerPipelineNotStarted(job: job)
+                        appendDebugEvent(
+                            "snapshot job queued job=\(job.id) kind=\(job.kind) shot=\(job.shotId ?? "-") provider_started=\(started) updatedAt=\(job.updatedAt ?? "?")"
+                        )
                     }
                 }
                 if state.stage == .running, state.responseReceivedAt == nil {
@@ -2255,7 +2272,10 @@ struct ProjectWorkspaceScreen: View {
                     await loadSelectedProjectDetails(showLoadingIndicator: false)
                 }
             } else if event.status == "failed" {
-                appendDebugEvent("job final job=\(jobId) status=failed progress=\(event.progressPct.map(String.init) ?? "n/a")")
+                let errNote = jobs.first(where: { $0.id == jobId })?.errorMessage.map { String($0.prefix(220)) } ?? ""
+                appendDebugEvent(
+                    "job final job=\(jobId) status=failed progress=\(event.progressPct.map(String.init) ?? "n/a") err=\(errNote)"
+                )
                 Task {
                     await refreshGenerationStatusSnapshot()
                     await loadSelectedProjectDetails(showLoadingIndicator: false)
@@ -2466,7 +2486,9 @@ struct ProjectWorkspaceScreen: View {
                 state.lastKnownStatus = generation.job.status
                 state.source = "api-response"
             }
-            appendDebugEvent("generate shot queued shot=\(shotId) job=\(generation.job.id)")
+            appendDebugEvent(
+                "generate shot queued shot=\(shotId) job=\(generation.job.id) kind=\(generation.job.kind) jobStatus=\(generation.job.status) shotStatus=\(generation.shot.status)"
+            )
             await loadSelectedProjectDetails(showLoadingIndicator: false)
             await refreshGenerationStatusSnapshot()
         } catch {
@@ -7330,6 +7352,80 @@ struct RenderRequestState {
     var source: String?
 }
 
+private let pipelineJobInFlightStatuses: Set<String> = ["queued", "generating", "running", "processing"]
+
+private func parseJobUpdatedDate(_ job: Job) -> Date? {
+    guard let value = job.updatedAt?.trimmingCharacters(in: .whitespacesAndNewlines), !value.isEmpty else {
+        return nil
+    }
+    return ISO8601DateFormatter().date(from: value)
+}
+
+private func providerPipelineNotStarted(job: Job) -> Bool {
+    if job.kind == "audio" {
+        let pe = (job.providerEndpoint ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let fe = (job.falEndpoint ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let rid = (job.requestId ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        return pe.isEmpty && fe.isEmpty && (rid.isEmpty || rid == "n/a")
+    }
+    return (job.requestId == nil || job.requestId == "n/a")
+        && (job.falEndpoint == nil || job.falEndpoint == "n/a")
+        && (job.falStatusUrl == nil || job.falStatusUrl == "n/a")
+}
+
+private func featureErrorDebugLines(_ fe: JobFeatureError?) -> [String] {
+    guard let fe else { return [] }
+    var lines: [String] = []
+    if let p = fe.provider?.trimmingCharacters(in: .whitespacesAndNewlines), !p.isEmpty {
+        lines.append("Feature error — provider: \(p)")
+    }
+    if let r = fe.reason?.trimmingCharacters(in: .whitespacesAndNewlines), !r.isEmpty {
+        lines.append("Feature error — reason: \(r)")
+    }
+    if let d = fe.detail?.trimmingCharacters(in: .whitespacesAndNewlines), !d.isEmpty {
+        lines.append("Feature error — detail: \(d)")
+    }
+    return lines
+}
+
+/// Extra lines for status popup / copy-diagnostics when jobs are queued, stalled, or failed.
+private func jobPipelineDebugLines(job: Job, shotStatus: String?) -> [String] {
+    var lines: [String] = []
+    let statusLower = job.status.lowercased()
+    if let u = parseJobUpdatedDate(job) {
+        let age = Int(Date().timeIntervalSince(u))
+        lines.append("Job server clock: updated \(age)s ago (updatedAt)")
+    } else {
+        lines.append("Job server clock: updatedAt missing")
+    }
+    if let mid = job.modelId?.trimmingCharacters(in: .whitespacesAndNewlines), !mid.isEmpty {
+        lines.append("Model id: \(mid)")
+    }
+    lines.append(contentsOf: featureErrorDebugLines(job.featureError))
+    let stub = (job.providerAdapter == "stub") || ((job.providerEndpoint ?? "").hasPrefix("stub://"))
+    if stub {
+        lines.append("Hint: stub media mode — disable CINEFUSE_ALLOW_STUB_MEDIA for a real provider.")
+    }
+    let noProvider = providerPipelineNotStarted(job: job)
+    if statusLower == "queued", noProvider {
+        lines.append(
+            "Queue: no provider endpoints yet — if this persists, run render-worker (Redis queue) or gateway without Redis for in-process dequeue."
+        )
+    }
+    if pipelineJobInFlightStatuses.contains(statusLower), let u = parseJobUpdatedDate(job) {
+        let age = Int(Date().timeIntervalSince(u))
+        if age > 20 {
+            lines.append(
+                "Stall check: job status=\(job.status) but updatedAt is \(age)s old — verify SSE/polling, gateway, and worker logs."
+            )
+        }
+    }
+    if let ss = shotStatus?.lowercased(), ss == "queued", noProvider, statusLower == "queued" {
+        lines.append("Shot and job both queued with no provider activity — upstream handoff may be blocked.")
+    }
+    return lines
+}
+
 /// Prefer gateway-reported job errors over locally inferred client copy (snapshot may set a generic shot failure string first).
 private func primaryArtifactFailureMessage(
     job: Job?,
@@ -7342,6 +7438,8 @@ private func primaryArtifactFailureMessage(
         return t
     }
     return trimmedNonEmpty(job?.errorMessage)
+        ?? trimmedNonEmpty(job?.featureError?.detail)
+        ?? trimmedNonEmpty(job?.featureError?.reason)
         ?? trimmedNonEmpty(requestState?.errorMessage)
         ?? trimmedNonEmpty(localRecord?.errorMessage)
         ?? fallback
@@ -7448,7 +7546,7 @@ private func artifactStatusPresentation(
             "Output file created: \(job.outputCreated == true ? "yes" : (job.outputCreated == false ? "no" : "unknown"))",
             "Remote URL: \(displayValue(remoteURLForDetails, missing: "not produced"))",
             "Local file: \(displayValue(localRecord?.localPath, missing: "not applicable"))"
-        ] + requestLines
+        ] + jobPipelineDebugLines(job: job, shotStatus: nil) + requestLines
         return ArtifactStatusPresentation(
             level: .warning,
             summary: "Audio feature skipped (non-blocking)",
@@ -7479,8 +7577,8 @@ private func artifactStatusPresentation(
             "Prompt: \(displayValue(job.promptText, missing: "not captured"))",
             "Remote URL: \(displayValue(remoteURLForDetails, missing: "not produced"))",
             "Local file: \(displayValue(localRecord?.localPath, missing: "not available"))",
-            "Error: \(requestState?.errorMessage ?? job.errorMessage ?? localRecord?.errorMessage ?? "request timed out or failed")"
-        ] + apiEvidence + requestLines
+            "Error: \(primaryArtifactFailureMessage(job: job, requestState: requestState, localRecord: localRecord, fallback: "request timed out or failed"))"
+        ] + apiEvidence + jobPipelineDebugLines(job: job, shotStatus: nil) + requestLines
         return ArtifactStatusPresentation(
             level: .error,
             summary: "Request timed out or failed",
@@ -7494,8 +7592,8 @@ private func artifactStatusPresentation(
             "Prompt: \(displayValue(job.promptText, missing: "not captured"))",
             "Remote URL: \(displayValue(remoteURLForDetails, missing: "not produced"))",
             "Local file: \(displayValue(localRecord?.localPath, missing: "not available"))",
-            "Error: \(job.errorMessage ?? localRecord?.errorMessage ?? "unknown")"
-        ] + apiEvidence + requestLines
+            "Error: \(primaryArtifactFailureMessage(job: job, requestState: requestState, localRecord: localRecord, fallback: "unknown"))"
+        ] + apiEvidence + jobPipelineDebugLines(job: job, shotStatus: nil) + requestLines
         let detailText = details.joined(separator: "\n")
         return ArtifactStatusPresentation(
             level: .error,
@@ -7527,7 +7625,7 @@ private func artifactStatusPresentation(
         "Prompt: \(displayValue(job.promptText, missing: "not captured"))",
         "Remote URL: \(displayValue(remoteURLForDetails, missing: "pending"))",
         "Local file: pending"
-    ] + apiEvidence + requestLines
+    ] + apiEvidence + jobPipelineDebugLines(job: job, shotStatus: nil) + requestLines
     let waitingSummary: String
     if requestState?.stage == .responseReceived {
         waitingSummary = "API called and accepted; waiting for worker updates"
@@ -7630,7 +7728,8 @@ private func shotArtifactStatusPresentation(
             "Provider status URL: \(displayValue(job?.falStatusUrl, missing: "not available"))",
             "Provider status code: \(displayCode(job?.providerStatusCode, missing: "not available"))",
             "Error: \(primaryArtifactFailureMessage(job: job, requestState: requestState, localRecord: localRecord, fallback: "request timed out or failed"))"
-        ] + (stubGuidance.map { ["Hint: \($0)"] } ?? []) + queueStuckHint + requestLines
+        ] + (stubGuidance.map { ["Hint: \($0)"] } ?? []) + queueStuckHint
+            + (job.map { jobPipelineDebugLines(job: $0, shotStatus: shot.status) } ?? []) + requestLines
         return ArtifactStatusPresentation(
             level: .error,
             summary: "\(artifactNoun) request timed out or failed",
@@ -7652,8 +7751,9 @@ private func shotArtifactStatusPresentation(
             "Provider endpoint: \(displayValue(job?.providerEndpoint ?? job?.falEndpoint, missing: "provider not started yet"))",
             "Provider status URL: \(displayValue(job?.falStatusUrl, missing: "not available"))",
             "Provider status code: \(displayCode(job?.providerStatusCode, missing: "not available"))",
-            "Error: \(job?.errorMessage ?? localRecord?.errorMessage ?? "unknown")"
-        ] + (stubGuidance.map { ["Hint: \($0)"] } ?? []) + requestLines
+            "Error: \(primaryArtifactFailureMessage(job: job, requestState: requestState, localRecord: localRecord, fallback: "unknown"))"
+        ] + (stubGuidance.map { ["Hint: \($0)"] } ?? [])
+            + (job.map { jobPipelineDebugLines(job: $0, shotStatus: shot.status) } ?? []) + requestLines
         return ArtifactStatusPresentation(level: .error, summary: "\(artifactNoun) generation failed", details: details.joined(separator: "\n"))
     }
 
@@ -7726,7 +7826,7 @@ private func shotArtifactStatusPresentation(
         "Provider endpoint: \(displayValue(job?.providerEndpoint ?? job?.falEndpoint, missing: "provider not started yet"))",
         "Provider status URL: \(displayValue(job?.falStatusUrl, missing: "not available"))",
         "Provider status code: \(displayCode(job?.providerStatusCode, missing: "not available"))"
-    ] + requestLines
+    ] + (job.map { jobPipelineDebugLines(job: $0, shotStatus: shot.status) } ?? []) + requestLines
     let providerNotStarted: Bool
     if job?.kind == "audio" {
         let pe = (job?.providerEndpoint ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
@@ -7826,6 +7926,9 @@ struct StatusDetailsSheet: View {
         }
         .padding(CinefuseTokens.Spacing.m)
         .frame(minWidth: 520, minHeight: 320)
+        .onAppear {
+            DiagnosticsLogger.renderPipelineSheet(summary: details.summary, details: details.details)
+        }
     }
 }
 

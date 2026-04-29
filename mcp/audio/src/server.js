@@ -179,6 +179,48 @@ function resolveElevenLabsApiBase() {
 }
 
 /**
+ * Reject obvious non-audio bodies (JSON errors, HTML) that must not be uploaded as MP3.
+ * ElevenLabs normally returns raw MP3 (`application/octet-stream`); misconfigured regions or proxies may return JSON.
+ */
+export function validateElevenLabsMusicBinaryBody(buffer, contentTypeHeader) {
+  const ct = (contentTypeHeader ?? "").toLowerCase();
+  if (ct.includes("application/json")) {
+    const preview = buffer.toString("utf8").slice(0, 1200);
+    throw new Error(`elevenlabs_music_response_was_json_not_audio content-type=${contentTypeHeader}: ${preview}`);
+  }
+  if (!buffer || buffer.length === 0) {
+    throw new Error("elevenlabs_music_empty_body");
+  }
+  if (buffer.length < 32) {
+    const preview = buffer.toString("utf8");
+    if (preview.trimStart().startsWith("{") || preview.trimStart().startsWith("<")) {
+      throw new Error(`elevenlabs_music_tiny_non_audio_body: ${preview.slice(0, 800)}`);
+    }
+    throw new Error(`elevenlabs_music_body_too_small_bytes=${buffer.length}`);
+  }
+  const trimmedUtf = buffer.toString("utf8", 0, Math.min(buffer.length, 400)).trimStart();
+  if (trimmedUtf.startsWith("{") && trimmedUtf.includes('"detail"')) {
+    throw new Error(`elevenlabs_music_json_error_in_binary_channel: ${trimmedUtf.slice(0, 900)}`);
+  }
+}
+
+function collectSongHeaders(response) {
+  /** @type {Record<string, string>} */
+  const out = {};
+  try {
+    for (const [k, v] of response.headers) {
+      const lower = k.toLowerCase();
+      if (lower.includes("song") || lower === "content-type" || lower.includes("request-id")) {
+        out[k] = v;
+      }
+    }
+  } catch {
+    // ignore
+  }
+  return out;
+}
+
+/**
  * ElevenLabs Music: instrumental (or prompt-led) generation via Compose API
  * (`POST /v1/music`, same capability as the ElevenCreative Music product in the web UI).
  * Restricted API keys must include permission `music_generation` or the request returns 403.
@@ -228,16 +270,32 @@ async function elevenLabsComposeMusic({ prompt, musicLengthMs, forceInstrumental
       signal: AbortSignal.timeout(300_000)
     });
     if (response.ok) {
+      const contentType = response.headers.get("content-type");
       const providerRequestId =
         response.headers.get("request-id") ??
         response.headers.get("x-request-id") ??
         response.headers.get("xi-request-id") ??
         null;
       const buffer = Buffer.from(await response.arrayBuffer());
+      try {
+        validateElevenLabsMusicBinaryBody(buffer, contentType);
+      } catch (validationErr) {
+        structuredLog("error", "elevenlabs_music_body_validation_failed", {
+          musicLengthMs: length,
+          outputFormat,
+          contentType,
+          songHeaders: collectSongHeaders(response),
+          bytes: buffer.length,
+          message: validationErr instanceof Error ? validationErr.message : String(validationErr)
+        });
+        throw validationErr;
+      }
       structuredLog("info", "elevenlabs_music_compose_ok", {
         bytes: buffer.length,
         musicLengthMs: length,
         outputFormat,
+        contentType: contentType ?? "(missing)",
+        songHeaders: collectSongHeaders(response),
         hasRequestId: Boolean(providerRequestId)
       });
       return { buffer, providerRequestId };
@@ -268,7 +326,7 @@ async function elevenLabsComposeMusic({ prompt, musicLengthMs, forceInstrumental
   const planHint =
     lastStatus === 402
     || /pcm|44\.?1|output_format|format|tier|plan|subscription|quota|credit/i.test(lastBody)
-      ? " Creator supports Music API with MP3 (e.g. mp3_44100_128). Pro adds PCM 44.1kHz via API; if you overrode ELEVENLABS_MUSIC_OUTPUT_FORMAT with PCM, remove it. EU residency: set ELEVENLABS_API_BASE_URL (see ElevenLabs docs for your region)."
+      ? " Creator supports Music API with MP3 (e.g. mp3_44100_128). Pro adds PCM 44.1kHz via API; if you overrode ELEVENLABS_MUSIC_OUTPUT_FORMAT with PCM, remove it. Data residency: use the API host ElevenLabs assigns (set ELEVENLABS_API_BASE_URL to https://api.eu.residency.elevenlabs.io or https://api.us.elevenlabs.io if requests succeed but binary responses look wrong)."
       : "";
   throw new Error(
     `elevenlabs_music_http_${lastStatus} (format=${lastFormat}): ${lastBody.slice(0, 800)}${permissionHint}${planHint}`
@@ -406,14 +464,32 @@ async function uploadAudioBuffer(buffer, contentType = "audio/mpeg", options = {
     signal: AbortSignal.timeout(120_000)
   });
   if (!response.ok) {
-    throw new Error(`audio_upload_error (${response.status}): ${await response.text()}`);
+    const errText = await response.text();
+    structuredLog("error", "audio_upload_http_failed", {
+      status: response.status,
+      uploadHost: (() => {
+        try {
+          return new URL(uploadUrl).host;
+        } catch {
+          return "";
+        }
+      })(),
+      detail: errText.slice(0, 1200)
+    });
+    throw new Error(`audio_upload_error (${response.status}): ${errText}`);
   }
   const payload = await response.json().catch(() => ({}));
   const uploaded = resolveUploadedAssetUrl(payload, uploadUrl, {
     projectId: useWorkerIngest ? options.uploadProjectId : undefined
   });
   if (typeof uploaded !== "string" || uploaded.length === 0) {
-    throw new Error("audio_upload_missing_url_in_response");
+    structuredLog("error", "audio_upload_missing_url_in_payload", {
+      payloadKeys: payload && typeof payload === "object" ? Object.keys(payload) : [],
+      payloadSnippet: JSON.stringify(payload).slice(0, 800)
+    });
+    throw new Error(
+      `audio_upload_missing_url_in_response keys=${JSON.stringify(payload && typeof payload === "object" ? Object.keys(payload) : [])}`
+    );
   }
   return uploaded;
 }
