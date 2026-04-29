@@ -118,7 +118,8 @@ function isStubSoundGenerationResult(audioGeneration, track) {
 
 function shouldRejectStubSoundReady() {
   const nodeEnv = (process.env.NODE_ENV ?? "").toLowerCase();
-  return nodeEnv !== "development" && nodeEnv !== "test";
+  // Sound jobs should only emit stub media under node:test contract runs.
+  return nodeEnv !== "test";
 }
 
 /** Minimal valid PCM WAV (~0.35s) for dev stub URLs — quiet tone so files are audibly non-empty (not silent zeros mistaken for corruption). */
@@ -636,7 +637,7 @@ export function createHttpServer() {
           throw new Error(`audio_score_failed: ${detail}`);
         }
         if (shouldRejectStubSoundReady() && isStubSoundGenerationResult(audioGeneration, track)) {
-          throw new Error("audio_score_failed: stub sound output is blocked outside development/test");
+          throw new Error("audio_score_failed: stub sound output is blocked outside test runs");
         }
         console.info("[render] audio.generate_score completed", {
           projectId: task.projectId,
