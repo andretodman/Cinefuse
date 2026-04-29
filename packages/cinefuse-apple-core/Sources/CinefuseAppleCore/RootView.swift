@@ -6256,6 +6256,11 @@ struct ShotsPanel: View {
 
     private func diagnosticsLine(for shot: Shot) -> String? {
         guard let job = latestJob(for: shot.id) else { return nil }
+        let isStubRuntime = (job.providerAdapter == "stub")
+            || ((job.providerEndpoint ?? "").hasPrefix("stub://"))
+        if isStubRuntime {
+            return "Sound diagnostics: Stub media mode active - disable CINEFUSE_ALLOW_STUB_MEDIA and restart app/gateway."
+        }
         if let requestState = shotRequestStateById[shot.id],
            let error = requestState.errorMessage,
            error.localizedCaseInsensitiveContains("retry is only for failed shots") {
@@ -6269,10 +6274,22 @@ struct ShotsPanel: View {
         let updatedText = updatedAt == .distantPast
             ? "update unknown"
             : "updated \(diagnosticsTimestampFormatter.localizedString(for: updatedAt, relativeTo: Date()))"
-        let providerNotStarted = (job.requestId == nil || job.requestId == "n/a")
-            && (job.falEndpoint == nil || job.falEndpoint == "n/a")
-            && (job.falStatusUrl == nil || job.falStatusUrl == "n/a")
+        let providerNotStarted: Bool
+        if panelMode == .audioSounds {
+            let pe = (job.providerEndpoint ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            let fe = (job.falEndpoint ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            let rid = (job.requestId ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            providerNotStarted = pe.isEmpty && fe.isEmpty && (rid.isEmpty || rid == "n/a")
+        } else {
+            providerNotStarted = (job.requestId == nil || job.requestId == "n/a")
+                && (job.falEndpoint == nil || job.falEndpoint == "n/a")
+                && (job.falStatusUrl == nil || job.falStatusUrl == "n/a")
+        }
         let diagLabel = panelMode == .audioSounds ? "Sound diagnostics" : "Render diagnostics"
+        if let rs = shotRequestStateById[shot.id], rs.stage == .timedOut,
+           shot.status == "queued", providerNotStarted, !isStubRuntime {
+            return "\(diagLabel): Timed out while queued — render queue may have no consumer (Redis + render-worker). Start render-worker or use in-process queue without Redis for local dev."
+        }
         if job.status == "queued", age > 30, providerNotStarted {
             return "\(diagLabel): Queued too long (>30s) - worker backlog/offline likely. Check render-worker logs."
         }
@@ -7371,6 +7388,11 @@ private func shotArtifactStatusPresentation(
 
     let requestLines = requestTimelineLines(requestState)
     let artifactNoun = job?.kind == "audio" ? "Sound" : "Shot"
+    let isStubFailure = (job?.providerAdapter == "stub")
+        || ((job?.providerEndpoint ?? "").hasPrefix("stub://"))
+    let stubGuidance = isStubFailure
+        ? "Stub media mode is active in runtime. Disable CINEFUSE_ALLOW_STUB_MEDIA and restart app/gateway."
+        : nil
     if let retryConflict = requestState?.errorMessage,
        retryConflict.localizedCaseInsensitiveContains("retry is only for failed shots") {
         let details = [
@@ -7389,6 +7411,23 @@ private func shotArtifactStatusPresentation(
         )
     }
     if requestState?.stage == .timedOut || requestState?.stage == .failed {
+        let providerNeverReached: Bool
+        if job?.kind == "audio" {
+            let pe = (job?.providerEndpoint ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            let fe = (job?.falEndpoint ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            let rid = (job?.requestId ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            providerNeverReached = pe.isEmpty && fe.isEmpty && (rid.isEmpty || rid == "n/a")
+        } else {
+            providerNeverReached = (job?.requestId == nil || job?.requestId == "n/a")
+                && (job?.falEndpoint == nil || job?.falEndpoint == "n/a")
+                && (job?.falStatusUrl == nil || job?.falStatusUrl == "n/a")
+        }
+        let queueStuckHint: [String] =
+            requestState?.stage == .timedOut && !isStubFailure && shot.status == "queued" && providerNeverReached
+            ? [
+                "Hint: Timed out while still queued with no provider activity. If the gateway uses Redis for the render queue, start render-worker or unset Redis so the gateway processes jobs in-process."
+            ]
+            : []
         let details = [
             "\(artifactNoun): \(shot.id)",
             "Status: \(shot.status)",
@@ -7404,7 +7443,7 @@ private func shotArtifactStatusPresentation(
             "Provider status URL: \(displayValue(job?.falStatusUrl, missing: "not available"))",
             "Provider status code: \(displayCode(job?.providerStatusCode, missing: "not available"))",
             "Error: \(requestState?.errorMessage ?? job?.errorMessage ?? localRecord?.errorMessage ?? "request timed out or failed")"
-        ] + requestLines
+        ] + (stubGuidance.map { ["Hint: \($0)"] } ?? []) + queueStuckHint + requestLines
         return ArtifactStatusPresentation(
             level: .error,
             summary: "\(artifactNoun) request timed out or failed",
@@ -7427,7 +7466,7 @@ private func shotArtifactStatusPresentation(
             "Provider status URL: \(displayValue(job?.falStatusUrl, missing: "not available"))",
             "Provider status code: \(displayCode(job?.providerStatusCode, missing: "not available"))",
             "Error: \(job?.errorMessage ?? localRecord?.errorMessage ?? "unknown")"
-        ] + requestLines
+        ] + (stubGuidance.map { ["Hint: \($0)"] } ?? []) + requestLines
         return ArtifactStatusPresentation(level: .error, summary: "\(artifactNoun) generation failed", details: details.joined(separator: "\n"))
     }
 
@@ -7481,9 +7520,17 @@ private func shotArtifactStatusPresentation(
         "Provider status URL: \(displayValue(job?.falStatusUrl, missing: "not available"))",
         "Provider status code: \(displayCode(job?.providerStatusCode, missing: "not available"))"
     ] + requestLines
-    let providerNotStarted = (job?.requestId == nil || job?.requestId == "n/a")
-        && (job?.falEndpoint == nil || job?.falEndpoint == "n/a")
-        && (job?.falStatusUrl == nil || job?.falStatusUrl == "n/a")
+    let providerNotStarted: Bool
+    if job?.kind == "audio" {
+        let pe = (job?.providerEndpoint ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let fe = (job?.falEndpoint ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let rid = (job?.requestId ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        providerNotStarted = pe.isEmpty && fe.isEmpty && (rid.isEmpty || rid == "n/a")
+    } else {
+        providerNotStarted = (job?.requestId == nil || job?.requestId == "n/a")
+            && (job?.falEndpoint == nil || job?.falEndpoint == "n/a")
+            && (job?.falStatusUrl == nil || job?.falStatusUrl == "n/a")
+    }
     let queuedTooLongLikely = shot.status == "queued" && providerNotStarted
     let summary = requestState?.stage == .responseReceived
         ? "\(artifactNoun) API call accepted; waiting for worker"
@@ -7491,7 +7538,11 @@ private func shotArtifactStatusPresentation(
         ? "Queued: worker backlog/offline likely"
         : "\(artifactNoun) generation still in progress"
     let queuedGuidance = queuedTooLongLikely
-        ? ["Provider call has not started yet; render-worker may be delayed or offline."]
+        ? [
+            job?.kind == "audio"
+                ? "Provider call has not started yet. If Redis backs the render queue, start render-worker or run the gateway without Redis for in-process processing."
+                : "Provider call has not started yet; render-worker may be delayed or offline."
+        ]
         : []
     return ArtifactStatusPresentation(
         level: .warning,
