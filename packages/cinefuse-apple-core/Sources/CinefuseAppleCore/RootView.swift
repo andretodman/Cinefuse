@@ -7047,8 +7047,10 @@ private func copyTextToClipboard(_ value: String) {
 private func artifactStatusPresentation(
     job: Job,
     localRecord: LocalFileRecord?,
-    requestState: RenderRequestState?
+    requestState: RenderRequestState?,
+    remoteURLDisplay: String? = nil
 ) -> ArtifactStatusPresentation {
+    let remoteURLForDetails = remoteURLDisplay ?? job.outputUrl
     let requestLines = requestTimelineLines(requestState)
     if job.skippedFeature == true {
         let reason = job.featureError?.detail
@@ -7060,7 +7062,7 @@ private func artifactStatusPresentation(
             "Feature status: skipped (workflow continues)",
             "Reason: \(reason)",
             "Output file created: \(job.outputCreated == true ? "yes" : (job.outputCreated == false ? "no" : "n/a"))",
-            "Remote URL: \(job.outputUrl ?? "none")",
+            "Remote URL: \(remoteURLForDetails ?? "none")",
             "Local file: \(localRecord?.localPath ?? "not applicable")"
         ] + requestLines
         return ArtifactStatusPresentation(
@@ -7084,7 +7086,7 @@ private func artifactStatusPresentation(
             "Job: \(job.kind) / \(job.status)",
             "Model: \(job.modelId ?? "unknown")",
             "Prompt: \(job.promptText ?? "n/a")",
-            "Remote URL: \(job.outputUrl ?? "n/a")",
+            "Remote URL: \(remoteURLForDetails ?? "n/a")",
             "Local file: \(localRecord?.localPath ?? "not available")",
             "Error: \(requestState?.errorMessage ?? job.errorMessage ?? localRecord?.errorMessage ?? "request timed out or failed")"
         ] + apiEvidence + requestLines
@@ -7099,7 +7101,7 @@ private func artifactStatusPresentation(
             "Job: \(job.kind) / \(job.status)",
             "Model: \(job.modelId ?? "unknown")",
             "Prompt: \(job.promptText ?? "n/a")",
-            "Remote URL: \(job.outputUrl ?? "n/a")",
+            "Remote URL: \(remoteURLForDetails ?? "n/a")",
             "Local file: \(localRecord?.localPath ?? "not available")",
             "Error: \(job.errorMessage ?? localRecord?.errorMessage ?? "unknown")"
         ] + apiEvidence + requestLines
@@ -7116,7 +7118,7 @@ private func artifactStatusPresentation(
             "Job: \(job.kind) / \(job.status)",
             "Model: \(job.modelId ?? "unknown")",
             "Prompt: \(job.promptText ?? "n/a")",
-            "Remote URL: \(job.outputUrl ?? "n/a")",
+            "Remote URL: \(remoteURLForDetails ?? "n/a")",
             "Local file: \(localRecord?.localPath ?? "n/a")",
             "File sync: \(localRecord?.status.rawValue ?? "n/a")"
         ] + apiEvidence + requestLines
@@ -7132,7 +7134,7 @@ private func artifactStatusPresentation(
         "Job: \(job.kind) / \(job.status)",
         "Progress: \(job.progressPct.map(String.init) ?? "n/a")%",
         "Prompt: \(job.promptText ?? "n/a")",
-        "Remote URL: \(job.outputUrl ?? "n/a")",
+        "Remote URL: \(remoteURLForDetails ?? "n/a")",
         "Local file: pending"
     ] + apiEvidence + requestLines
     let waitingSummary: String
