@@ -169,6 +169,23 @@ public struct CreateAudioTrackResponse: Codable {
     public let audioTrack: AudioTrack
 }
 
+/// Response from POST `/audio/dialogue`, `/audio/score`, `/audio/sfx`, `/audio/mix`, `/audio/lipsync`.
+public struct AudioGenerationAPIResponse: Codable {
+    public let audioTrack: AudioTrack?
+    public let job: Job
+    public let sparksCost: Int?
+    public let skipped: Bool?
+    public let skippedFeature: String?
+    public let featureError: JobFeatureError?
+    public let providerAdapter: String?
+}
+
+public struct JobFeatureError: Codable, Sendable, Hashable {
+    public let provider: String?
+    public let reason: String?
+    public let detail: String?
+}
+
 public struct TimelineResponse: Codable {
     public let projectId: String
     public let shots: [Shot]
@@ -205,6 +222,12 @@ public struct Job: Codable, Identifiable {
     public let falStatusUrl: String?
     public let providerStatusCode: Int?
     public let providerResponseSnippet: String?
+    /// When true, the MCP marked this audio feature as skipped (provider limitation); overall flow continues.
+    public let skippedFeature: Bool?
+    public let featureError: JobFeatureError?
+    public let providerAdapter: String?
+    /// Whether a downloadable artifact URL was produced for this job (when applicable).
+    public let outputCreated: Bool?
     public let updatedAt: String?
 }
 

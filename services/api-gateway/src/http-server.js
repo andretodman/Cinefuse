@@ -1172,30 +1172,71 @@ export function createHttpServer() {
         return writeError(response, 404, "project not found", "PROJECT_NOT_FOUND");
       }
       const payload = await readBody(request);
+      const idempotencyKey = typeof payload.idempotencyKey === "string" && payload.idempotencyKey.length > 0
+        ? payload.idempotencyKey
+        : `${audioToolByPath}:${projectId}:${payload.shotId ?? "none"}:${payload.startMs ?? 0}`;
       const audioResult = await mcpHost.invoke("audio", audioToolByPath, {
         ...payload,
-        projectId
+        projectId,
+        idempotencyKey
       });
-      const sparksCost = Number(audioResult.track?.sparksCost ?? 15);
-      await mcpHost.invoke("billing", "debit", {
-        userId: auth.userId,
-        amount: sparksCost,
-        idempotencyKey: `${audioToolByPath}:${projectId}:${payload.shotId ?? "none"}:${payload.startMs ?? 0}`,
-        relatedResourceType: "project",
-        relatedResourceId: projectId
-      });
+      if (audioResult.skipped || !audioResult.track) {
+        const job = await saveJob({
+          id: randomUUID(),
+          projectId,
+          shotId: payload.shotId ?? null,
+          kind: "audio",
+          status: "done",
+          inputPayload: { ...payload, idempotencyKey },
+          outputPayload: {
+            skippedFeature: true,
+            featureError: audioResult.featureError ?? null,
+            providerAdapter: audioResult.adapter ?? null,
+            tool: audioToolByPath,
+            sparksCost: 0,
+            outputCreated: Boolean(audioResult.outputCreated),
+            requestId: idempotencyKey
+          },
+          costToUsCents: 0
+        });
+        publishProjectEvent(projectId, {
+          type: "job_status_changed",
+          jobId: job.id,
+          shotId: payload.shotId ?? null,
+          status: "done"
+        });
+        return json(response, 200, {
+          audioTrack: null,
+          job,
+          sparksCost: 0,
+          skipped: true,
+          skippedFeature: audioResult.skippedFeature ?? audioToolByPath,
+          featureError: audioResult.featureError ?? null,
+          providerAdapter: audioResult.adapter ?? null
+        });
+      }
+      const sparksCost = Number(audioResult.track.sparksCost ?? 15);
+      if (sparksCost > 0) {
+        await mcpHost.invoke("billing", "debit", {
+          userId: auth.userId,
+          amount: sparksCost,
+          idempotencyKey,
+          relatedResourceType: "project",
+          relatedResourceId: projectId
+        });
+      }
       const track = await saveAudioTrack({
-        id: audioResult.track?.id ?? randomUUID(),
+        id: audioResult.track.id ?? randomUUID(),
         projectId,
         shotId: payload.shotId ?? null,
-        kind: audioResult.track?.kind ?? "audio",
-        title: payload.title ?? `${audioResult.track?.kind ?? "Audio"} track`,
-        sourceUrl: audioResult.track?.sourceUrl ?? null,
-        waveformUrl: audioResult.track?.waveformUrl ?? null,
-        laneIndex: audioResult.track?.laneIndex ?? Number(payload.laneIndex ?? 0),
-        startMs: audioResult.track?.startMs ?? Number(payload.startMs ?? 0),
-        durationMs: audioResult.track?.durationMs ?? Number(payload.durationMs ?? 0),
-        status: audioResult.track?.status ?? "ready"
+        kind: audioResult.track.kind ?? "audio",
+        title: payload.title ?? `${audioResult.track.kind ?? "Audio"} track`,
+        sourceUrl: audioResult.track.sourceUrl ?? null,
+        waveformUrl: audioResult.track.waveformUrl ?? null,
+        laneIndex: audioResult.track.laneIndex ?? Number(payload.laneIndex ?? 0),
+        startMs: audioResult.track.startMs ?? Number(payload.startMs ?? 0),
+        durationMs: audioResult.track.durationMs ?? Number(payload.durationMs ?? 0),
+        status: audioResult.track.status ?? "ready"
       });
       const job = await saveJob({
         id: randomUUID(),
@@ -1203,9 +1244,17 @@ export function createHttpServer() {
         shotId: payload.shotId ?? null,
         kind: "audio",
         status: "done",
-        inputPayload: payload,
-        outputPayload: { track, sparksCost },
-        costToUsCents: Number(audioResult.track?.costToUsCents ?? 0)
+        inputPayload: { ...payload, idempotencyKey },
+        outputPayload: {
+          track,
+          sparksCost,
+          skippedFeature: false,
+          outputCreated: true,
+          providerAdapter: audioResult.adapter ?? audioResult.track.providerAdapter ?? null,
+          modelId: typeof audioResult.track.providerAdapter === "string" ? audioResult.track.providerAdapter : null,
+          requestId: idempotencyKey
+        },
+        costToUsCents: Number(audioResult.track.costToUsCents ?? 0)
       });
       publishProjectEvent(projectId, {
         type: "job_status_changed",
@@ -1213,7 +1262,15 @@ export function createHttpServer() {
         shotId: track.shotId ?? null,
         status: "done"
       });
-      return json(response, 200, { audioTrack: track, job, sparksCost });
+      return json(response, 200, {
+        audioTrack: track,
+        job,
+        sparksCost,
+        skipped: false,
+        skippedFeature: null,
+        featureError: null,
+        providerAdapter: audioResult.adapter ?? null
+      });
     }
     const stitchToolByPath = stitchPreviewMatch
       ? "preview_stitch"

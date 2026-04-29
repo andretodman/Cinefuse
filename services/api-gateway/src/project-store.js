@@ -211,6 +211,22 @@ function mapSceneRow(row) {
   };
 }
 
+function memoryJobToRow(job) {
+  return {
+    id: job.id,
+    project_id: job.projectId,
+    shot_id: job.shotId,
+    kind: job.kind,
+    status: job.status,
+    input_payload: job.inputPayload,
+    output_payload: job.outputPayload,
+    progress_pct: job.progressPct,
+    cost_to_us_cents: job.costToUsCents,
+    created_at: job.createdAt,
+    updated_at: job.updatedAt
+  };
+}
+
 function mapJobRow(row) {
   const inputPayload = row.input_payload ?? {};
   const outputPayload = row.output_payload ?? {};
@@ -222,7 +238,16 @@ function mapJobRow(row) {
     ?? outputPayload.stitchedUrl
     ?? outputPayload.exportUrl
     ?? outputPayload.outputUrl
+    ?? (typeof outputPayload.track?.sourceUrl === "string" ? outputPayload.track.sourceUrl : null)
     ?? null;
+  const skippedFeature = Boolean(outputPayload.skippedFeature);
+  const featureError = outputPayload.featureError ?? null;
+  const providerAdapter = typeof outputPayload.providerAdapter === "string"
+    ? outputPayload.providerAdapter
+    : null;
+  const outputCreated = outputPayload.outputCreated === undefined
+    ? null
+    : Boolean(outputPayload.outputCreated);
   return {
     id: row.id,
     projectId: row.project_id,
@@ -237,6 +262,10 @@ function mapJobRow(row) {
     modelId: typeof outputPayload.modelId === "string" ? outputPayload.modelId : null,
     errorMessage: typeof outputPayload.error === "string" ? outputPayload.error : null,
     outputUrl: typeof outputUrl === "string" ? outputUrl : null,
+    skippedFeature,
+    featureError,
+    providerAdapter,
+    outputCreated,
     requestId: typeof (outputPayload.requestId ?? outputPayload.request_id) === "string"
       ? (outputPayload.requestId ?? outputPayload.request_id)
       : null,
@@ -846,7 +875,9 @@ export async function getShot(shotId, projectId) {
 export async function listJobs(projectId) {
   const db = getPool();
   if (!db) {
-    return Array.from(jobs.values()).filter((job) => job.projectId === projectId);
+    return Array.from(jobs.values())
+      .filter((job) => job.projectId === projectId)
+      .map((job) => mapJobRow(memoryJobToRow(job)));
   }
   const { rows } = await db.query(
     `SELECT *
@@ -952,7 +983,7 @@ export async function getJob(jobId, projectId) {
   if (projectId && job.projectId !== projectId) {
     return null;
   }
-  return job;
+  return mapJobRow(memoryJobToRow(job));
 }
 
 export async function deleteJob(jobId, projectId) {

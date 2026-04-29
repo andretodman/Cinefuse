@@ -1947,6 +1947,10 @@ struct ProjectWorkspaceScreen: View {
                     falStatusUrl: job.falStatusUrl,
                     providerStatusCode: job.providerStatusCode,
                     providerResponseSnippet: job.providerResponseSnippet,
+                    skippedFeature: job.skippedFeature,
+                    featureError: job.featureError,
+                    providerAdapter: job.providerAdapter,
+                    outputCreated: job.outputCreated,
                     updatedAt: event.timestamp
                 )
             } else if let shotId = event.shotId {
@@ -1970,6 +1974,10 @@ struct ProjectWorkspaceScreen: View {
                         falStatusUrl: nil,
                         providerStatusCode: nil,
                         providerResponseSnippet: nil,
+                        skippedFeature: nil,
+                        featureError: nil,
+                        providerAdapter: nil,
+                        outputCreated: nil,
                         updatedAt: event.timestamp
                     )
                 )

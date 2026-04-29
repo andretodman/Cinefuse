@@ -307,7 +307,7 @@ public struct APIClient {
         laneIndex: Int,
         startMs: Int,
         durationMs: Int
-    ) async throws -> AudioTrack {
+    ) async throws -> AudioGenerationAPIResponse {
         var request = URLRequest(url: buildURL(path: "\(Self.cinefusePrefix)/projects/\(projectId)/audio/dialogue"))
         request.httpMethod = "POST"
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
@@ -321,7 +321,7 @@ public struct APIClient {
         ] as [String: AnyEncodable])
         let (data, response) = try await URLSession.shared.data(for: request)
         try validate(response: response, data: data)
-        return try JSONDecoder().decode(CreateAudioTrackResponse.self, from: data).audioTrack
+        return try JSONDecoder().decode(AudioGenerationAPIResponse.self, from: data)
     }
 
     public func generateScore(
@@ -331,7 +331,7 @@ public struct APIClient {
         laneIndex: Int,
         startMs: Int,
         durationMs: Int
-    ) async throws -> AudioTrack {
+    ) async throws -> AudioGenerationAPIResponse {
         var request = URLRequest(url: buildURL(path: "\(Self.cinefusePrefix)/projects/\(projectId)/audio/score"))
         request.httpMethod = "POST"
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
@@ -344,7 +344,7 @@ public struct APIClient {
         ] as [String: AnyEncodable])
         let (data, response) = try await URLSession.shared.data(for: request)
         try validate(response: response, data: data)
-        return try JSONDecoder().decode(CreateAudioTrackResponse.self, from: data).audioTrack
+        return try JSONDecoder().decode(AudioGenerationAPIResponse.self, from: data)
     }
 
     public func generateSFX(
@@ -354,7 +354,7 @@ public struct APIClient {
         laneIndex: Int,
         startMs: Int,
         durationMs: Int
-    ) async throws -> AudioTrack {
+    ) async throws -> AudioGenerationAPIResponse {
         var request = URLRequest(url: buildURL(path: "\(Self.cinefusePrefix)/projects/\(projectId)/audio/sfx"))
         request.httpMethod = "POST"
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
@@ -367,7 +367,7 @@ public struct APIClient {
         ] as [String: AnyEncodable])
         let (data, response) = try await URLSession.shared.data(for: request)
         try validate(response: response, data: data)
-        return try JSONDecoder().decode(CreateAudioTrackResponse.self, from: data).audioTrack
+        return try JSONDecoder().decode(AudioGenerationAPIResponse.self, from: data)
     }
 
     public func mixAudio(
@@ -377,7 +377,7 @@ public struct APIClient {
         laneIndex: Int,
         startMs: Int,
         durationMs: Int
-    ) async throws -> AudioTrack {
+    ) async throws -> AudioGenerationAPIResponse {
         var request = URLRequest(url: buildURL(path: "\(Self.cinefusePrefix)/projects/\(projectId)/audio/mix"))
         request.httpMethod = "POST"
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
@@ -390,7 +390,7 @@ public struct APIClient {
         ] as [String: AnyEncodable])
         let (data, response) = try await URLSession.shared.data(for: request)
         try validate(response: response, data: data)
-        return try JSONDecoder().decode(CreateAudioTrackResponse.self, from: data).audioTrack
+        return try JSONDecoder().decode(AudioGenerationAPIResponse.self, from: data)
     }
 
     public func lipsyncAudio(
@@ -401,7 +401,7 @@ public struct APIClient {
         laneIndex: Int,
         startMs: Int,
         durationMs: Int
-    ) async throws -> AudioTrack {
+    ) async throws -> AudioGenerationAPIResponse {
         var request = URLRequest(url: buildURL(path: "\(Self.cinefusePrefix)/projects/\(projectId)/audio/lipsync"))
         request.httpMethod = "POST"
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
@@ -415,7 +415,7 @@ public struct APIClient {
         ] as [String: AnyEncodable])
         let (data, response) = try await URLSession.shared.data(for: request)
         try validate(response: response, data: data)
-        return try JSONDecoder().decode(CreateAudioTrackResponse.self, from: data).audioTrack
+        return try JSONDecoder().decode(AudioGenerationAPIResponse.self, from: data)
     }
 
     public func previewStitch(
