@@ -6,6 +6,7 @@ const scenes = new Map();
 const characters = new Map();
 const shots = new Map();
 const audioTracks = new Map();
+const soundBlueprints = new Map();
 const jobs = new Map();
 
 let pool;
@@ -389,9 +390,19 @@ export async function deleteProject(projectId, ownerUserId) {
       characters.delete(characterId);
     }
   }
+  for (const [trackId, track] of audioTracks.entries()) {
+    if (track.projectId === projectId) {
+      audioTracks.delete(trackId);
+    }
+  }
   for (const [jobId, job] of jobs.entries()) {
     if (job.projectId === projectId) {
       jobs.delete(jobId);
+    }
+  }
+  for (const [blueprintId, blueprint] of soundBlueprints.entries()) {
+    if (blueprint.projectId === projectId) {
+      soundBlueprints.delete(blueprintId);
     }
   }
   return true;
@@ -716,6 +727,92 @@ export async function saveAudioTrack(input) {
   return track;
 }
 
+function mapSoundBlueprintRow(row) {
+  let ids = [];
+  const refs = row.reference_file_ids;
+  if (Array.isArray(refs)) {
+    ids = refs;
+  } else if (refs && typeof refs === "object") {
+    ids = Object.values(refs);
+  } else if (typeof refs === "string") {
+    try {
+      const parsed = JSON.parse(refs);
+      ids = Array.isArray(parsed) ? parsed : [];
+    } catch {
+      ids = [];
+    }
+  }
+  return {
+    id: row.id,
+    projectId: row.project_id,
+    name: row.name,
+    templateId: row.template_id ?? null,
+    referenceFileIds: ids,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at
+  };
+}
+
+export async function listSoundBlueprints(projectId) {
+  const db = getPool();
+  if (!db) {
+    return Array.from(soundBlueprints.values())
+      .filter((blueprint) => blueprint.projectId === projectId)
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }
+  const { rows } = await db.query(
+    `SELECT *
+     FROM cinefuse_sound_blueprints
+     WHERE project_id = $1
+     ORDER BY created_at`,
+    [projectId]
+  );
+  return rows.map(mapSoundBlueprintRow);
+}
+
+export async function saveSoundBlueprint(input) {
+  const existing = soundBlueprints.get(input.id);
+  const now = new Date().toISOString();
+  const blueprint = {
+    id: input.id,
+    projectId: input.projectId,
+    name: input.name ?? existing?.name ?? "Sound blueprint",
+    templateId: input.templateId ?? existing?.templateId ?? null,
+    referenceFileIds: Array.isArray(input.referenceFileIds)
+      ? input.referenceFileIds
+      : (existing?.referenceFileIds ?? []),
+    createdAt: existing?.createdAt ?? input.createdAt ?? now,
+    updatedAt: now
+  };
+  const db = getPool();
+  if (db) {
+    await db.query(
+      `INSERT INTO cinefuse_sound_blueprints
+        (id, project_id, name, template_id, reference_file_ids, created_at, updated_at)
+       VALUES ($1,$2,$3,$4,$5::jsonb,$6,$7)
+       ON CONFLICT (id)
+       DO UPDATE SET
+        project_id = EXCLUDED.project_id,
+        name = EXCLUDED.name,
+        template_id = EXCLUDED.template_id,
+        reference_file_ids = EXCLUDED.reference_file_ids,
+        updated_at = EXCLUDED.updated_at`,
+      [
+        blueprint.id,
+        blueprint.projectId,
+        blueprint.name,
+        blueprint.templateId,
+        JSON.stringify(blueprint.referenceFileIds ?? []),
+        blueprint.createdAt,
+        blueprint.updatedAt
+      ]
+    );
+    return blueprint;
+  }
+  soundBlueprints.set(blueprint.id, blueprint);
+  return blueprint;
+}
+
 export async function getShot(shotId, projectId) {
   const db = getPool();
   if (db) {
@@ -880,7 +977,7 @@ export async function clearProjects() {
   const db = getPool();
   if (db) {
     await db.query(
-      "TRUNCATE TABLE cinefuse_jobs, cinefuse_audio_tracks, cinefuse_shots, cinefuse_characters, cinefuse_scenes, cinefuse_projects RESTART IDENTITY CASCADE"
+      "TRUNCATE TABLE cinefuse_jobs, cinefuse_audio_tracks, cinefuse_sound_blueprints, cinefuse_shots, cinefuse_characters, cinefuse_scenes, cinefuse_projects RESTART IDENTITY CASCADE"
     );
     return;
   }
@@ -889,5 +986,6 @@ export async function clearProjects() {
   characters.clear();
   shots.clear();
   audioTracks.clear();
+  soundBlueprints.clear();
   jobs.clear();
 }

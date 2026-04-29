@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 
 const TOOLS = [
   "encode_final",
+  "encode_audio_mixdown",
   "upload_to_pubfuse",
   "publish_to_pubfuse_stream",
   "archive_project",
@@ -39,6 +40,17 @@ function isTestMode() {
 function fallbackExport(tool, input = {}) {
   const id = randomUUID();
   const base = `https://files.cinefuse.test/exports/${id}`;
+  if (tool === "encode_audio_mixdown") {
+    return {
+      id,
+      status: "ready",
+      fileUrl: `${base}.wav`,
+      archiveUrl: null,
+      costToUsCents: Number(input.costToUsCents ?? 12),
+      sparksCost: Number(input.sparksCost ?? 18),
+      publishTarget: null
+    };
+  }
   return {
     id,
     status: "ready",
@@ -61,7 +73,7 @@ function normalizeExport(payload, tool, input = {}) {
   const id = payload?.id ?? randomUUID();
   const fileUrl = payload?.fileUrl ?? payload?.url ?? null;
   const archiveUrl = payload?.archiveUrl ?? (tool === "archive_project" ? fileUrl : null);
-  if ((tool === "encode_final" || tool === "upload_to_pubfuse" || tool === "publish_to_pubfuse_stream")
+  if ((tool === "encode_final" || tool === "encode_audio_mixdown" || tool === "upload_to_pubfuse" || tool === "publish_to_pubfuse_stream")
     && (typeof fileUrl !== "string" || fileUrl.length === 0)) {
     throw new Error(`export provider returned no fileUrl for ${tool}`);
   }

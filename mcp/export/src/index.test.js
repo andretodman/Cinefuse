@@ -6,4 +6,5 @@ test("export server exposes tools", () => {
   const server = createServer();
   assert.equal(server.name, "export");
   assert.equal(server.listTools().includes("encode_final"), true);
+  assert.equal(server.listTools().includes("encode_audio_mixdown"), true);
 });

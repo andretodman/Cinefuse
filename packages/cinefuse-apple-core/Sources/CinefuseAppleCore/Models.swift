@@ -19,6 +19,21 @@ public struct CreateProjectResponse: Codable {
     public let project: Project
 }
 
+/// Top-level editor mode: video storyboard + shots vs audio-first DAW workflow.
+public enum CreationMode: String, CaseIterable, Identifiable, Sendable {
+    case video
+    case audio
+
+    public var id: String { rawValue }
+
+    public var label: String {
+        switch self {
+        case .video: return "Video"
+        case .audio: return "Audio"
+        }
+    }
+}
+
 public struct Shot: Codable, Identifiable {
     public let id: String
     public let projectId: String
@@ -99,6 +114,55 @@ public struct AudioTrack: Codable, Identifiable {
 
 public struct ListAudioTracksResponse: Codable {
     public let audioTracks: [AudioTrack]
+}
+
+// MARK: - Sound blueprints (audio creation)
+
+public struct SoundBlueprint: Codable, Identifiable, Equatable, Sendable {
+    public let id: String
+    public let projectId: String
+    public let name: String
+    public let templateId: String?
+    public let referenceFileIds: [String]
+
+    public init(id: String, projectId: String, name: String, templateId: String?, referenceFileIds: [String]) {
+        self.id = id
+        self.projectId = projectId
+        self.name = name
+        self.templateId = templateId
+        self.referenceFileIds = referenceFileIds
+    }
+}
+
+public struct ListSoundBlueprintsResponse: Codable, Sendable {
+    public let soundBlueprints: [SoundBlueprint]
+}
+
+public struct CreateSoundBlueprintRequest: Codable, Sendable {
+    public let name: String
+    public let templateId: String?
+    public let referenceFileIds: [String]
+
+    public init(name: String, templateId: String?, referenceFileIds: [String]) {
+        self.name = name
+        self.templateId = templateId
+        self.referenceFileIds = referenceFileIds
+    }
+}
+
+public struct CreateSoundBlueprintResponse: Codable, Sendable {
+    public let soundBlueprint: SoundBlueprint
+}
+
+public struct AudioMixExportResponse: Codable {
+    public let job: Job
+    public let export: AudioMixExportArtifact
+}
+
+public struct AudioMixExportArtifact: Codable, Sendable {
+    public let fileUrl: String?
+    public let sparksCost: Int?
+    public let costToUsCents: Int?
 }
 
 public struct CreateAudioTrackResponse: Codable {

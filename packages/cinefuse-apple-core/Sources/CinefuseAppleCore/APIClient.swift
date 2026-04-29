@@ -239,6 +239,39 @@ public struct APIClient {
         return try JSONDecoder().decode(ListAudioTracksResponse.self, from: data).audioTracks
     }
 
+    public func listSoundBlueprints(token: String, projectId: String) async throws -> [SoundBlueprint] {
+        var request = URLRequest(url: buildURL(path: "\(Self.cinefusePrefix)/projects/\(projectId)/sound-blueprints"))
+        request.httpMethod = "GET"
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        let (data, response) = try await URLSession.shared.data(for: request)
+        try validate(response: response, data: data)
+        return try JSONDecoder().decode(ListSoundBlueprintsResponse.self, from: data).soundBlueprints
+    }
+
+    public func createSoundBlueprint(token: String, projectId: String, body: CreateSoundBlueprintRequest) async throws -> SoundBlueprint {
+        var request = URLRequest(url: buildURL(path: "\(Self.cinefusePrefix)/projects/\(projectId)/sound-blueprints"))
+        request.httpMethod = "POST"
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        let encoder = JSONEncoder()
+        encoder.keyEncodingStrategy = .convertToSnakeCase
+        request.httpBody = try encoder.encode(body)
+        let (data, response) = try await URLSession.shared.data(for: request)
+        try validate(response: response, data: data)
+        return try JSONDecoder().decode(CreateSoundBlueprintResponse.self, from: data).soundBlueprint
+    }
+
+    public func exportAudioMix(token: String, projectId: String) async throws -> AudioMixExportResponse {
+        var request = URLRequest(url: buildURL(path: "\(Self.cinefusePrefix)/projects/\(projectId)/export/audio-mix"))
+        request.httpMethod = "POST"
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONEncoder().encode([String: String]())
+        let (data, response) = try await URLSession.shared.data(for: request)
+        try validate(response: response, data: data)
+        return try JSONDecoder().decode(AudioMixExportResponse.self, from: data)
+    }
+
     public func createAudioTrack(
         token: String,
         projectId: String,

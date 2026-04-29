@@ -16,12 +16,14 @@ import {
   listProjects,
   listScenes,
   listShots,
+  listSoundBlueprints,
   saveJob,
   saveProject,
   saveScene,
   saveCharacter,
   saveAudioTrack,
-  saveShot
+  saveShot,
+  saveSoundBlueprint
 } from "./project-store.js";
 
 function json(response, status, payload) {
@@ -1053,6 +1055,8 @@ export function createHttpServer() {
     const stitchCaptionsMatch = url.pathname.match(/^\/api\/v1\/cinefuse\/projects\/([^/]+)\/stitch\/captions\/bake$/);
     const stitchLoudnessMatch = url.pathname.match(/^\/api\/v1\/cinefuse\/projects\/([^/]+)\/stitch\/loudness\/normalize$/);
     const exportFinalMatch = url.pathname.match(/^\/api\/v1\/cinefuse\/projects\/([^/]+)\/export\/final$/);
+    const exportAudioMixMatch = url.pathname.match(/^\/api\/v1\/cinefuse\/projects\/([^/]+)\/export\/audio-mix$/);
+    const soundBlueprintsMatch = url.pathname.match(/^\/api\/v1\/cinefuse\/projects\/([^/]+)\/sound-blueprints$/);
     const shotQuoteMatch = url.pathname.match(/^\/api\/v1\/cinefuse\/projects\/([^/]+)\/shots\/quote$/);
     const shotDetailMatch = url.pathname.match(/^\/api\/v1\/cinefuse\/projects\/([^/]+)\/shots\/([^/]+)$/);
     const shotRetryMatch = url.pathname.match(/^\/api\/v1\/cinefuse\/projects\/([^/]+)\/shots\/([^/]+)\/retry$/);
@@ -1124,6 +1128,30 @@ export function createHttpServer() {
         status: payload.status ?? "draft"
       });
       return json(response, 201, { audioTrack: track });
+    }
+    if (soundBlueprintsMatch && method === "GET") {
+      const projectId = decodeURIComponent(soundBlueprintsMatch[1]);
+      const project = await getProject(projectId, auth.userId);
+      if (!project) {
+        return writeError(response, 404, "project not found", "PROJECT_NOT_FOUND");
+      }
+      return json(response, 200, { soundBlueprints: await listSoundBlueprints(projectId) });
+    }
+    if (soundBlueprintsMatch && method === "POST") {
+      const projectId = decodeURIComponent(soundBlueprintsMatch[1]);
+      const project = await getProject(projectId, auth.userId);
+      if (!project) {
+        return writeError(response, 404, "project not found", "PROJECT_NOT_FOUND");
+      }
+      const payload = await readBody(request);
+      const blueprint = await saveSoundBlueprint({
+        id: payload.id ?? randomUUID(),
+        projectId,
+        name: typeof payload.name === "string" ? payload.name : "Sound blueprint",
+        templateId: typeof payload.templateId === "string" ? payload.templateId : null,
+        referenceFileIds: Array.isArray(payload.referenceFileIds) ? payload.referenceFileIds : []
+      });
+      return json(response, 201, { soundBlueprint: blueprint });
     }
     const audioToolByPath = dialogueAudioMatch
       ? "generate_dialogue"
@@ -1314,6 +1342,48 @@ export function createHttpServer() {
         archive: archiveResult?.export ?? null,
         published: publishResult?.export ?? null,
         job
+      });
+    }
+    if (exportAudioMixMatch && method === "POST") {
+      const projectId = decodeURIComponent(exportAudioMixMatch[1]);
+      const project = await getProject(projectId, auth.userId);
+      if (!project) {
+        return writeError(response, 404, "project not found", "PROJECT_NOT_FOUND");
+      }
+      const timelineAudioTracks = await listAudioTracks(projectId);
+      const exported = await mcpHost.invoke("export", "encode_audio_mixdown", {
+        projectId,
+        audioTracks: timelineAudioTracks
+      });
+      const sparksCost = Number(exported.export?.sparksCost ?? 18);
+      await mcpHost.invoke("billing", "debit", {
+        userId: auth.userId,
+        amount: sparksCost,
+        idempotencyKey: `export-audio-mix:${projectId}`,
+        relatedResourceType: "project",
+        relatedResourceId: projectId
+      });
+      const job = await saveJob({
+        id: randomUUID(),
+        projectId,
+        kind: "audio_export",
+        status: "done",
+        inputPayload: {},
+        outputPayload: {
+          fileUrl: exported.export?.fileUrl ?? null,
+          sparksCost,
+          operation: "encode_audio_mixdown",
+          costToUsCents: Number(exported.export?.costToUsCents ?? 0)
+        },
+        costToUsCents: Number(exported.export?.costToUsCents ?? 0)
+      });
+      return json(response, 200, {
+        job,
+        export: {
+          fileUrl: exported.export?.fileUrl ?? null,
+          sparksCost,
+          costToUsCents: Number(exported.export?.costToUsCents ?? 0)
+        }
       });
     }
     if (shotQuoteMatch && method === "POST") {

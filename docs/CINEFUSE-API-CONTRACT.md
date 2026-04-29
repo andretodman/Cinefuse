@@ -12,6 +12,7 @@ All clients and services should target these routes.
 - `projects`
 - `shots`
 - `jobs`
+- `sound-blueprints` (audio creation)
 - `sparks`
 
 ## Endpoints
@@ -33,6 +34,17 @@ All clients and services should target these routes.
 
 - `POST /api/v1/cinefuse/projects/{projectId}/jobs`
 - `GET /api/v1/cinefuse/projects/{projectId}/jobs`
+
+### Sound blueprints (audio creation)
+
+- `GET /api/v1/cinefuse/projects/{projectId}/sound-blueprints` → `{ "soundBlueprints": [...] }`
+- `POST /api/v1/cinefuse/projects/{projectId}/sound-blueprints` → `{ "soundBlueprint": { ... } }`  
+  Body: `{ "name": string, "templateId"?: string, "referenceFileIds"?: string[] }`
+
+### Audio export (layered mixdown)
+
+- `POST /api/v1/cinefuse/projects/{projectId}/export/audio-mix` → `{ "job": {...}, "export": { "fileUrl", "sparksCost", "costToUsCents" } }`  
+  Mixes current `audio-tracks` via export MCP `encode_audio_mixdown` and records a job with `kind: "audio_export"`.
 
 ### Sparks
 

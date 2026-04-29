@@ -560,6 +560,10 @@ struct ProjectWorkspaceScreen: View {
     @AppStorage("cinefuse.editor.showJobsPanel") private var showJobsPanel = true
     @AppStorage("cinefuse.editor.swapSidePanes") private var swapSidePanes = false
     @AppStorage("cinefuse.editor.workspacePreset") private var workspacePresetRaw = EditorWorkspacePreset.editing.rawValue
+    @AppStorage("cinefuse.editor.creationMode") private var creationModeRaw = CreationMode.video.rawValue
+    @State private var soundBlueprints: [SoundBlueprint] = []
+    @State private var soundTypeDraft = "generated"
+    @State private var soundTagsDraft = ""
     @State private var jobKindDraft = "clip"
     @State private var isLoadingProjectDetails = false
     @State private var isRefreshingProjectDetails = false
@@ -699,8 +703,59 @@ struct ProjectWorkspaceScreen: View {
             onFinalStitch: { Task { await finalStitchTimeline() } },
             onExportFinal: { Task { await exportFinalTimeline() } },
             onOpenDebugWindow: { showDebugWindow = true },
-            showTooltips: editorSettings.showTooltips
+            showTooltips: editorSettings.showTooltips,
+            creationModeRaw: $creationModeRaw,
+            soundBlueprints: $soundBlueprints,
+            soundTypeDraft: $soundTypeDraft,
+            soundTagsDraft: $soundTagsDraft,
+            onCreateSoundBlueprint: { request in Task { await createSoundBlueprint(request: request) } },
+            onExportAudioMix: { Task { await exportLayeredAudioMix() } },
+            onAddAudioTrack: { Task { await addEmptyAudioLane() } }
         )
+    }
+
+    private func createSoundBlueprint(request: CreateSoundBlueprintRequest) async {
+        guard let selectedProjectId else { return }
+        do {
+            _ = try await api.createSoundBlueprint(
+                token: model.bearerToken,
+                projectId: selectedProjectId,
+                body: request
+            )
+            await loadSelectedProjectDetails(showLoadingIndicator: false)
+        } catch {
+            model.errorMessage = error.localizedDescription
+        }
+    }
+
+    private func exportLayeredAudioMix() async {
+        guard let selectedProjectId else { return }
+        do {
+            _ = try await api.exportAudioMix(token: model.bearerToken, projectId: selectedProjectId)
+            await loadSelectedProjectDetails(showLoadingIndicator: false)
+        } catch {
+            model.errorMessage = error.localizedDescription
+        }
+    }
+
+    private func addEmptyAudioLane() async {
+        guard let selectedProjectId else { return }
+        let nextLane = (audioTracks.map(\.laneIndex).max() ?? -1) + 1
+        do {
+            _ = try await api.createAudioTrack(
+                token: model.bearerToken,
+                projectId: selectedProjectId,
+                kind: "lane",
+                title: "Track \(nextLane + 1)",
+                shotId: nil,
+                laneIndex: nextLane,
+                startMs: 0,
+                durationMs: 1000
+            )
+            await loadSelectedProjectDetails(showLoadingIndicator: false)
+        } catch {
+            model.errorMessage = error.localizedDescription
+        }
     }
 
     var body: some View {
@@ -847,6 +902,15 @@ struct ProjectWorkspaceScreen: View {
 
     private var globalWorkspaceControls: some View {
         HStack(spacing: CinefuseTokens.Spacing.xs) {
+            Picker("Creation", selection: $creationModeRaw) {
+                ForEach(CreationMode.allCases) { mode in
+                    Text(mode.label).tag(mode.rawValue)
+                }
+            }
+            .pickerStyle(.menu)
+            .frame(minWidth: 120)
+            .tooltip("Video Creation or Audio Creation mode", enabled: editorSettings.showTooltips)
+
             Picker("Workspace", selection: $workspacePresetRaw) {
                 ForEach(EditorWorkspacePreset.allCases) { preset in
                     Text(preset.label).tag(preset.rawValue)
@@ -1662,6 +1726,7 @@ struct ProjectWorkspaceScreen: View {
             shots = []
             audioTracks = []
             jobs = []
+            soundBlueprints = []
             return
         }
         if isRefreshingProjectDetails {
@@ -1686,6 +1751,15 @@ struct ProjectWorkspaceScreen: View {
             let latestCharacters = try await projectCharacters
             let latestTimeline = try await timeline
             let latestJobs = try await projectJobs
+            var latestBlueprints: [SoundBlueprint] = []
+            do {
+                latestBlueprints = try await api.listSoundBlueprints(
+                    token: model.bearerToken,
+                    projectId: selectedProjectId
+                )
+            } catch {
+                appendDebugEvent("sound blueprints unavailable \(error.localizedDescription)")
+            }
             var transaction = Transaction()
             if !showLoadingIndicator {
                 transaction.animation = nil
@@ -1696,6 +1770,7 @@ struct ProjectWorkspaceScreen: View {
                 shots = latestTimeline.shots
                 audioTracks = latestTimeline.audioTracks
                 jobs = latestJobs.filter { $0.status != "deleted" }
+                soundBlueprints = latestBlueprints
             }
             syncRequestStatesFromSnapshot(
                 shots: latestTimeline.shots,
@@ -2703,6 +2778,13 @@ struct ProjectDetailScreen: View {
     let onExportFinal: () -> Void
     let onOpenDebugWindow: () -> Void
     let showTooltips: Bool
+    @Binding var creationModeRaw: String
+    @Binding var soundBlueprints: [SoundBlueprint]
+    @Binding var soundTypeDraft: String
+    @Binding var soundTagsDraft: String
+    let onCreateSoundBlueprint: (CreateSoundBlueprintRequest) -> Void
+    let onExportAudioMix: () -> Void
+    let onAddAudioTrack: () -> Void
     @AppStorage("cinefuse.editor.leftPaneWidth") private var leftPaneWidth: Double = 460
     @AppStorage("cinefuse.editor.rightPaneWidth") private var rightPaneWidth: Double = 460
     @AppStorage("cinefuse.editor.bottomPaneHeight") private var bottomPaneHeight: Double = 240
@@ -2721,8 +2803,11 @@ struct ProjectDetailScreen: View {
     @AppStorage("cinefuse.editor.collapse.export") private var collapseExportPanel = false
     @AppStorage("cinefuse.editor.collapse.audio") private var collapseAudioPanel = false
     @AppStorage("cinefuse.editor.collapse.jobs") private var collapseJobsPanel = false
+    @AppStorage("cinefuse.editor.collapse.soundBlueprints") private var collapseSoundBlueprintsPanel = false
     @State private var selectedTimelineShotId: String?
     @State private var trackSyncModes: [Int: AudioTrackSyncMode] = [:]
+    @State private var laneVolumeByIndex: [Int: Float] = [:]
+    @State private var masterMixGain: Float = 1.0
     @State private var isRenamingProjectTitle = false
     @State private var projectTitleDraft = ""
     @State private var previewPlaybackRequestToken = 0
@@ -2735,9 +2820,17 @@ struct ProjectDetailScreen: View {
         (EditorWorkspacePreset(rawValue: workspacePresetRaw) ?? .editing) == .render
     }
 
+    private var effectiveCreationMode: CreationMode {
+        CreationMode(rawValue: creationModeRaw) ?? .video
+    }
+
+    private var isAudioCreationMode: Bool {
+        effectiveCreationMode == .audio
+    }
+
     private var latestExportArtifactStatus: ArtifactStatusPresentation? {
         guard let latestExportJob = jobs
-            .filter({ $0.kind == "export" })
+            .filter({ $0.kind == "export" || $0.kind == "audio_export" })
             .max(by: { parseDate($0.updatedAt) < parseDate($1.updatedAt) }) else {
             return nil
         }
@@ -2778,7 +2871,8 @@ struct ProjectDetailScreen: View {
                             onMoveShot: onReorderShots,
                             showTooltips: showTooltips,
                             themePalette: timelineThemeMode.palette,
-                            isCollapsed: $collapseTimelinePanel
+                            isCollapsed: $collapseTimelinePanel,
+                            clipVisualStyle: isAudioCreationMode ? .audioWaveform : .videoThumbnail
                         )
                     }
 
@@ -2840,15 +2934,7 @@ struct ProjectDetailScreen: View {
                                 .frame(maxHeight: .infinity, alignment: .top)
                             } else {
                                 if shouldUseEmbeddedPopoutPreview {
-                                    EditorPreviewPanel(
-                                        shots: sortedShots,
-                                        selectedShotId: $selectedTimelineShotId,
-                                        playbackRequestToken: previewPlaybackRequestToken,
-                                        showTooltips: showTooltips,
-                                        isCollapsed: .constant(false),
-                                        isPoppedOut: true,
-                                        onTogglePopout: { isPreviewPoppedOut = false }
-                                    )
+                                    embeddedPopoutPreviewPanel
                                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                                     .transition(.opacity.combined(with: .move(edge: .top)))
                                 } else {
@@ -2876,15 +2962,7 @@ struct ProjectDetailScreen: View {
                                     }
 
                                     if !isPreviewPoppedOut {
-                                        EditorPreviewPanel(
-                                            shots: sortedShots,
-                                            selectedShotId: $selectedTimelineShotId,
-                                            playbackRequestToken: previewPlaybackRequestToken,
-                                            showTooltips: showTooltips,
-                                            isCollapsed: $collapsePreviewPanel,
-                                            isPoppedOut: false,
-                                            onTogglePopout: { isPreviewPoppedOut.toggle() }
-                                        )
+                                        centerPreviewPanel
                                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                                     }
 
@@ -2984,7 +3062,7 @@ struct ProjectDetailScreen: View {
             }
 #endif
         }
-        .onChange(of: shots.map { "\($0.id):\($0.clipUrl ?? "")" }.joined(separator: "|")) { _, _ in
+        .onChange(of: shotClipSignature) { _, _ in
 #if canImport(AppKit) && !targetEnvironment(macCatalyst)
             refreshPreviewPopoutWindowContent()
 #endif
@@ -2999,19 +3077,23 @@ struct ProjectDetailScreen: View {
             refreshPreviewPopoutWindowContent()
 #endif
         }
+        .onChange(of: audioLaneLayoutSignature) { _, _ in
+            for track in audioTracks {
+                if laneVolumeByIndex[track.laneIndex] == nil {
+                    laneVolumeByIndex[track.laneIndex] = 1
+                }
+            }
+        }
+        .onChange(of: audioTrackMediaSignature) { _, _ in
+#if canImport(AppKit) && !targetEnvironment(macCatalyst)
+            refreshPreviewPopoutWindowContent()
+#endif
+        }
     }
 
 #if canImport(AppKit) && !targetEnvironment(macCatalyst)
     private func previewPopoutRootView() -> some View {
-        EditorPreviewPanel(
-            shots: sortedShots,
-            selectedShotId: $selectedTimelineShotId,
-            playbackRequestToken: previewPlaybackRequestToken,
-            showTooltips: showTooltips,
-            isCollapsed: .constant(false),
-            isPoppedOut: true,
-            onTogglePopout: { isPreviewPoppedOut = false }
-        )
+        embeddedPopoutPreviewPanel
         .frame(minWidth: 760, minHeight: 440)
         .padding(CinefuseTokens.Spacing.s)
         .background(CinefuseTokens.ColorRole.canvas)
@@ -3088,24 +3170,97 @@ struct ProjectDetailScreen: View {
         }
     }
 
+    private var shotClipSignature: String {
+        shots.map { "\($0.id):\($0.clipUrl ?? "")" }.joined(separator: "|")
+    }
+
+    private var audioTrackMediaSignature: String {
+        audioTracks.map { "\($0.id):\($0.sourceUrl ?? "")" }.joined(separator: "|")
+    }
+
+    private var audioLaneLayoutSignature: String {
+        audioTracks.map { "\($0.id):\($0.laneIndex)" }.joined(separator: "|")
+    }
+
+    @ViewBuilder
+    private var centerPreviewPanel: some View {
+        if isAudioCreationMode {
+            EditorAudioPreviewPanel(
+                shots: sortedShots,
+                audioTracks: audioTracks,
+                selectedShotId: $selectedTimelineShotId,
+                playbackRequestToken: previewPlaybackRequestToken,
+                showTooltips: showTooltips,
+                isCollapsed: $collapsePreviewPanel,
+                isPoppedOut: false,
+                onTogglePopout: { isPreviewPoppedOut.toggle() }
+            )
+        } else {
+            EditorPreviewPanel(
+                shots: sortedShots,
+                selectedShotId: $selectedTimelineShotId,
+                playbackRequestToken: previewPlaybackRequestToken,
+                showTooltips: showTooltips,
+                isCollapsed: $collapsePreviewPanel,
+                isPoppedOut: false,
+                onTogglePopout: { isPreviewPoppedOut.toggle() }
+            )
+        }
+    }
+
+    @ViewBuilder
+    private var embeddedPopoutPreviewPanel: some View {
+        if isAudioCreationMode {
+            EditorAudioPreviewPanel(
+                shots: sortedShots,
+                audioTracks: audioTracks,
+                selectedShotId: $selectedTimelineShotId,
+                playbackRequestToken: previewPlaybackRequestToken,
+                showTooltips: showTooltips,
+                isCollapsed: .constant(false),
+                isPoppedOut: true,
+                onTogglePopout: { isPreviewPoppedOut = false }
+            )
+        } else {
+            EditorPreviewPanel(
+                shots: sortedShots,
+                selectedShotId: $selectedTimelineShotId,
+                playbackRequestToken: previewPlaybackRequestToken,
+                showTooltips: showTooltips,
+                isCollapsed: .constant(false),
+                isPoppedOut: true,
+                onTogglePopout: { isPreviewPoppedOut = false }
+            )
+        }
+    }
+
     private var leftPaneContent: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: CinefuseTokens.Spacing.s) {
-                StoryboardPanel(
-                    scenes: scenes,
-                    onGenerateStoryboard: onGenerateStoryboard,
-                    onReviseScene: onReviseScene,
-                    isCollapsed: $collapseStoryboardPanel
-                )
-                CharacterPanel(
-                    characters: characters,
-                    newCharacterName: $newCharacterName,
-                    newCharacterDescription: $newCharacterDescription,
-                    onCreateCharacter: onCreateCharacter,
-                    onTrainCharacter: onTrainCharacter,
-                    showTooltips: showTooltips,
-                    isCollapsed: $collapseCharacterPanel
-                )
+                if isAudioCreationMode {
+                    SoundBlueprintsPanel(
+                        blueprints: $soundBlueprints,
+                        showTooltips: showTooltips,
+                        isCollapsed: $collapseSoundBlueprintsPanel,
+                        onCreate: onCreateSoundBlueprint
+                    )
+                } else {
+                    StoryboardPanel(
+                        scenes: scenes,
+                        onGenerateStoryboard: onGenerateStoryboard,
+                        onReviseScene: onReviseScene,
+                        isCollapsed: $collapseStoryboardPanel
+                    )
+                    CharacterPanel(
+                        characters: characters,
+                        newCharacterName: $newCharacterName,
+                        newCharacterDescription: $newCharacterDescription,
+                        onCreateCharacter: onCreateCharacter,
+                        onTrainCharacter: onTrainCharacter,
+                        showTooltips: showTooltips,
+                        isCollapsed: $collapseCharacterPanel
+                    )
+                }
             }
             .padding(CinefuseTokens.Spacing.s)
         }
@@ -3137,8 +3292,37 @@ struct ProjectDetailScreen: View {
                         previewPlaybackRequestToken += 1
                     },
                     showTooltips: showTooltips,
-                    isCollapsed: $collapseShotsPanel
+                    isCollapsed: $collapseShotsPanel,
+                    panelMode: isAudioCreationMode ? .audioSounds : .videoClips,
+                    soundTypeDraft: $soundTypeDraft,
+                    soundTagsDraft: $soundTagsDraft
                 )
+                if isAudioCreationMode {
+                    SectionCard(
+                        title: "Audio export",
+                        subtitle: "Mixes layered audio lanes into one file. Job appears in Jobs when complete.",
+                        isCollapsed: $collapseExportPanel
+                    ) {
+                        VStack(alignment: .leading, spacing: CinefuseTokens.Spacing.s) {
+                            Button {
+                                onExportAudioMix()
+                            } label: {
+                                Label("Export layered mix", systemImage: "waveform.path")
+                            }
+                            .buttonStyle(PrimaryActionButtonStyle())
+                            .tooltip("Run audio mixdown for all lanes", enabled: showTooltips)
+                            if let exportStatus = latestExportArtifactStatus {
+                                GenerationStatusDot(status: exportStatus)
+                                    .tooltip(exportStatus.summary, enabled: showTooltips)
+                                    .onTapGesture {
+                                        onOpenDebugWindow()
+                                    }
+                            }
+                        }
+                        .padding(CinefuseTokens.Spacing.s)
+                    }
+                }
+                if !isAudioCreationMode {
                 SectionCard(
                     title: "Export",
                     isCollapsed: $collapseExportPanel
@@ -3262,8 +3446,10 @@ struct ProjectDetailScreen: View {
                             .tooltip("Open prompt and file generation diagnostics", enabled: showTooltips)
                         }.padding(CinefuseTokens.Spacing.s)
                     }
-                }.padding(CinefuseTokens.Spacing.s)
-                    
+                    .padding(CinefuseTokens.Spacing.s)
+                }
+                }
+
             }
             .padding(CinefuseTokens.Spacing.s)
         }
@@ -3319,12 +3505,21 @@ struct ProjectDetailScreen: View {
                         }
                     }
                 }
+                Button {
+                    onAddAudioTrack()
+                } label: {
+                    Label("Add audio lane", systemImage: "plus.rectangle.on.folder")
+                }
+                .buttonStyle(SecondaryActionButtonStyle())
+                .tooltip("Add an empty lane for manual placement", enabled: showTooltips)
                 ScrollView {
                     AudioLaneView(
                         audioTracks: audioTracks,
                         shotBoundaries: timelineShotBoundaries,
                         syncModes: $trackSyncModes,
-                        themePalette: timelineThemeMode.palette
+                        themePalette: timelineThemeMode.palette,
+                        laneVolumes: $laneVolumeByIndex,
+                        masterVolume: $masterMixGain
                     )
                 }
                 .frame(maxHeight: .infinity, alignment: .top)
@@ -3563,6 +3758,17 @@ enum EditorWorkspacePreset: String, CaseIterable, Identifiable {
     }
 }
 
+/// Card chrome for the horizontal timeline (video thumbnails vs audio waveform tiles).
+enum TimelineClipVisualStyle: Equatable {
+    case videoThumbnail
+    case audioWaveform
+}
+
+enum ShotsPanelMode: Equatable {
+    case videoClips
+    case audioSounds
+}
+
 enum APIServerMode: String, CaseIterable, Identifiable {
     case local
     case production
@@ -3589,6 +3795,7 @@ struct HorizontalTimelineTrack: View {
     let showTooltips: Bool
     let themePalette: CinefuseTokens.ThemePalette
     @Binding var isCollapsed: Bool
+    var clipVisualStyle: TimelineClipVisualStyle = .videoThumbnail
     @State private var orderedShots: [Shot] = []
     @State private var draggingShotId: String?
     @State private var dragSourceIndex: Int?
@@ -3598,14 +3805,16 @@ struct HorizontalTimelineTrack: View {
 
     var body: some View {
         SectionCard(
-            title: "Timeline",
+            title: clipVisualStyle == .audioWaveform ? "Sound timeline" : "Timeline",
             isCollapsed: $isCollapsed
         ) {
             if visibleShots.isEmpty {
                 VStack(alignment: .leading, spacing: CinefuseTokens.Spacing.s) {
                     EmptyStateCard(
-                        title: "No clips in timeline",
-                        message: "Create or generate shots, then reorder them in this track."
+                        title: clipVisualStyle == .audioWaveform ? "No sounds in timeline" : "No clips in timeline",
+                        message: clipVisualStyle == .audioWaveform
+                            ? "Create sounds from the Sounds panel, then arrange them here."
+                            : "Create or generate shots, then reorder them in this track."
                     )
                     if !hiddenShots.isEmpty {
                         hiddenShotsControls
@@ -3650,7 +3859,8 @@ struct HorizontalTimelineTrack: View {
                                     onDragStarted: {
                                         draggingShotId = shot.id
                                         dragSourceIndex = index
-                                    }
+                                    },
+                                    clipVisualStyle: clipVisualStyle
                                 )
                                 .onDrop(
                                     of: [UTType.text],
@@ -3899,6 +4109,7 @@ struct TimelineClipCard: View {
     let showTooltips: Bool
     let isDragging: Bool
     let onDragStarted: () -> Void
+    var clipVisualStyle: TimelineClipVisualStyle = .videoThumbnail
 
     private var previewFrameURL: URL? {
         if let localThumbnailURL {
@@ -3987,7 +4198,24 @@ struct TimelineClipCard: View {
             ZStack {
                 RoundedRectangle(cornerRadius: CinefuseTokens.Radius.medium)
                     .fill(cardFillColor)
-                if let previewFrameURL {
+                if clipVisualStyle == .audioWaveform {
+                    RoundedRectangle(cornerRadius: CinefuseTokens.Radius.medium)
+                        .fill(
+                            LinearGradient(
+                                colors: [
+                                    CinefuseTokens.ColorRole.accent.opacity(0.35),
+                                    CinefuseTokens.ColorRole.surfaceSecondary
+                                ],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            )
+                        )
+                        .overlay(
+                            Image(systemName: "waveform")
+                                .font(.system(size: 44, weight: .light))
+                                .foregroundStyle(CinefuseTokens.ColorRole.textSecondary.opacity(0.55))
+                        )
+                } else if let previewFrameURL {
                     AsyncImage(url: previewFrameURL) { phase in
                         switch phase {
                         case .success(let image):
@@ -4092,8 +4320,11 @@ struct EditorPreviewPanel: View {
     let isPoppedOut: Bool
     let onTogglePopout: () -> Void
     @State private var queuePlayer = AVQueuePlayer()
-    @AppStorage("cinefuse.editor.preview.loopEnabled") private var loopPreviewEnabled = false
+    @AppStorage("cinefuse.editor.preview.loopEnabled") private var loopPreviewEnabled = true
+    @AppStorage("cinefuse.editor.preview.playbackRate") private var previewPlaybackRate = 1.0
     @State private var loopObserver: NSObjectProtocol?
+    private static let loopPreferenceKey = "cinefuse.editor.preview.loopEnabled"
+    private static let playbackRates: [Double] = [0.5, 0.75, 1.0, 1.25, 1.5, 2.0]
 
     private var playableShots: [Shot] {
         shots.filter { $0.clipUrl != nil }
@@ -4118,7 +4349,7 @@ struct EditorPreviewPanel: View {
                         message: "Generate clips to preview timeline playback."
                     )
                 } else {
-                    VideoPlayer(player: queuePlayer)
+                    InlinePreviewPlayerSurface(player: queuePlayer)
                         .frame(minHeight: 280)
                         .clipShape(RoundedRectangle(cornerRadius: CinefuseTokens.Radius.medium))
 
@@ -4145,6 +4376,12 @@ struct EditorPreviewPanel: View {
                             tooltipEnabled: showTooltips
                         )
                         IconCommandButton(
+                            systemName: "airplayvideo",
+                            label: "AirPlay output",
+                            action: {},
+                            tooltipEnabled: showTooltips
+                        )
+                        IconCommandButton(
                             systemName: loopPreviewEnabled ? "repeat.1.circle.fill" : "repeat.circle",
                             label: loopPreviewEnabled ? "Disable loop playback" : "Enable loop playback",
                             action: { loopPreviewEnabled.toggle() },
@@ -4156,6 +4393,22 @@ struct EditorPreviewPanel: View {
                             action: onTogglePopout,
                             tooltipEnabled: showTooltips
                         )
+                        HStack(spacing: CinefuseTokens.Spacing.xxs) {
+                            Text("Speed")
+                                .font(CinefuseTokens.Typography.caption)
+                                .foregroundStyle(CinefuseTokens.ColorRole.textSecondary)
+                            Picker("Speed", selection: $previewPlaybackRate) {
+                                ForEach(Self.playbackRates, id: \.self) { speed in
+                                    Text(playbackRateLabel(speed))
+                                        .font(CinefuseTokens.Typography.micro)
+                                        .tag(speed)
+                                }
+                            }
+                            .pickerStyle(.menu)
+                            .labelsHidden()
+                            .frame(width: 74)
+                            .font(CinefuseTokens.Typography.micro)
+                        }
 
                         Spacer()
                         Text("Queue: \(playableShots.count) clips")
@@ -4166,6 +4419,7 @@ struct EditorPreviewPanel: View {
             }
         }
         .onAppear {
+            ensureLoopDefaultEnabled()
             if selectedShotId == nil {
                 selectedShotId = playableShots.first?.id
             }
@@ -4177,6 +4431,9 @@ struct EditorPreviewPanel: View {
         }
         .onChange(of: loopPreviewEnabled) { _, _ in
             configureLoopObserver()
+        }
+        .onChange(of: previewPlaybackRate) { _, _ in
+            applyPlaybackRateIfPlaying()
         }
         .onChange(of: playbackRequestToken) { _, _ in
             playSelectedOnly()
@@ -4205,7 +4462,7 @@ struct EditorPreviewPanel: View {
         for item in items {
             queuePlayer.insert(item, after: nil)
         }
-        queuePlayer.play()
+        startPlayback()
     }
 
     private func playSelectedOnly() {
@@ -4218,7 +4475,7 @@ struct EditorPreviewPanel: View {
         queuePlayer.pause()
         queuePlayer.removeAllItems()
         queuePlayer.insert(AVPlayerItem(url: url), after: nil)
-        queuePlayer.play()
+        startPlayback()
     }
 
     private func configureLoopObserver() {
@@ -4229,8 +4486,7 @@ struct EditorPreviewPanel: View {
             object: nil,
             queue: .main
         ) { _ in
-            queuePlayer.seek(to: .zero)
-            queuePlayer.play()
+            playSelectedOnly()
         }
     }
 
@@ -4240,7 +4496,373 @@ struct EditorPreviewPanel: View {
             self.loopObserver = nil
         }
     }
+
+    private func ensureLoopDefaultEnabled() {
+        if UserDefaults.standard.object(forKey: Self.loopPreferenceKey) == nil {
+            loopPreviewEnabled = true
+        }
+    }
+
+    private func playbackRateLabel(_ value: Double) -> String {
+        if value == floor(value) {
+            return "\(Int(value))x"
+        }
+        return "\(value.formatted(.number.precision(.fractionLength(2))))x"
+    }
+
+    private func startPlayback() {
+        queuePlayer.play()
+        queuePlayer.rate = Float(previewPlaybackRate)
+    }
+
+    private func applyPlaybackRateIfPlaying() {
+        if queuePlayer.timeControlStatus == .playing {
+            queuePlayer.rate = Float(previewPlaybackRate)
+        }
+    }
 }
+
+struct EditorAudioPreviewPanel: View {
+    let shots: [Shot]
+    let audioTracks: [AudioTrack]
+    @Binding var selectedShotId: String?
+    let playbackRequestToken: Int
+    let showTooltips: Bool
+    @Binding var isCollapsed: Bool
+    let isPoppedOut: Bool
+    let onTogglePopout: () -> Void
+    @State private var queuePlayer = AVQueuePlayer()
+    @AppStorage("cinefuse.editor.preview.loopEnabled") private var loopPreviewEnabled = true
+    @AppStorage("cinefuse.editor.preview.playbackRate") private var previewPlaybackRate = 1.0
+    @State private var loopObserver: NSObjectProtocol?
+    private static let loopPreferenceKey = "cinefuse.editor.preview.loopEnabled"
+    private static let playbackRates: [Double] = [0.5, 0.75, 1.0, 1.25, 1.5, 2.0]
+
+    private var playableMediaURLs: [URL] {
+        var urls: [URL] = []
+        for shot in shots {
+            if let clip = shot.clipUrl, let url = URL(string: clip) {
+                urls.append(url)
+            }
+        }
+        for track in audioTracks {
+            if let source = track.sourceUrl, let url = URL(string: source) {
+                urls.append(url)
+            }
+        }
+        return urls
+    }
+
+    private var primaryPreviewURL: URL? {
+        if let selectedShotId,
+           let shot = shots.first(where: { $0.id == selectedShotId }),
+           let clip = shot.clipUrl,
+           let url = URL(string: clip) {
+            return url
+        }
+        return playableMediaURLs.first
+    }
+
+    private var shotsClipSignature: String {
+        shots.map { "\($0.id):\($0.clipUrl ?? "")" }.joined(separator: "|")
+    }
+
+    private var tracksSourceSignature: String {
+        audioTracks.map { "\($0.id):\($0.sourceUrl ?? "")" }.joined(separator: "|")
+    }
+
+    private var spectrumChrome: some View {
+        HStack(alignment: .bottom, spacing: 3) {
+            ForEach(0..<28, id: \.self) { index in
+                RoundedRectangle(cornerRadius: 2)
+                    .fill(CinefuseTokens.ColorRole.accent.opacity(0.22 + Double(index % 6) * 0.09))
+                    .frame(width: 5, height: CGFloat(18 + (index * 5) % 52))
+            }
+        }
+        .frame(maxWidth: .infinity, minHeight: 72)
+        .padding(.vertical, CinefuseTokens.Spacing.s)
+        .background(
+            RoundedRectangle(cornerRadius: CinefuseTokens.Radius.medium)
+                .fill(CinefuseTokens.ColorRole.surfaceSecondary.opacity(0.55))
+        )
+    }
+
+    var body: some View {
+        SectionCard(
+            title: "Audio preview",
+            isCollapsed: $isCollapsed
+        ) {
+            VStack(alignment: .leading, spacing: CinefuseTokens.Spacing.s) {
+                spectrumChrome
+                if primaryPreviewURL == nil {
+                    EmptyStateCard(
+                        title: "No playable audio yet",
+                        message: "Generate lanes or attach clips, then preview the selection."
+                    )
+                } else {
+                    InlinePreviewPlayerSurface(player: queuePlayer)
+                        .frame(minHeight: 140)
+                        .clipShape(RoundedRectangle(cornerRadius: CinefuseTokens.Radius.medium))
+                }
+                HStack(spacing: CinefuseTokens.Spacing.s) {
+                    IconCommandButton(
+                        systemName: "play.fill",
+                        label: "Play all sources",
+                        action: { playAllSources() },
+                        tooltipEnabled: showTooltips
+                    )
+                    IconCommandButton(
+                        systemName: "play.square.fill",
+                        label: "Play selected",
+                        action: { playSelectedOnly() },
+                        tooltipEnabled: showTooltips
+                    )
+                    IconCommandButton(
+                        systemName: "stop.fill",
+                        label: "Stop playback",
+                        action: {
+                            queuePlayer.pause()
+                            queuePlayer.removeAllItems()
+                        },
+                        tooltipEnabled: showTooltips
+                    )
+                    IconCommandButton(
+                        systemName: loopPreviewEnabled ? "repeat.1.circle.fill" : "repeat.circle",
+                        label: loopPreviewEnabled ? "Disable loop playback" : "Enable loop playback",
+                        action: { loopPreviewEnabled.toggle() },
+                        tooltipEnabled: showTooltips
+                    )
+                    IconCommandButton(
+                        systemName: isPoppedOut ? "rectangle.inset.filled.and.person.filled" : "rectangle.on.rectangle",
+                        label: isPoppedOut ? "Dock preview panel" : "Pop out preview panel",
+                        action: onTogglePopout,
+                        tooltipEnabled: showTooltips
+                    )
+                    HStack(spacing: CinefuseTokens.Spacing.xxs) {
+                        Text("Speed")
+                            .font(CinefuseTokens.Typography.caption)
+                            .foregroundStyle(CinefuseTokens.ColorRole.textSecondary)
+                        Picker("Speed", selection: $previewPlaybackRate) {
+                            ForEach(Self.playbackRates, id: \.self) { speed in
+                                Text(playbackRateLabel(speed))
+                                    .font(CinefuseTokens.Typography.micro)
+                                    .tag(speed)
+                            }
+                        }
+                        .pickerStyle(.menu)
+                        .labelsHidden()
+                        .frame(width: 74)
+                    }
+                    Spacer()
+                    Text("\(playableMediaURLs.count) sources")
+                        .font(CinefuseTokens.Typography.caption)
+                        .foregroundStyle(CinefuseTokens.ColorRole.textSecondary)
+                }
+            }
+        }
+        .onAppear {
+            ensureLoopDefaultEnabled()
+            configureLoopObserver()
+            playSelectedOnly()
+        }
+        .onDisappear {
+            removeLoopObserver()
+        }
+        .onChange(of: loopPreviewEnabled) { _, _ in
+            configureLoopObserver()
+        }
+        .onChange(of: previewPlaybackRate) { _, _ in
+            if queuePlayer.timeControlStatus == .playing {
+                queuePlayer.rate = Float(previewPlaybackRate)
+            }
+        }
+        .onChange(of: playbackRequestToken) { _, _ in
+            playSelectedOnly()
+        }
+        .onChange(of: shotsClipSignature) { _, _ in
+            playSelectedOnly()
+        }
+        .onChange(of: tracksSourceSignature) { _, _ in
+            playSelectedOnly()
+        }
+    }
+
+    private func playAllSources() {
+        let items = playableMediaURLs.map { AVPlayerItem(url: $0) }
+        queuePlayer.pause()
+        queuePlayer.removeAllItems()
+        for item in items {
+            queuePlayer.insert(item, after: nil)
+        }
+        queuePlayer.play()
+        queuePlayer.rate = Float(previewPlaybackRate)
+    }
+
+    private func playSelectedOnly() {
+        guard let url = primaryPreviewURL else { return }
+        queuePlayer.pause()
+        queuePlayer.removeAllItems()
+        queuePlayer.insert(AVPlayerItem(url: url), after: nil)
+        queuePlayer.play()
+        queuePlayer.rate = Float(previewPlaybackRate)
+    }
+
+    private func configureLoopObserver() {
+        removeLoopObserver()
+        guard loopPreviewEnabled else { return }
+        loopObserver = NotificationCenter.default.addObserver(
+            forName: .AVPlayerItemDidPlayToEndTime,
+            object: nil,
+            queue: .main
+        ) { _ in
+            playSelectedOnly()
+        }
+    }
+
+    private func removeLoopObserver() {
+        if let loopObserver {
+            NotificationCenter.default.removeObserver(loopObserver)
+            self.loopObserver = nil
+        }
+    }
+
+    private func ensureLoopDefaultEnabled() {
+        if UserDefaults.standard.object(forKey: Self.loopPreferenceKey) == nil {
+            loopPreviewEnabled = true
+        }
+    }
+
+    private func playbackRateLabel(_ value: Double) -> String {
+        if value == floor(value) {
+            return "\(Int(value))x"
+        }
+        return "\(value.formatted(.number.precision(.fractionLength(2))))x"
+    }
+}
+
+struct SoundBlueprintsPanel: View {
+    @Binding var blueprints: [SoundBlueprint]
+    let showTooltips: Bool
+    @Binding var isCollapsed: Bool
+    let onCreate: (CreateSoundBlueprintRequest) -> Void
+    @State private var draftName = "Ambient blueprint"
+    @State private var draftTemplate = "neutral"
+
+    var body: some View {
+        SectionCard(
+            title: "Sound blueprints",
+            subtitle: "Define reusable tone beds. Reference uploads wire through Pubfuse Files in production.",
+            isCollapsed: $isCollapsed
+        ) {
+            VStack(alignment: .leading, spacing: CinefuseTokens.Spacing.s) {
+                HStack(spacing: CinefuseTokens.Spacing.s) {
+                    TextField("Blueprint name", text: $draftName)
+                        .textFieldStyle(.roundedBorder)
+                    Picker("Template", selection: $draftTemplate) {
+                        Text("Neutral").tag("neutral")
+                        Text("Punchy trailer").tag("punchy_trailer")
+                        Text("Soft vocal").tag("soft_vocal")
+                    }
+                    .pickerStyle(.menu)
+                    .frame(minWidth: 160)
+                    Button {
+                        let name = draftName.trimmingCharacters(in: .whitespacesAndNewlines)
+                        guard !name.isEmpty else { return }
+                        onCreate(CreateSoundBlueprintRequest(
+                            name: name,
+                            templateId: draftTemplate,
+                            referenceFileIds: []
+                        ))
+                    } label: {
+                        Label("Save blueprint", systemImage: "plus.rectangle.on.folder")
+                    }
+                    .buttonStyle(PrimaryActionButtonStyle())
+                    .tooltip("Persist blueprint for this project", enabled: showTooltips)
+                }
+                if blueprints.isEmpty {
+                    EmptyStateCard(
+                        title: "No blueprints yet",
+                        message: "Save a blueprint to reuse it when generating sounds."
+                    )
+                } else {
+                    ForEach(blueprints) { blueprint in
+                        VStack(alignment: .leading, spacing: CinefuseTokens.Spacing.xxs) {
+                            Text(blueprint.name)
+                                .font(CinefuseTokens.Typography.cardTitle)
+                            if let template = blueprint.templateId, !template.isEmpty {
+                                Text("Template: \(template)")
+                                    .font(CinefuseTokens.Typography.caption)
+                                    .foregroundStyle(CinefuseTokens.ColorRole.textSecondary)
+                            }
+                            if !blueprint.referenceFileIds.isEmpty {
+                                Text("\(blueprint.referenceFileIds.count) reference file(s)")
+                                    .font(CinefuseTokens.Typography.micro)
+                                    .foregroundStyle(CinefuseTokens.ColorRole.textSecondary)
+                            }
+                        }
+                        .padding(CinefuseTokens.Spacing.s)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(
+                            RoundedRectangle(cornerRadius: CinefuseTokens.Radius.medium)
+                                .fill(CinefuseTokens.ColorRole.surfaceSecondary)
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+private struct InlinePreviewPlayerSurface: View {
+    let player: AVPlayer
+
+    var body: some View {
+#if canImport(AppKit) && !targetEnvironment(macCatalyst)
+        InlinePreviewPlayerMac(player: player)
+#elseif canImport(UIKit)
+        InlinePreviewPlayerIOS(player: player)
+#else
+        VideoPlayer(player: player)
+#endif
+    }
+}
+
+#if canImport(AppKit) && canImport(AVKit) && !targetEnvironment(macCatalyst)
+private struct InlinePreviewPlayerMac: NSViewRepresentable {
+    let player: AVPlayer
+
+    func makeNSView(context: Context) -> AVPlayerView {
+        let view = AVPlayerView(frame: .zero)
+        view.player = player
+        view.controlsStyle = .none
+        view.videoGravity = .resizeAspect
+        return view
+    }
+
+    func updateNSView(_ nsView: AVPlayerView, context: Context) {
+        nsView.player = player
+        nsView.controlsStyle = .none
+    }
+}
+#endif
+
+#if canImport(UIKit) && canImport(AVKit)
+private struct InlinePreviewPlayerIOS: UIViewControllerRepresentable {
+    let player: AVPlayer
+
+    func makeUIViewController(context: Context) -> AVPlayerViewController {
+        let controller = AVPlayerViewController()
+        controller.showsPlaybackControls = false
+        controller.player = player
+        return controller
+    }
+
+    func updateUIViewController(_ uiViewController: AVPlayerViewController, context: Context) {
+        uiViewController.player = player
+        uiViewController.showsPlaybackControls = false
+    }
+}
+#endif
 
 #if canImport(AppKit) && !targetEnvironment(macCatalyst)
 private final class PreviewPopoutWindowController: NSWindowController, NSWindowDelegate {
@@ -4401,6 +5023,9 @@ struct CharacterPanel: View {
     let onTrainCharacter: (String) -> Void
     let showTooltips: Bool
     @Binding var isCollapsed: Bool
+    @State private var trainingRefsByCharacterId: [String: [URL]] = [:]
+    @State private var isImporterPresented = false
+    @State private var importerCharacterId: String?
 
     var body: some View {
         SectionCard(
@@ -4471,16 +5096,67 @@ struct CharacterPanel: View {
                                             : CinefuseTokens.ColorRole.warning)
                                 }
                             }
-                            if character.status != "trained" {
-                                Button {
-                                    onTrainCharacter(character.id)
-                                } label: {
-                                    Label("Train", systemImage: "figure.strengthtraining.traditional")
+                            ScrollView(.horizontal, showsIndicators: false) {
+                                HStack(spacing: CinefuseTokens.Spacing.xs) {
+                                    if let preview = character.previewUrl, let url = URL(string: preview) {
+                                        AsyncImage(url: url) { phase in
+                                            switch phase {
+                                            case .success(let image):
+                                                image.resizable().scaledToFill()
+                                            default:
+                                                Color.clear
+                                            }
+                                        }
+                                        .frame(width: 56, height: 56)
+                                        .clipShape(RoundedRectangle(cornerRadius: CinefuseTokens.Radius.small))
+                                        .overlay(
+                                            RoundedRectangle(cornerRadius: CinefuseTokens.Radius.small)
+                                                .stroke(CinefuseTokens.ColorRole.borderSubtle, lineWidth: 1)
+                                        )
+                                    }
+                                    ForEach(Array((trainingRefsByCharacterId[character.id] ?? []).enumerated()), id: \.offset) { _, ref in
+                                        VStack(spacing: 2) {
+                                            Image(systemName: "doc")
+                                                .font(.title3)
+                                            Text(ref.lastPathComponent)
+                                                .font(CinefuseTokens.Typography.micro)
+                                                .lineLimit(1)
+                                        }
+                                        .frame(width: 72, height: 56)
+                                        .background(CinefuseTokens.ColorRole.surfacePrimary.opacity(0.9))
+                                        .clipShape(RoundedRectangle(cornerRadius: CinefuseTokens.Radius.small))
+                                    }
                                 }
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .tooltip("Train this character for consistency", enabled: showTooltips)
-                                .buttonStyle(SecondaryActionButtonStyle())
                             }
+                            HStack(spacing: CinefuseTokens.Spacing.xs) {
+                                Button {
+                                    importerCharacterId = character.id
+                                    isImporterPresented = true
+                                } label: {
+                                    Label("Add reference", systemImage: "paperclip")
+                                }
+                                .buttonStyle(SecondaryActionButtonStyle())
+                                .tooltip("Attach local image or clip as a training reference (upload to Pubfuse Files in production).", enabled: showTooltips)
+                                if character.status.lowercased() != "trained" {
+                                    Button {
+                                        onTrainCharacter(character.id)
+                                    } label: {
+                                        Label("Train", systemImage: "figure.strengthtraining.traditional")
+                                    }
+                                    .tooltip("Train this character for consistency", enabled: showTooltips)
+                                    .buttonStyle(SecondaryActionButtonStyle())
+                                }
+                                if character.status.lowercased() == "trained" || character.status.lowercased() == "ready" {
+                                    Button {
+                                        onTrainCharacter(character.id)
+                                    } label: {
+                                        Label("Retrain", systemImage: "arrow.triangle.2.circlepath")
+                                    }
+                                    .tooltip("Run training again with updated references", enabled: showTooltips)
+                                    .buttonStyle(SecondaryActionButtonStyle())
+                                }
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
                         }
                         .padding(CinefuseTokens.Spacing.s)
                         .background(
@@ -4490,6 +5166,22 @@ struct CharacterPanel: View {
                     }
                 }
             }
+        }
+        .fileImporter(
+            isPresented: $isImporterPresented,
+            allowedContentTypes: [.image, .movie, .audio],
+            allowsMultipleSelection: true
+        ) { result in
+            switch result {
+            case .success(let urls):
+                guard let characterId = importerCharacterId else { return }
+                var list = trainingRefsByCharacterId[characterId] ?? []
+                list.append(contentsOf: urls)
+                trainingRefsByCharacterId[characterId] = list
+            case .failure:
+                break
+            }
+            importerCharacterId = nil
         }
     }
 }
@@ -4513,8 +5205,13 @@ struct ShotsPanel: View {
     let onPreviewShot: (String) -> Void
     let showTooltips: Bool
     @Binding var isCollapsed: Bool
+    var panelMode: ShotsPanelMode = .videoClips
+    @Binding var soundTypeDraft: String
+    @Binding var soundTagsDraft: String
     @State private var pendingDeleteShotId: String?
     @State private var selectedDiagnostics: ArtifactStatusPresentation?
+    @State private var soundKindByShotId: [String: String] = [:]
+    @State private var soundTagsByShotId: [String: String] = [:]
     @Environment(\.openURL) private var openURL
 
     private let inFlightStatuses: Set<String> = ["queued", "generating", "running", "processing"]
@@ -4593,16 +5290,28 @@ struct ShotsPanel: View {
         )
     }
 
+    private var promptFieldTitle: String {
+        panelMode == .audioSounds
+            ? "Describe the sound, ambience, or dialogue line"
+            : "Describe the shot action or camera movement"
+    }
+
+    private var createButtonTitle: String {
+        panelMode == .audioSounds ? "Create Sound" : "Create Shot"
+    }
+
     var body: some View {
         SectionCard(
-            title: "Shots",
-            subtitle: "1: Draft shot 2: Quote cost 3: Generate 4: Review",
+            title: panelMode == .audioSounds ? "Sounds" : "Shots",
+            subtitle: panelMode == .audioSounds
+                ? "Draft sounds, quote, generate, tag. Blueprints apply from the left panel."
+                : "1: Draft shot 2: Quote cost 3: Generate 4: Review",
             isCollapsed: $isCollapsed
         ) {
             VStack(alignment: .leading, spacing: CinefuseTokens.Spacing.s) {
                 ViewThatFits(in: .horizontal) {
                     HStack(alignment: .center, spacing: CinefuseTokens.Spacing.s) {
-                        TextField("Describe the shot action or camera movement", text: $shotPromptDraft)
+                        TextField(promptFieldTitle, text: $shotPromptDraft)
                             .textFieldStyle(.roundedBorder)
                         Picker("Tier", selection: $shotModelTierDraft) {
                             Text("Budget").tag("budget")
@@ -4611,42 +5320,7 @@ struct ShotsPanel: View {
                         }
                         .pickerStyle(.menu)
                         .frame(width: CinefuseTokens.Control.primaryPickerWidth)
-                        Picker("Character Lock", selection: $selectedCharacterLockId) {
-                            Text("No lock").tag("")
-                            ForEach(characterOptions) { character in
-                                Text(character.name).tag(character.id)
-                            }
-                        }
-                        .pickerStyle(.menu)
-                        .frame(width: CinefuseTokens.Control.secondaryPickerWidth)
-                        VStack(alignment: .leading, spacing: CinefuseTokens.Spacing.xs) {
-                            Button {
-                                onQuote()
-                            } label: {
-                                Label("Quote Cost", systemImage: "tag")
-                            }
-                            .tooltip("Estimate sparks before generation", enabled: showTooltips)
-                            .buttonStyle(SecondaryActionButtonStyle())
-                            Button {
-                                onCreateShot()
-                            } label: {
-                                Label("Create Shot", systemImage: "plus.rectangle.on.rectangle")
-                            }
-                            .tooltip("Create shot draft in timeline", enabled: showTooltips)
-                            .buttonStyle(PrimaryActionButtonStyle())
-                        }
-                    }
-                    VStack(alignment: .leading, spacing: CinefuseTokens.Spacing.s) {
-                        TextField("Describe the shot action or camera movement", text: $shotPromptDraft)
-                            .textFieldStyle(.roundedBorder)
-                        HStack(alignment: .center, spacing: CinefuseTokens.Spacing.s) {
-                            Picker("Tier", selection: $shotModelTierDraft) {
-                                Text("Budget").tag("budget")
-                                Text("Standard").tag("standard")
-                                Text("Premium").tag("premium")
-                            }
-                            .pickerStyle(.menu)
-                            .frame(width: CinefuseTokens.Control.primaryPickerWidth)
+                        if panelMode == .videoClips {
                             Picker("Character Lock", selection: $selectedCharacterLockId) {
                                 Text("No lock").tag("")
                                 ForEach(characterOptions) { character in
@@ -4667,11 +5341,63 @@ struct ShotsPanel: View {
                             Button {
                                 onCreateShot()
                             } label: {
-                                Label("Create Shot", systemImage: "plus.rectangle.on.rectangle")
+                                Label(createButtonTitle, systemImage: "plus.rectangle.on.rectangle")
                             }
                             .tooltip("Create shot draft in timeline", enabled: showTooltips)
                             .buttonStyle(PrimaryActionButtonStyle())
                         }
+                    }
+                    VStack(alignment: .leading, spacing: CinefuseTokens.Spacing.s) {
+                        TextField(promptFieldTitle, text: $shotPromptDraft)
+                            .textFieldStyle(.roundedBorder)
+                        HStack(alignment: .center, spacing: CinefuseTokens.Spacing.s) {
+                            Picker("Tier", selection: $shotModelTierDraft) {
+                                Text("Budget").tag("budget")
+                                Text("Standard").tag("standard")
+                                Text("Premium").tag("premium")
+                            }
+                            .pickerStyle(.menu)
+                            .frame(width: CinefuseTokens.Control.primaryPickerWidth)
+                            if panelMode == .videoClips {
+                                Picker("Character Lock", selection: $selectedCharacterLockId) {
+                                    Text("No lock").tag("")
+                                    ForEach(characterOptions) { character in
+                                        Text(character.name).tag(character.id)
+                                    }
+                                }
+                                .pickerStyle(.menu)
+                                .frame(width: CinefuseTokens.Control.secondaryPickerWidth)
+                            }
+                        }
+                        VStack(alignment: .leading, spacing: CinefuseTokens.Spacing.xs) {
+                            Button {
+                                onQuote()
+                            } label: {
+                                Label("Quote Cost", systemImage: "tag")
+                            }
+                            .tooltip("Estimate sparks before generation", enabled: showTooltips)
+                            .buttonStyle(SecondaryActionButtonStyle())
+                            Button {
+                                onCreateShot()
+                            } label: {
+                                Label(createButtonTitle, systemImage: "plus.rectangle.on.rectangle")
+                            }
+                            .tooltip("Create shot draft in timeline", enabled: showTooltips)
+                            .buttonStyle(PrimaryActionButtonStyle())
+                        }
+                    }
+                }
+
+                if panelMode == .audioSounds {
+                    HStack(spacing: CinefuseTokens.Spacing.s) {
+                        Picker("Default type", selection: $soundTypeDraft) {
+                            Text("Generated").tag("generated")
+                            Text("Uploaded").tag("uploaded")
+                        }
+                        .pickerStyle(.menu)
+                        .frame(minWidth: 140)
+                        TextField("Tags (comma-separated)", text: $soundTagsDraft)
+                            .textFieldStyle(.roundedBorder)
                     }
                 }
 
@@ -4684,8 +5410,10 @@ struct ShotsPanel: View {
 
                 if shots.isEmpty {
                     EmptyStateCard(
-                        title: "No shots drafted",
-                        message: "Create your first shot above, then quote and generate."
+                        title: panelMode == .audioSounds ? "No sounds drafted" : "No shots drafted",
+                        message: panelMode == .audioSounds
+                            ? "Create your first sound above, then quote and generate."
+                            : "Create your first shot above, then quote and generate."
                     )
                     .transition(.opacity.combined(with: .scale(scale: 0.98)))
                 } else {
@@ -4718,6 +5446,30 @@ struct ShotsPanel: View {
                                 Text(shot.modelTier.capitalized)
                                     .font(CinefuseTokens.Typography.caption)
                                     .foregroundStyle(CinefuseTokens.ColorRole.textSecondary)
+                                if panelMode == .audioSounds {
+                                    HStack(spacing: CinefuseTokens.Spacing.s) {
+                                        Picker(
+                                            "Type",
+                                            selection: Binding(
+                                                get: { soundKindByShotId[shot.id] ?? soundTypeDraft },
+                                                set: { soundKindByShotId[shot.id] = $0 }
+                                            )
+                                        ) {
+                                            Text("Generated").tag("generated")
+                                            Text("Uploaded").tag("uploaded")
+                                        }
+                                        .pickerStyle(.menu)
+                                        .frame(minWidth: 120)
+                                        TextField(
+                                            "Tags",
+                                            text: Binding(
+                                                get: { soundTagsByShotId[shot.id] ?? soundTagsDraft },
+                                                set: { soundTagsByShotId[shot.id] = $0 }
+                                            )
+                                        )
+                                        .textFieldStyle(.roundedBorder)
+                                    }
+                                }
                                 if let lock = shot.characterLocks?.first, !lock.isEmpty {
                                     Text("Character lock")
                                         .font(CinefuseTokens.Typography.caption)
@@ -4734,12 +5486,20 @@ struct ShotsPanel: View {
                             Button {
                                 onGenerateShot(shot.id)
                             } label: {
-                                Label("Generate", systemImage: "video.badge.plus")
+                                Label(
+                                    panelMode == .audioSounds ? "Generate sound" : "Generate",
+                                    systemImage: panelMode == .audioSounds ? "waveform" : "video.badge.plus"
+                                )
                                     .font(CinefuseTokens.Typography.caption.weight(.semibold))
                             }
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .lineLimit(1)
-                            .tooltip("Generate final clip for this shot", enabled: showTooltips)
+                            .tooltip(
+                                panelMode == .audioSounds
+                                    ? "Generate audio for this sound"
+                                    : "Generate final clip for this shot",
+                                enabled: showTooltips
+                            )
                             .buttonStyle(SecondaryActionButtonStyle())
                             .disabled(inFlightStatuses.contains(shot.status) || shot.status == "ready")
                             if inFlightStatuses.contains(shot.status), let progress = renderProgress(for: shot) {
@@ -4805,6 +5565,11 @@ struct ShotsPanel: View {
         }
         .padding(CinefuseTokens.Spacing.s)
         .animation(CinefuseTokens.Motion.standard, value: shots.map(\.id))
+        .onChange(of: shots.map(\.id)) { _, ids in
+            let allowed = Set(ids)
+            soundKindByShotId = soundKindByShotId.filter { allowed.contains($0.key) }
+            soundTagsByShotId = soundTagsByShotId.filter { allowed.contains($0.key) }
+        }
         .confirmationDialog("Delete this shot?", isPresented: Binding(
             get: { pendingDeleteShotId != nil },
             set: { isPresented in
@@ -5648,7 +6413,9 @@ struct TimelinePanel: View {
                     audioTracks: audioTracks,
                     shotBoundaries: [],
                     syncModes: .constant([:]),
-                    themePalette: themeMode.palette
+                    themePalette: themeMode.palette,
+                    laneVolumes: .constant([:]),
+                    masterVolume: .constant(1)
                 )
             }
         }
@@ -5715,6 +6482,8 @@ struct AudioLaneView: View {
     let shotBoundaries: [TimelineShotBoundary]
     @Binding var syncModes: [Int: AudioTrackSyncMode]
     let themePalette: CinefuseTokens.ThemePalette
+    @Binding var laneVolumes: [Int: Float]
+    @Binding var masterVolume: Float
 
     var body: some View {
         VStack(alignment: .leading, spacing: CinefuseTokens.Spacing.xs) {
@@ -5731,6 +6500,19 @@ struct AudioLaneView: View {
                         ? lockedStartMs(for: track)
                         : track.startMs
                     HStack(spacing: CinefuseTokens.Spacing.s) {
+                        VStack(alignment: .leading, spacing: CinefuseTokens.Spacing.xxs) {
+                            Text("Lane vol")
+                                .font(CinefuseTokens.Typography.micro)
+                                .foregroundStyle(CinefuseTokens.ColorRole.textSecondary)
+                            Slider(
+                                value: Binding(
+                                    get: { Double(laneVolumes[track.laneIndex] ?? 1) },
+                                    set: { laneVolumes[track.laneIndex] = Float($0) }
+                                ),
+                                in: 0...1.5
+                            )
+                            .frame(width: 120)
+                        }
                         if let waveform = track.waveformUrl, let waveformURL = URL(string: waveform) {
                             AsyncImage(url: waveformURL) { phase in
                                 switch phase {
@@ -5782,6 +6564,22 @@ struct AudioLaneView: View {
                             .fill(CinefuseTokens.ColorRole.surfaceSecondary.opacity(laneMode == .locked ? 0.92 : 0.76))
                     )
                 }
+            }
+            if !audioTracks.isEmpty {
+                HStack(spacing: CinefuseTokens.Spacing.s) {
+                    Text("Master")
+                        .font(CinefuseTokens.Typography.caption)
+                        .foregroundStyle(CinefuseTokens.ColorRole.textSecondary)
+                    Slider(value: Binding(
+                        get: { Double(masterVolume) },
+                        set: { masterVolume = Float($0) }
+                    ), in: 0...1.5)
+                    .frame(maxWidth: 280)
+                    Text("\(Int(masterVolume * 100))%")
+                        .font(CinefuseTokens.Typography.micro)
+                        .foregroundStyle(CinefuseTokens.ColorRole.textSecondary)
+                }
+                .padding(.top, CinefuseTokens.Spacing.xs)
             }
         }
         .padding(CinefuseTokens.Spacing.xs)

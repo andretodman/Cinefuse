@@ -31,6 +31,10 @@ function fallbackTrack(kind, input = {}) {
   };
 }
 
+function resolveAudioAdapterKind() {
+  return (process.env.CINEFUSE_AUDIO_ADAPTER ?? "generic").toLowerCase();
+}
+
 function resolveProviderUrl(tool) {
   const explicitByTool = {
     generate_dialogue: process.env.CINEFUSE_AUDIO_DIALOGUE_PROVIDER_URL,
@@ -136,11 +140,17 @@ export function createServer() {
         mix_scene: "mix",
         lipsync: "lipsync"
       };
+      const adapter = resolveAudioAdapterKind();
+      const track = await callAudioProvider(tool, kindByTool[tool] ?? "audio", input);
       return {
         ok: true,
         server: "audio",
         tool,
-        track: await callAudioProvider(tool, kindByTool[tool] ?? "audio", input)
+        adapter,
+        track: {
+          ...track,
+          providerAdapter: adapter === "elevenlabs" ? "elevenlabs" : "generic"
+        }
       };
     }
   };
