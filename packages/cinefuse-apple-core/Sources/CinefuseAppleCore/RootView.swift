@@ -4487,43 +4487,59 @@ struct TimelineClipCard: View {
                     StatusBadge(status: shot.status)
                 }
             }
+            .contentShape(Rectangle())
+            .onTapGesture(count: 2, perform: onPreview)
+            .onTapGesture(count: 1, perform: onSelect)
+
             Text(shot.prompt.isEmpty ? "Untitled clip" : shot.prompt)
                 .font(CinefuseTokens.Typography.label)
                 .lineLimit(2)
-            Text("\(shot.modelTier.capitalized) · \(shot.durationSec ?? 0)s")
-                .font(CinefuseTokens.Typography.caption)
-                .foregroundStyle(CinefuseTokens.ColorRole.textSecondary)
-            if ["queued", "generating", "running", "processing"].contains(shot.status), let progressPct {
-                HStack(spacing: CinefuseTokens.Spacing.xxs) {
-                    ProgressView(value: Double(progressPct), total: 100)
-                        .controlSize(.mini)
-                    Text("\(progressPct)%")
-                        .font(CinefuseTokens.Typography.nano)
+                .textSelection(.enabled)
+                .contextMenu {
+                    Button("Copy prompt") {
+                        copyTextToClipboard(shot.prompt.isEmpty ? "Untitled clip" : shot.prompt)
+                    }
+                }
+
+            Group {
+                Text("\(shot.modelTier.capitalized) · \(shot.durationSec ?? 0)s")
+                    .font(CinefuseTokens.Typography.caption)
+                    .foregroundStyle(CinefuseTokens.ColorRole.textSecondary)
+                if ["queued", "generating", "running", "processing"].contains(shot.status), let progressPct {
+                    HStack(spacing: CinefuseTokens.Spacing.xxs) {
+                        ProgressView(value: Double(progressPct), total: 100)
+                            .controlSize(.mini)
+                        Text("\(progressPct)%")
+                            .font(CinefuseTokens.Typography.nano)
+                            .foregroundStyle(CinefuseTokens.ColorRole.textSecondary)
+                    }
+                }
+                if let trimRange {
+                    Text("Trim \(trimRange.lowerBound.formatted(.number.precision(.fractionLength(0))))s-\(trimRange.upperBound.formatted(.number.precision(.fractionLength(0))))s")
+                        .font(CinefuseTokens.Typography.micro)
                         .foregroundStyle(CinefuseTokens.ColorRole.textSecondary)
                 }
-            }
-            if let trimRange {
-                Text("Trim \(trimRange.lowerBound.formatted(.number.precision(.fractionLength(0))))s-\(trimRange.upperBound.formatted(.number.precision(.fractionLength(0))))s")
-                    .font(CinefuseTokens.Typography.micro)
-                    .foregroundStyle(CinefuseTokens.ColorRole.textSecondary)
-            }
-            HStack(spacing: CinefuseTokens.Spacing.xxs) {
-                IconCommandButton(
-                    systemName: "arrow.left",
-                    label: "Move clip left",
-                    action: onMoveLeft,
-                    tooltipEnabled: showTooltips
-                )
-                .disabled(!canMoveLeft)
+                HStack(spacing: CinefuseTokens.Spacing.xxs) {
+                    IconCommandButton(
+                        systemName: "arrow.left",
+                        label: "Move clip left",
+                        action: onMoveLeft,
+                        tooltipEnabled: showTooltips
+                    )
+                    .disabled(!canMoveLeft)
 
-                IconCommandButton(
-                    systemName: "arrow.right",
-                    label: "Move clip right",
-                    action: onMoveRight,
-                    tooltipEnabled: showTooltips
-                )
-                .disabled(!canMoveRight)
+                    IconCommandButton(
+                        systemName: "arrow.right",
+                        label: "Move clip right",
+                        action: onMoveRight,
+                        tooltipEnabled: showTooltips
+                    )
+                    .disabled(!canMoveRight)
+                }
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
+            .onTapGesture(perform: onSelect)
         }
         .padding(CinefuseTokens.Spacing.s)
         .frame(
@@ -4580,13 +4596,16 @@ struct TimelineClipCard: View {
             }
         )
         .opacity(isDragging ? 0.75 : 1)
-        .onTapGesture(count: 2, perform: onPreview)
-        .onTapGesture(perform: onSelect)
         .onDrag {
             onDragStarted()
             return NSItemProvider(object: NSString(string: shot.id))
         }
         .contextMenu {
+            Button {
+                onPreview()
+            } label: {
+                Label("Preview clip", systemImage: "play.circle")
+            }
             Button {
                 onTrimLeading()
             } label: {
@@ -6463,6 +6482,11 @@ struct ShotsPanel: View {
                                     .lineLimit(2)
                                     .layoutPriority(1)
                                     .textSelection(.enabled)
+                                    .contextMenu {
+                                        Button("Copy prompt") {
+                                            copyTextToClipboard(shot.prompt.isEmpty ? "Untitled shot" : shot.prompt)
+                                        }
+                                    }
                                 Text(shot.modelTier.capitalized)
                                     .font(CinefuseTokens.Typography.caption)
                                     .foregroundStyle(CinefuseTokens.ColorRole.textSecondary)
@@ -6635,11 +6659,6 @@ struct ShotsPanel: View {
                         )
                         .clipShape(RoundedRectangle(cornerRadius: CinefuseTokens.Radius.medium))
                         .contentShape(RoundedRectangle(cornerRadius: CinefuseTokens.Radius.medium))
-                        .onTapGesture {
-                            if shot.clipUrl != nil {
-                                onPreviewShot(shot.id)
-                            }
-                        }
                         .transition(.opacity.combined(with: .move(edge: .top)))
                     }
                 }
@@ -6834,6 +6853,21 @@ struct JobsPanel: View {
                                             Text("Cost to us: \(job.costToUsCents)c")
                                                 .font(CinefuseTokens.Typography.caption)
                                                 .foregroundStyle(CinefuseTokens.ColorRole.textSecondary)
+                                        }
+                                        if let prompt = job.promptText?.trimmingCharacters(in: .whitespacesAndNewlines),
+                                           !prompt.isEmpty {
+                                            Text(prompt)
+                                                .font(CinefuseTokens.Typography.caption)
+                                                .foregroundStyle(CinefuseTokens.ColorRole.textPrimary)
+                                                .lineLimit(4)
+                                                .multilineTextAlignment(.leading)
+                                                .frame(maxWidth: .infinity, alignment: .leading)
+                                                .textSelection(.enabled)
+                                                .contextMenu {
+                                                    Button("Copy prompt") {
+                                                        copyTextToClipboard(prompt)
+                                                    }
+                                                }
                                         }
                                         if let progress = job.progressPct,
                                            !terminalJobStatusesForProgress.contains(job.status.lowercased()) {
@@ -7550,6 +7584,12 @@ struct TimelinePanel: View {
                                     GenerationStatusDot(status: presentation)
                                     Text(shot.prompt.isEmpty ? "Untitled shot" : shot.prompt)
                                         .font(CinefuseTokens.Typography.body)
+                                        .textSelection(.enabled)
+                                        .contextMenu {
+                                            Button("Copy prompt") {
+                                                copyTextToClipboard(shot.prompt.isEmpty ? "Untitled shot" : shot.prompt)
+                                            }
+                                        }
                                     Spacer()
                                     if shot.status.lowercased() != "ready" {
                                         StatusBadge(status: shot.status)
