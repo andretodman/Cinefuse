@@ -261,6 +261,27 @@ public struct APIClient {
         return try JSONDecoder().decode(CreateSoundBlueprintResponse.self, from: data).soundBlueprint
     }
 
+    /// Uploads a local file and returns a server file id for `referenceFileIds` (blueprints) or character training.
+    public func uploadProjectFile(token: String, projectId: String, fileURL: URL) async throws -> UploadedProjectFileRef {
+        let data: Data
+        let scoped = fileURL.startAccessingSecurityScopedResource()
+        defer {
+            if scoped { fileURL.stopAccessingSecurityScopedResource() }
+        }
+        data = try Data(contentsOf: fileURL)
+        var request = URLRequest(url: buildURL(path: "\(Self.cinefusePrefix)/projects/\(projectId)/files"))
+        request.httpMethod = "POST"
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type")
+        let rawName = fileURL.lastPathComponent
+        let headerName = rawName.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? "file"
+        request.setValue(headerName, forHTTPHeaderField: "X-Filename")
+        request.httpBody = data
+        let (out, response) = try await URLSession.shared.data(for: request)
+        try validate(response: response, data: out)
+        return try JSONDecoder().decode(UploadProjectFileAPIResponse.self, from: out).file
+    }
+
     public func exportAudioMix(token: String, projectId: String, idempotencyKey: String? = nil) async throws -> AudioMixExportResponse {
         var request = URLRequest(url: buildURL(path: "\(Self.cinefusePrefix)/projects/\(projectId)/export/audio-mix"))
         request.httpMethod = "POST"
@@ -660,10 +681,17 @@ public struct APIClient {
         return try JSONDecoder().decode(CreateCharacterResponse.self, from: data).character
     }
 
-    public func trainCharacter(token: String, projectId: String, characterId: String) async throws -> CharacterProfile {
+    public func trainCharacter(
+        token: String,
+        projectId: String,
+        characterId: String,
+        referenceFileIds: [String] = []
+    ) async throws -> CharacterProfile {
         var request = URLRequest(url: buildURL(path: "\(Self.cinefusePrefix)/projects/\(projectId)/characters/\(characterId)/train"))
         request.httpMethod = "POST"
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONEncoder().encode(["referenceFileIds": referenceFileIds])
         let (data, response) = try await URLSession.shared.data(for: request)
         try validate(response: response, data: data)
         return try JSONDecoder().decode(CreateCharacterResponse.self, from: data).character

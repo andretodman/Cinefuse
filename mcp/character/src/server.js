@@ -38,6 +38,7 @@ export function createServer() {
         if (!existing) {
           throw new Error("character not found");
         }
+        const referenceFileIds = Array.isArray(input?.referenceFileIds) ? input.referenceFileIds : [];
         const consistencyScore = 0.87;
         const consistencyThreshold = 0.8;
         const trained = {
@@ -49,7 +50,14 @@ export function createServer() {
           consistencyPassed: consistencyScore >= consistencyThreshold
         };
         characters.set(trained.id, trained);
-        return { ok: true, server: "character", tool, character: trained, sparksCost: 500 };
+        return {
+          ok: true,
+          server: "character",
+          tool,
+          character: trained,
+          sparksCost: 500,
+          referenceFileIds
+        };
       }
 
       if (tool === "embed_identity") {

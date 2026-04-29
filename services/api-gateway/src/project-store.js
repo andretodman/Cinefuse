@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { createProject } from "../../../packages/shared-types/src/index.js";
 import { Pool } from "pg";
 
@@ -8,8 +9,37 @@ const shots = new Map();
 const audioTracks = new Map();
 const soundBlueprints = new Map();
 const jobs = new Map();
+/** Staging registry for client uploads (Pubfuse Files IDs in production). Maps file id → owning project. */
+const uploadedProjectFiles = new Map();
 
 let pool;
+
+export function registerUploadedProjectFile({ projectId, filename, byteSize }) {
+  const id = randomUUID();
+  const safeName = typeof filename === "string" && filename.length > 0 ? filename : "upload.bin";
+  uploadedProjectFiles.set(id, {
+    projectId,
+    filename: safeName,
+    byteSize: Number(byteSize) || 0,
+    createdAt: new Date().toISOString()
+  });
+  return { id, filename: safeName, byteSize: Number(byteSize) || 0 };
+}
+
+export function validateUploadedFileIdsForProject(projectId, fileIds) {
+  if (!Array.isArray(fileIds)) {
+    return;
+  }
+  for (const fid of fileIds) {
+    if (typeof fid !== "string" || fid.length === 0) {
+      throw new Error("invalid file id");
+    }
+    const meta = uploadedProjectFiles.get(fid);
+    if (!meta || meta.projectId !== projectId) {
+      throw new Error(`unknown file id ${fid}`);
+    }
+  }
+}
 
 function parsePositiveInt(value, fallback) {
   const parsed = Number(value);
@@ -1019,4 +1049,5 @@ export async function clearProjects() {
   audioTracks.clear();
   soundBlueprints.clear();
   jobs.clear();
+  uploadedProjectFiles.clear();
 }

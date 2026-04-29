@@ -679,7 +679,10 @@ struct ProjectWorkspaceScreen: View {
             onDeleteProject: { Task { await deleteSelectedProject() } },
             onRenameProject: { title in Task { await renameSelectedProject(title: title) } },
             onCreateCharacter: { Task { await createCharacter() } },
-            onTrainCharacter: { characterId in Task { await trainCharacter(characterId: characterId) } },
+            onTrainCharacter: { characterId, referenceFileIds in
+                Task { await trainCharacter(characterId: characterId, referenceFileIds: referenceFileIds) }
+            },
+            uploadProjectFiles: { urls in try await performUploadProjectFiles(urls: urls) },
             onGenerateStoryboard: { Task { await generateStoryboard() } },
             onReviseScene: { scene, revision in Task { await reviseScene(scene: scene, revision: revision) } },
             onQuote: { Task { await quoteShot() } },
@@ -2136,11 +2139,30 @@ struct ProjectWorkspaceScreen: View {
         }
     }
 
-    private func trainCharacter(characterId: String) async {
+    private func performUploadProjectFiles(urls: [URL]) async throws -> [String] {
+        guard let selectedProjectId else { return [] }
+        var ids: [String] = []
+        for url in urls {
+            let ref = try await api.uploadProjectFile(
+                token: model.bearerToken,
+                projectId: selectedProjectId,
+                fileURL: url
+            )
+            ids.append(ref.id)
+        }
+        return ids
+    }
+
+    private func trainCharacter(characterId: String, referenceFileIds: [String]) async {
         guard let selectedProjectId else { return }
         model.errorMessage = nil
         do {
-            _ = try await api.trainCharacter(token: model.bearerToken, projectId: selectedProjectId, characterId: characterId)
+            _ = try await api.trainCharacter(
+                token: model.bearerToken,
+                projectId: selectedProjectId,
+                characterId: characterId,
+                referenceFileIds: referenceFileIds
+            )
             await loadSelectedProjectDetails(showLoadingIndicator: false)
         } catch {
             model.errorMessage = error.localizedDescription
@@ -2851,7 +2873,8 @@ struct ProjectDetailScreen: View {
     let onDeleteProject: () -> Void
     let onRenameProject: (String) -> Void
     let onCreateCharacter: () -> Void
-    let onTrainCharacter: (String) -> Void
+    let onTrainCharacter: (String, [String]) -> Void
+    let uploadProjectFiles: ([URL]) async throws -> [String]
     let onGenerateStoryboard: () -> Void
     let onReviseScene: (StoryScene, String) -> Void
     let onQuote: () -> Void
@@ -3037,7 +3060,7 @@ struct ProjectDetailScreen: View {
                                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                                     .transition(.opacity.combined(with: .move(edge: .top)))
                                 } else {
-                                    HStack(spacing: 0) {
+                                    HStack(alignment: .top, spacing: 0) {
                                     if showsLeftPanel {
                                         sidePaneContainer {
                                             if swapSidePanes {
@@ -3062,7 +3085,7 @@ struct ProjectDetailScreen: View {
 
                                     if !isPreviewPoppedOut {
                                         centerPreviewPanel
-                                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                                            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                                     }
 
                                     if showsRightPanel {
@@ -3356,7 +3379,18 @@ struct ProjectDetailScreen: View {
                         blueprints: $soundBlueprints,
                         showTooltips: showTooltips,
                         isCollapsed: $collapseSoundBlueprintsPanel,
+                        uploadProjectFiles: uploadProjectFiles,
                         onCreate: onCreateSoundBlueprint
+                    )
+                    CharacterPanel(
+                        characters: characters,
+                        newCharacterName: $newCharacterName,
+                        newCharacterDescription: $newCharacterDescription,
+                        onCreateCharacter: onCreateCharacter,
+                        uploadProjectFiles: uploadProjectFiles,
+                        onTrainCharacter: onTrainCharacter,
+                        showTooltips: showTooltips,
+                        isCollapsed: $collapseCharacterPanel
                     )
                 } else {
                     StoryboardPanel(
@@ -3370,6 +3404,7 @@ struct ProjectDetailScreen: View {
                         newCharacterName: $newCharacterName,
                         newCharacterDescription: $newCharacterDescription,
                         onCreateCharacter: onCreateCharacter,
+                        uploadProjectFiles: uploadProjectFiles,
                         onTrainCharacter: onTrainCharacter,
                         showTooltips: showTooltips,
                         isCollapsed: $collapseCharacterPanel
@@ -4727,16 +4762,21 @@ struct EditorAudioPreviewPanel: View {
         ) {
             VStack(alignment: .leading, spacing: CinefuseTokens.Spacing.s) {
                 spectrumChrome
-                if primaryPreviewURL == nil {
-                    EmptyStateCard(
-                        title: "No playable audio yet",
-                        message: "Generate lanes or attach clips, then preview the selection."
-                    )
-                } else {
-                    InlinePreviewPlayerSurface(player: queuePlayer)
-                        .frame(minHeight: 140)
-                        .clipShape(RoundedRectangle(cornerRadius: CinefuseTokens.Radius.medium))
+                Group {
+                    if primaryPreviewURL == nil {
+                        EmptyStateCard(
+                            title: "No playable audio yet",
+                            message: "Generate lanes or attach clips, then preview the selection."
+                        )
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+                    } else {
+                        InlinePreviewPlayerSurface(player: queuePlayer)
+                            .frame(minHeight: 140, maxHeight: .infinity)
+                            .clipShape(RoundedRectangle(cornerRadius: CinefuseTokens.Radius.medium))
+                    }
                 }
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+                .layoutPriority(1)
                 HStack(spacing: CinefuseTokens.Spacing.s) {
                     IconCommandButton(
                         systemName: "play.fill",
@@ -4792,7 +4832,9 @@ struct EditorAudioPreviewPanel: View {
                         .foregroundStyle(CinefuseTokens.ColorRole.textSecondary)
                 }
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .onAppear {
             ensureLoopDefaultEnabled()
             configureLoopObserver()
@@ -4877,21 +4919,26 @@ struct SoundBlueprintsPanel: View {
     @Binding var blueprints: [SoundBlueprint]
     let showTooltips: Bool
     @Binding var isCollapsed: Bool
+    let uploadProjectFiles: ([URL]) async throws -> [String]
     let onCreate: (CreateSoundBlueprintRequest) -> Void
     @State private var draftName = "Ambient blueprint"
     @State private var draftTemplate = "neutral"
+    @State private var draftReferenceURLs: [URL] = []
+    @State private var isImporterPresented = false
+    @State private var isSavingBlueprint = false
+    @State private var blueprintError: String?
 
     var body: some View {
         SectionCard(
             title: "Sound blueprints",
-            subtitle: "Define reusable tone beds. Reference uploads wire through Pubfuse Files in production.",
+            subtitle: "Add one or more reference audio files (or video for muxed audio), then Save — uploads register file IDs sent as referenceFileIds on the API.",
             isCollapsed: $isCollapsed
         ) {
             VStack(alignment: .leading, spacing: CinefuseTokens.Spacing.s) {
                 HStack(spacing: CinefuseTokens.Spacing.s) {
                     TextField("Blueprint name", text: $draftName)
                         .textFieldStyle(.roundedBorder)
-                    Picker("Template", selection: $draftTemplate) {
+                    Picker("Style preset", selection: $draftTemplate) {
                         Text("Neutral").tag("neutral")
                         Text("Punchy trailer").tag("punchy_trailer")
                         Text("Soft vocal").tag("soft_vocal")
@@ -4899,23 +4946,71 @@ struct SoundBlueprintsPanel: View {
                     .pickerStyle(.menu)
                     .frame(minWidth: 160)
                     Button {
+                        isImporterPresented = true
+                    } label: {
+                        Label("Add references…", systemImage: "waveform.badge.plus")
+                    }
+                    .buttonStyle(SecondaryActionButtonStyle())
+                    .tooltip("Choose one or more audio/video reference files", enabled: showTooltips)
+                    Button {
+                        blueprintError = nil
                         let name = draftName.trimmingCharacters(in: .whitespacesAndNewlines)
                         guard !name.isEmpty else { return }
-                        onCreate(CreateSoundBlueprintRequest(
-                            name: name,
-                            templateId: draftTemplate,
-                            referenceFileIds: []
-                        ))
+                        Task {
+                            isSavingBlueprint = true
+                            defer { isSavingBlueprint = false }
+                            do {
+                                let ids = try await uploadProjectFiles(draftReferenceURLs)
+                                onCreate(CreateSoundBlueprintRequest(
+                                    name: name,
+                                    templateId: draftTemplate,
+                                    referenceFileIds: ids
+                                ))
+                                draftReferenceURLs = []
+                            } catch {
+                                blueprintError = error.localizedDescription
+                            }
+                        }
                     } label: {
                         Label("Save blueprint", systemImage: "plus.rectangle.on.folder")
                     }
                     .buttonStyle(PrimaryActionButtonStyle())
-                    .tooltip("Persist blueprint for this project", enabled: showTooltips)
+                    .tooltip("Upload references and persist blueprint for this project", enabled: showTooltips)
+                    .disabled(isSavingBlueprint)
+                }
+                if !draftReferenceURLs.isEmpty {
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: CinefuseTokens.Spacing.xs) {
+                            ForEach(Array(draftReferenceURLs.enumerated()), id: \.offset) { index, url in
+                                HStack(spacing: 4) {
+                                    Text(url.lastPathComponent)
+                                        .font(CinefuseTokens.Typography.micro)
+                                        .lineLimit(1)
+                                    Button {
+                                        draftReferenceURLs.remove(at: index)
+                                    } label: {
+                                        Image(systemName: "xmark.circle.fill")
+                                            .font(.caption)
+                                    }
+                                    .buttonStyle(.plain)
+                                }
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 4)
+                                .background(CinefuseTokens.ColorRole.surfacePrimary.opacity(0.9))
+                                .clipShape(RoundedRectangle(cornerRadius: CinefuseTokens.Radius.small))
+                            }
+                        }
+                    }
+                }
+                if let blueprintError {
+                    Text(blueprintError)
+                        .font(CinefuseTokens.Typography.caption)
+                        .foregroundStyle(CinefuseTokens.ColorRole.danger)
                 }
                 if blueprints.isEmpty {
                     EmptyStateCard(
                         title: "No blueprints yet",
-                        message: "Save a blueprint to reuse it when generating sounds."
+                        message: "Add references and save a blueprint to reuse it when generating sounds."
                     )
                 } else {
                     ForEach(blueprints) { blueprint in
@@ -4923,12 +5018,12 @@ struct SoundBlueprintsPanel: View {
                             Text(blueprint.name)
                                 .font(CinefuseTokens.Typography.cardTitle)
                             if let template = blueprint.templateId, !template.isEmpty {
-                                Text("Template: \(template)")
+                                Text("Style preset: \(template)")
                                     .font(CinefuseTokens.Typography.caption)
                                     .foregroundStyle(CinefuseTokens.ColorRole.textSecondary)
                             }
                             if !blueprint.referenceFileIds.isEmpty {
-                                Text("\(blueprint.referenceFileIds.count) reference file(s)")
+                                Text("\(blueprint.referenceFileIds.count) reference file id(s) on server")
                                     .font(CinefuseTokens.Typography.micro)
                                     .foregroundStyle(CinefuseTokens.ColorRole.textSecondary)
                             }
@@ -4941,6 +5036,18 @@ struct SoundBlueprintsPanel: View {
                         )
                     }
                 }
+            }
+        }
+        .fileImporter(
+            isPresented: $isImporterPresented,
+            allowedContentTypes: [.audio, .movie, .mpeg4Movie, UTType(filenameExtension: "wav") ?? .audio],
+            allowsMultipleSelection: true
+        ) { result in
+            switch result {
+            case .success(let urls):
+                draftReferenceURLs.append(contentsOf: urls)
+            case .failure:
+                break
             }
         }
     }
@@ -5153,17 +5260,20 @@ struct CharacterPanel: View {
     @Binding var newCharacterName: String
     @Binding var newCharacterDescription: String
     let onCreateCharacter: () -> Void
-    let onTrainCharacter: (String) -> Void
+    let uploadProjectFiles: ([URL]) async throws -> [String]
+    let onTrainCharacter: (String, [String]) -> Void
     let showTooltips: Bool
     @Binding var isCollapsed: Bool
     @State private var trainingRefsByCharacterId: [String: [URL]] = [:]
     @State private var isImporterPresented = false
     @State private var importerCharacterId: String?
+    @State private var trainBusyCharacterId: String?
+    @State private var trainError: String?
 
     var body: some View {
         SectionCard(
             title: "Characters",
-            subtitle: "Create hero or supporting characters, then train and lock them to shots."
+            subtitle: "Add reference images, video, or audio, then Train — files upload to the API as referenceFileIds for identity training."
             ,
             isCollapsed: $isCollapsed
         ) {
@@ -5197,6 +5307,12 @@ struct CharacterPanel: View {
                     }
                 }
 
+                if let trainError {
+                    Text(trainError)
+                        .font(CinefuseTokens.Typography.caption)
+                        .foregroundStyle(CinefuseTokens.ColorRole.danger)
+                }
+
                 if characters.isEmpty {
                     EmptyStateCard(
                         title: "No characters created",
@@ -5204,6 +5320,7 @@ struct CharacterPanel: View {
                     )
                 } else {
                     ForEach(characters) { character in
+                        let isTrainingThis = trainBusyCharacterId == character.id
                         VStack(alignment: .leading, spacing: CinefuseTokens.Spacing.xs) {
                             HStack(alignment: .firstTextBaseline, spacing: CinefuseTokens.Spacing.s) {
                                 Text(character.name)
@@ -5269,24 +5386,48 @@ struct CharacterPanel: View {
                                     Label("Add reference", systemImage: "paperclip")
                                 }
                                 .buttonStyle(SecondaryActionButtonStyle())
-                                .tooltip("Attach local image or clip as a training reference (upload to Pubfuse Files in production).", enabled: showTooltips)
+                                .tooltip("Attach reference media (image, video, or audio). Multiple files allowed.", enabled: showTooltips)
                                 if character.status.lowercased() != "trained" {
                                     Button {
-                                        onTrainCharacter(character.id)
+                                        trainError = nil
+                                        Task {
+                                            trainBusyCharacterId = character.id
+                                            defer { trainBusyCharacterId = nil }
+                                            do {
+                                                let urls = trainingRefsByCharacterId[character.id] ?? []
+                                                let ids = try await uploadProjectFiles(urls)
+                                                onTrainCharacter(character.id, ids)
+                                            } catch {
+                                                trainError = error.localizedDescription
+                                            }
+                                        }
                                     } label: {
                                         Label("Train", systemImage: "figure.strengthtraining.traditional")
                                     }
-                                    .tooltip("Train this character for consistency", enabled: showTooltips)
+                                    .tooltip("Upload references and train this character for consistency", enabled: showTooltips)
                                     .buttonStyle(SecondaryActionButtonStyle())
+                                    .disabled(isTrainingThis)
                                 }
                                 if character.status.lowercased() == "trained" || character.status.lowercased() == "ready" {
                                     Button {
-                                        onTrainCharacter(character.id)
+                                        trainError = nil
+                                        Task {
+                                            trainBusyCharacterId = character.id
+                                            defer { trainBusyCharacterId = nil }
+                                            do {
+                                                let urls = trainingRefsByCharacterId[character.id] ?? []
+                                                let ids = try await uploadProjectFiles(urls)
+                                                onTrainCharacter(character.id, ids)
+                                            } catch {
+                                                trainError = error.localizedDescription
+                                            }
+                                        }
                                     } label: {
                                         Label("Retrain", systemImage: "arrow.triangle.2.circlepath")
                                     }
                                     .tooltip("Run training again with updated references", enabled: showTooltips)
                                     .buttonStyle(SecondaryActionButtonStyle())
+                                    .disabled(isTrainingThis)
                                 }
                             }
                             .frame(maxWidth: .infinity, alignment: .leading)
@@ -5572,12 +5713,13 @@ struct ShotsPanel: View {
                                     .foregroundStyle(CinefuseTokens.ColorRole.textSecondary)
                                 if panelMode == .audioSounds {
                                     HStack(spacing: CinefuseTokens.Spacing.s) {
-                                        Text("Source")
+                                        Text("Origin (automatic)")
                                             .font(CinefuseTokens.Typography.caption)
                                             .foregroundStyle(CinefuseTokens.ColorRole.textSecondary)
                                         Text(soundSourceLabel(shot))
-                                            .font(CinefuseTokens.Typography.label.weight(.semibold))
+                                            .font(CinefuseTokens.Typography.body.weight(.medium))
                                             .foregroundStyle(CinefuseTokens.ColorRole.textPrimary)
+                                            .textSelection(.enabled)
                                         Spacer(minLength: CinefuseTokens.Spacing.s)
                                         TextField(
                                             "Tags",

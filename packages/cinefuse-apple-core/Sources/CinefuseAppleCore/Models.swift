@@ -168,6 +168,17 @@ public struct CreateSoundBlueprintResponse: Codable, Sendable {
     public let soundBlueprint: SoundBlueprint
 }
 
+/// Response from `POST .../projects/:id/files` after uploading reference bytes (staging until Pubfuse Files IDs are wired).
+public struct UploadProjectFileAPIResponse: Codable, Sendable {
+    public let file: UploadedProjectFileRef
+}
+
+public struct UploadedProjectFileRef: Codable, Sendable {
+    public let id: String
+    public let filename: String?
+    public let byteSize: Int?
+}
+
 public struct AudioMixExportResponse: Codable {
     public let job: Job
     public let export: AudioMixExportArtifact

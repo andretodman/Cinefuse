@@ -17,13 +17,15 @@ import {
   listScenes,
   listShots,
   listSoundBlueprints,
+  registerUploadedProjectFile,
   saveJob,
   saveProject,
   saveScene,
   saveCharacter,
   saveAudioTrack,
   saveShot,
-  saveSoundBlueprint
+  saveSoundBlueprint,
+  validateUploadedFileIdsForProject
 } from "./project-store.js";
 
 function json(response, status, payload) {
@@ -689,6 +691,28 @@ export function createHttpServer() {
       return writeError(response, 401, "unauthorized", "UNAUTHORIZED");
     }
 
+    const projectFilesUploadMatch = url.pathname.match(/^\/api\/v1\/cinefuse\/projects\/([^/]+)\/files$/);
+    if (projectFilesUploadMatch && method === "POST") {
+      const projectId = decodeURIComponent(projectFilesUploadMatch[1]);
+      const project = await getProject(projectId, auth.userId);
+      if (!project) {
+        return writeError(response, 404, "project not found", "PROJECT_NOT_FOUND");
+      }
+      const filenameHeader = request.headers["x-filename"] ?? request.headers["x-file-name"] ?? "upload.bin";
+      const filename = decodeURIComponent(String(filenameHeader));
+      const chunks = [];
+      for await (const chunk of request) {
+        chunks.push(chunk);
+      }
+      const buffer = Buffer.concat(chunks);
+      const file = registerUploadedProjectFile({
+        projectId,
+        filename,
+        byteSize: buffer.length
+      });
+      return json(response, 201, { file });
+    }
+
     const projectEventsMatch = url.pathname.match(/^\/api\/v1\/cinefuse\/projects\/([^/]+)\/events$/);
     if (projectEventsMatch && method === "GET") {
       const projectId = decodeURIComponent(projectEventsMatch[1]);
@@ -1013,9 +1037,20 @@ export function createHttpServer() {
       if (!project) {
         return writeError(response, 404, "project not found", "PROJECT_NOT_FOUND");
       }
+      const payload = await readBody(request);
+      const rawTrainRefs = payload.referenceFileIds ?? payload.reference_file_ids;
+      const referenceFileIds = Array.isArray(rawTrainRefs)
+        ? rawTrainRefs.filter((id) => typeof id === "string" && id.length > 0)
+        : [];
+      try {
+        validateUploadedFileIdsForProject(projectId, referenceFileIds);
+      } catch (error) {
+        return writeError(response, 400, error?.message ?? "invalid file reference", "INVALID_FILE_REFERENCE");
+      }
       const trained = await mcpHost.invoke("character", "train_identity", {
         projectId,
-        characterId
+        characterId,
+        referenceFileIds
       });
       const trainingSparksCost = Number(trained.sparksCost ?? 0);
       await mcpHost.invoke("billing", "debit", {
@@ -1144,12 +1179,21 @@ export function createHttpServer() {
         return writeError(response, 404, "project not found", "PROJECT_NOT_FOUND");
       }
       const payload = await readBody(request);
+      const rawBlueprintRefs = payload.referenceFileIds ?? payload.reference_file_ids;
+      const referenceFileIds = Array.isArray(rawBlueprintRefs)
+        ? rawBlueprintRefs.filter((id) => typeof id === "string" && id.length > 0)
+        : [];
+      try {
+        validateUploadedFileIdsForProject(projectId, referenceFileIds);
+      } catch (error) {
+        return writeError(response, 400, error?.message ?? "invalid file reference", "INVALID_FILE_REFERENCE");
+      }
       const blueprint = await saveSoundBlueprint({
         id: payload.id ?? randomUUID(),
         projectId,
         name: typeof payload.name === "string" ? payload.name : "Sound blueprint",
         templateId: typeof payload.templateId === "string" ? payload.templateId : null,
-        referenceFileIds: Array.isArray(payload.referenceFileIds) ? payload.referenceFileIds : []
+        referenceFileIds
       });
       return json(response, 201, { soundBlueprint: blueprint });
     }

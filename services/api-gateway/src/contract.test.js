@@ -871,3 +871,77 @@ test("api contract: clip generation debit is idempotent with caller key", async 
     });
   });
 });
+
+test("api contract: project file upload registers ids for blueprints and character train", async () => {
+  const headers = authHeaders("usr_contract_uploads");
+  await clearProjects();
+  const server = createHttpServer();
+
+  await new Promise((resolve) => server.listen(0, resolve));
+  const address = server.address();
+  const port = typeof address === "object" && address ? address.port : 0;
+  const baseUrl = `http://127.0.0.1:${port}`;
+
+  const createProject = await fetch(`${baseUrl}/api/v1/cinefuse/projects`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ title: "Upload Project" })
+  });
+  assert.equal(createProject.status, 201);
+  const projectId = (await createProject.json()).project.id;
+
+  const uploadHeaders = {
+    ...headers,
+    "content-type": "application/octet-stream",
+    "x-filename": "ref.wav"
+  };
+  const upload = await fetch(`${baseUrl}/api/v1/cinefuse/projects/${projectId}/files`, {
+    method: "POST",
+    headers: uploadHeaders,
+    body: Buffer.from("fake-audio-bytes")
+  });
+  assert.equal(upload.status, 201);
+  const fileId = (await upload.json()).file.id;
+  assert.ok(typeof fileId === "string" && fileId.length > 0);
+
+  const blueprintRes = await fetch(`${baseUrl}/api/v1/cinefuse/projects/${projectId}/sound-blueprints`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({
+      name: "Room tone",
+      templateId: "neutral",
+      referenceFileIds: [fileId]
+    })
+  });
+  assert.equal(blueprintRes.status, 201);
+  const bp = (await blueprintRes.json()).soundBlueprint;
+  assert.deepEqual(bp.referenceFileIds, [fileId]);
+
+  const createCharacter = await fetch(`${baseUrl}/api/v1/cinefuse/projects/${projectId}/characters`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ name: "Face ref", description: "Identity" })
+  });
+  assert.equal(createCharacter.status, 201);
+  const characterId = (await createCharacter.json()).character.id;
+
+  const trainCharacter = await fetch(
+    `${baseUrl}/api/v1/cinefuse/projects/${projectId}/characters/${characterId}/train`,
+    {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ referenceFileIds: [fileId] })
+    }
+  );
+  assert.equal(trainCharacter.status, 200);
+
+  await new Promise((resolve, reject) => {
+    server.close((error) => {
+      if (error) {
+        reject(error);
+        return;
+      }
+      resolve();
+    });
+  });
+});
