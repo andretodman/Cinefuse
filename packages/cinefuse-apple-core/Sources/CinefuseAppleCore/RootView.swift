@@ -5050,6 +5050,34 @@ struct EditorAudioPreviewPanel: View {
     }
 }
 
+#if canImport(AVFoundation)
+/// Sound blueprint references: accept audio-bearing media (audio track present) or stills (no video track). Rejects silent video (video track without audio).
+private func urlPassesSoundBlueprintAudioPolicy(_ url: URL) async -> Bool {
+    let scoped = url.startAccessingSecurityScopedResource()
+    defer {
+        if scoped { url.stopAccessingSecurityScopedResource() }
+    }
+    let asset = AVURLAsset(url: url)
+    do {
+        let audioTracks = try await asset.loadTracks(withMediaType: .audio)
+        if !audioTracks.isEmpty { return true }
+        let videoTracks = try await asset.loadTracks(withMediaType: .video)
+        return videoTracks.isEmpty
+    } catch {
+        return fallbackSoundBlueprintReferenceEligible(url)
+    }
+}
+
+private func fallbackSoundBlueprintReferenceEligible(_ url: URL) -> Bool {
+    let ext = url.pathExtension.lowercased()
+    let videoExt: Set<String> = ["mp4", "m4v", "mov", "mkv", "webm", "avi"]
+    let audioExt: Set<String> = ["m4a", "wav", "aac", "mp3", "caf", "aiff", "flac", "ogg", "mp2"]
+    if audioExt.contains(ext) { return true }
+    if videoExt.contains(ext) { return false }
+    return true
+}
+#endif
+
 struct SoundBlueprintsPanel: View {
     @Binding var blueprints: [SoundBlueprint]
     let showTooltips: Bool
@@ -5083,7 +5111,7 @@ struct SoundBlueprintsPanel: View {
             Label("Add references…", systemImage: "waveform.badge.plus")
         }
         .buttonStyle(SecondaryActionButtonStyle())
-        .tooltip("Choose one or more audio/video reference files", enabled: showTooltips)
+        .tooltip("Audio, video with sound, or stills — silent video files are skipped", enabled: showTooltips)
     }
 
     private var saveBlueprintButton: some View {
@@ -5154,7 +5182,7 @@ struct SoundBlueprintsPanel: View {
     var body: some View {
         SectionCard(
             title: "Sound blueprints",
-            subtitle: "Add references from Files or Photos (still, video, or audio files), then Save — uploads register file IDs sent as referenceFileIds on the API.",
+            subtitle: "Add references from Files or Photos — audio, video with sound, or stills. Silent video (no audio track) is skipped.",
             isCollapsed: $isCollapsed
         ) {
             VStack(alignment: .leading, spacing: CinefuseTokens.Spacing.s) {
@@ -5257,7 +5285,11 @@ struct SoundBlueprintsPanel: View {
         ) { result in
             switch result {
             case .success(let urls):
+#if canImport(AVFoundation)
+                Task { await appendFilteredBlueprintURLs(urls) }
+#else
                 draftReferenceURLs.append(contentsOf: urls)
+#endif
             case .failure:
                 break
             }
@@ -5276,6 +5308,10 @@ struct SoundBlueprintsPanel: View {
 #if canImport(PhotosUI)
     @MainActor
     private func appendDraftURLsFromPhotoPickerItems(_ items: [PhotosPickerItem]) async {
+        var toAppend: [URL] = []
+#if canImport(AVFoundation)
+        var silentVideosSkipped = 0
+#endif
         for item in items {
             do {
                 guard let data = try await item.loadTransferable(type: Data.self) else {
@@ -5286,10 +5322,47 @@ struct SoundBlueprintsPanel: View {
                 let dest = FileManager.default.temporaryDirectory
                     .appendingPathComponent("cinefuse-blueprint-\(UUID().uuidString).\(ext)")
                 try data.write(to: dest)
-                draftReferenceURLs.append(dest)
+#if canImport(AVFoundation)
+                if await urlPassesSoundBlueprintAudioPolicy(dest) {
+                    toAppend.append(dest)
+                } else {
+                    silentVideosSkipped += 1
+                }
+#else
+                toAppend.append(dest)
+#endif
             } catch {
                 blueprintError = error.localizedDescription
             }
+        }
+        draftReferenceURLs.append(contentsOf: toAppend)
+#if canImport(AVFoundation)
+        if silentVideosSkipped > 0 {
+            blueprintError = silentVideosSkipped == 1
+                ? "Skipped 1 video with no audio track."
+                : "Skipped \(silentVideosSkipped) videos with no audio track."
+        }
+#endif
+    }
+#endif
+
+#if canImport(AVFoundation)
+    @MainActor
+    private func appendFilteredBlueprintURLs(_ urls: [URL]) async {
+        var skipped = 0
+        var accepted: [URL] = []
+        for url in urls {
+            if await urlPassesSoundBlueprintAudioPolicy(url) {
+                accepted.append(url)
+            } else {
+                skipped += 1
+            }
+        }
+        draftReferenceURLs.append(contentsOf: accepted)
+        if skipped > 0 {
+            blueprintError = skipped == 1
+                ? "Skipped 1 video with no audio track. Use audio, video that includes sound, or stills."
+                : "Skipped \(skipped) videos with no audio track. Use audio, video that includes sound, or stills."
         }
     }
 #endif
