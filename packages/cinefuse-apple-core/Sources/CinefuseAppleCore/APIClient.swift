@@ -697,10 +697,20 @@ public struct APIClient {
         return try JSONDecoder().decode(CreateCharacterResponse.self, from: data).character
     }
 
-    public func generateShot(token: String, projectId: String, shotId: String) async throws -> GenerateShotResponse {
+    /// - Parameter soundBlueprintIds: When non-nil, sends `{"soundBlueprintIds": ...}` so the gateway merges reference file IDs onto the shot before queuing. Pass `[]` in audio mode to clear blueprint refs. When `nil`, the body is omitted and existing shot `audioRefs` are unchanged.
+    public func generateShot(
+        token: String,
+        projectId: String,
+        shotId: String,
+        soundBlueprintIds: [String]? = nil
+    ) async throws -> GenerateShotResponse {
         var request = URLRequest(url: buildURL(path: "\(Self.cinefusePrefix)/projects/\(projectId)/shots/\(shotId)/generate"))
         request.httpMethod = "POST"
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        if let ids = soundBlueprintIds {
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            request.httpBody = try JSONSerialization.data(withJSONObject: ["soundBlueprintIds": ids])
+        }
         let (data, response) = try await performDataRequest(request, context: "generateShot")
         try validate(response: response, data: data)
         return try JSONDecoder().decode(GenerateShotResponse.self, from: data)

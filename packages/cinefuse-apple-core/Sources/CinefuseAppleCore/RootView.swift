@@ -562,6 +562,8 @@ struct ProjectWorkspaceScreen: View {
     @AppStorage("cinefuse.editor.workspacePreset") private var workspacePresetRaw = EditorWorkspacePreset.editing.rawValue
     @AppStorage("cinefuse.editor.creationMode") private var creationModeRaw = CreationMode.video.rawValue
     @State private var soundBlueprints: [SoundBlueprint] = []
+    /// Per-shot selected sound blueprint IDs for Generate (audio mode); merged server-side into reference file IDs.
+    @State private var selectedSoundBlueprintIdsByShotId: [String: Set<String>] = [:]
     /// Per-shot sound origin: `"generated"` (prompt → pipeline) or `"uploaded"` (user file). Not user-editable; set by create/upload flows.
     @State private var shotSoundSourceById: [String: String] = [:]
     @State private var soundTagsDraft = ""
@@ -645,6 +647,10 @@ struct ProjectWorkspaceScreen: View {
         )
     }
 
+    private var isAudioCreationWorkspace: Bool {
+        CreationMode(rawValue: creationModeRaw) == .audio
+    }
+
     private var projectDetailView: some View {
         ProjectDetailScreen(
             project: selectedProject,
@@ -718,9 +724,13 @@ struct ProjectWorkspaceScreen: View {
             showTooltips: editorSettings.showTooltips,
             creationModeRaw: $creationModeRaw,
             soundBlueprints: $soundBlueprints,
+            selectedSoundBlueprintIdsByShotId: $selectedSoundBlueprintIdsByShotId,
             soundSourceLabel: soundSourceLabel(for:),
             soundTagsDraft: $soundTagsDraft,
             onCreateSoundBlueprint: { request in Task { await createSoundBlueprint(request: request) } },
+            onImportSoundBlueprintRefs: { shotId, urls in
+                Task { await addBlueprintFromReferencesForShot(shotId: shotId, urls: urls) }
+            },
             onExportAudioMix: { Task { await exportLayeredAudioMix() } },
             onAddAudioTrack: { Task { await addEmptyAudioLane() } }
         )
@@ -735,6 +745,37 @@ struct ProjectWorkspaceScreen: View {
                 body: request
             )
             await loadSelectedProjectDetails(showLoadingIndicator: false)
+        } catch {
+            model.errorMessage = error.localizedDescription
+        }
+    }
+
+    /// Uploads files, creates a sound blueprint, refreshes the project, and selects it for this shot’s Generate flow.
+    private func addBlueprintFromReferencesForShot(shotId: String, urls: [URL]) async {
+        guard let selectedProjectId else { return }
+        guard !urls.isEmpty else { return }
+        model.errorMessage = nil
+        do {
+            let fileIds = try await performUploadProjectFiles(urls: urls)
+            guard !fileIds.isEmpty else { return }
+            let shot = shots.first(where: { $0.id == shotId })
+            let raw = shot?.prompt.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let titleBase = raw.isEmpty ? "Sound references" : String(raw.prefix(40))
+            let blueprint = try await api.createSoundBlueprint(
+                token: model.bearerToken,
+                projectId: selectedProjectId,
+                body: CreateSoundBlueprintRequest(
+                    name: titleBase,
+                    templateId: "neutral",
+                    referenceFileIds: fileIds
+                )
+            )
+            await loadSelectedProjectDetails(showLoadingIndicator: false)
+            var map = selectedSoundBlueprintIdsByShotId
+            var set = map[shotId] ?? []
+            set.insert(blueprint.id)
+            map[shotId] = set
+            selectedSoundBlueprintIdsByShotId = map
         } catch {
             model.errorMessage = error.localizedDescription
         }
@@ -963,26 +1004,30 @@ struct ProjectWorkspaceScreen: View {
                     withAnimation(CinefuseTokens.Motion.panel) {
                         showBottomPane.toggle()
                         if showBottomPane && !showAudioPanel && !showJobsPanel {
-                            showAudioPanel = true
+                            if !isAudioCreationWorkspace {
+                                showAudioPanel = true
+                            }
                             showJobsPanel = true
                         }
                     }
                 },
                 tooltipEnabled: editorSettings.showTooltips
             )
-            IconCommandButton(
-                systemName: showAudioPanel ? "waveform" : "waveform.slash",
-                label: "Toggle audio lanes panel",
-                action: {
-                    withAnimation(CinefuseTokens.Motion.panel) {
-                        showAudioPanel.toggle()
-                        if showAudioPanel {
-                            showBottomPane = true
+            if !isAudioCreationWorkspace {
+                IconCommandButton(
+                    systemName: showAudioPanel ? "waveform" : "waveform.slash",
+                    label: "Toggle audio lanes panel",
+                    action: {
+                        withAnimation(CinefuseTokens.Motion.panel) {
+                            showAudioPanel.toggle()
+                            if showAudioPanel {
+                                showBottomPane = true
+                            }
                         }
-                    }
-                },
-                tooltipEnabled: editorSettings.showTooltips
-            )
+                    },
+                    tooltipEnabled: editorSettings.showTooltips
+                )
+            }
             IconCommandButton(
                 systemName: showJobsPanel ? "list.bullet.clipboard.fill" : "list.bullet.clipboard",
                 label: "Toggle jobs panel",
@@ -1754,6 +1799,7 @@ struct ProjectWorkspaceScreen: View {
             audioTracks = []
             jobs = []
             soundBlueprints = []
+            selectedSoundBlueprintIdsByShotId = [:]
             shotSoundSourceById = [:]
             return
         }
@@ -1801,6 +1847,7 @@ struct ProjectWorkspaceScreen: View {
                 soundBlueprints = latestBlueprints
                 let keptShotIds = Set(latestTimeline.shots.map(\.id))
                 shotSoundSourceById = shotSoundSourceById.filter { keptShotIds.contains($0.key) }
+                selectedSoundBlueprintIdsByShotId = selectedSoundBlueprintIdsByShotId.filter { keptShotIds.contains($0.key) }
             }
             syncRequestStatesFromSnapshot(
                 shots: latestTimeline.shots,
@@ -2197,10 +2244,14 @@ struct ProjectWorkspaceScreen: View {
         }
         appendDebugEvent("generate shot requested shot=\(shotId)")
         do {
+            let soundBlueprintIds: [String]? = isAudioCreationWorkspace
+                ? Array(selectedSoundBlueprintIdsByShotId[shotId] ?? []).sorted()
+                : nil
             let generation = try await api.generateShot(
                 token: model.bearerToken,
                 projectId: selectedProjectId,
-                shotId: shotId
+                shotId: shotId,
+                soundBlueprintIds: soundBlueprintIds
             )
             quotedShotCost = generation.quote
             upsertShotRequestState(shotId) { state in
@@ -2902,9 +2953,12 @@ struct ProjectDetailScreen: View {
     let showTooltips: Bool
     @Binding var creationModeRaw: String
     @Binding var soundBlueprints: [SoundBlueprint]
+    @Binding var selectedSoundBlueprintIdsByShotId: [String: Set<String>]
     let soundSourceLabel: (Shot) -> String
     @Binding var soundTagsDraft: String
     let onCreateSoundBlueprint: (CreateSoundBlueprintRequest) -> Void
+    /// Upload reference audio/video from a sound card: creates a blueprint and selects it for that shot.
+    let onImportSoundBlueprintRefs: (String, [URL]) -> Void
     let onExportAudioMix: () -> Void
     let onAddAudioTrack: () -> Void
     @AppStorage("cinefuse.editor.leftPaneWidth") private var leftPaneWidth: Double = 460
@@ -2948,6 +3002,11 @@ struct ProjectDetailScreen: View {
 
     private var isAudioCreationMode: Bool {
         effectiveCreationMode == .audio
+    }
+
+    /// Layered audio lanes (dialogue/score/SFX/mix) attach to the video timeline — not shown in Audio Creation mode.
+    private var showVideoAudioLanesPanel: Bool {
+        showAudioPanel && !isAudioCreationMode
     }
 
     private var latestExportArtifactStatus: ArtifactStatusPresentation? {
@@ -3001,7 +3060,7 @@ struct ProjectDetailScreen: View {
                     GeometryReader { geometry in
                         let totalWidth = Double(max(geometry.size.width, 320))
                         let totalHeight = Double(max(geometry.size.height, 280))
-                        let showsBottomRegion = showBottomPane && (showAudioPanel || showJobsPanel)
+                        let showsBottomRegion = showBottomPane && (showVideoAudioLanesPanel || showJobsPanel)
                         let bottomHandleHeight = Double(CinefuseTokens.Control.splitterHitArea)
                         let minTopWorkspaceHeight = Double(CinefuseTokens.Control.minTopWorkspaceHeight)
                         let maxBottomByAvailableSpace = max(
@@ -3016,8 +3075,8 @@ struct ProjectDetailScreen: View {
                             }
                             return maxBottomByAvailableSpace
                         }()
-                        let visibleBottomPanelCount = (showAudioPanel ? 1 : 0) + (showJobsPanel ? 1 : 0)
-                        let collapsedBottomPanelCount = (showAudioPanel && collapseAudioPanel ? 1 : 0)
+                        let visibleBottomPanelCount = (showVideoAudioLanesPanel ? 1 : 0) + (showJobsPanel ? 1 : 0)
+                        let collapsedBottomPanelCount = (showVideoAudioLanesPanel && collapseAudioPanel ? 1 : 0)
                             + (showJobsPanel && collapseJobsPanel ? 1 : 0)
                         let allVisibleBottomPanelsCollapsed = visibleBottomPanelCount > 0
                             && visibleBottomPanelCount == collapsedBottomPanelCount
@@ -3036,7 +3095,7 @@ struct ProjectDetailScreen: View {
                         VStack(spacing: 0) {
                             if isRenderWorkspace {
                                 HStack(alignment: .top, spacing: CinefuseTokens.Spacing.s) {
-                                    if showAudioPanel {
+                                    if showVideoAudioLanesPanel {
                                         audioLanesPanelCard
                                             .frame(minWidth: 0, maxWidth: .infinity, alignment: .topLeading)
                                     }
@@ -3044,7 +3103,7 @@ struct ProjectDetailScreen: View {
                                         jobsPanelCard
                                             .frame(minWidth: 0, maxWidth: .infinity, alignment: .topLeading)
                                     }
-                                    if !showAudioPanel && !showJobsPanel {
+                                    if !showVideoAudioLanesPanel && !showJobsPanel {
                                         EmptyStateCard(
                                             title: "Render panels hidden",
                                             message: "Enable Audio Lanes or Jobs from the top menu to continue."
@@ -3122,7 +3181,7 @@ struct ProjectDetailScreen: View {
                                         )
                                     }
                                     HStack(alignment: .top, spacing: CinefuseTokens.Spacing.s) {
-                                        if showAudioPanel {
+                                        if showVideoAudioLanesPanel {
                                             audioLanesPanelCard
                                                 .frame(minWidth: 0, maxWidth: .infinity, alignment: .topLeading)
                                         }
@@ -3443,6 +3502,9 @@ struct ProjectDetailScreen: View {
                     showTooltips: showTooltips,
                     isCollapsed: $collapseShotsPanel,
                     panelMode: isAudioCreationMode ? .audioSounds : .videoClips,
+                    soundBlueprints: soundBlueprints,
+                    selectedSoundBlueprintIdsByShotId: $selectedSoundBlueprintIdsByShotId,
+                    onImportSoundBlueprintRefs: onImportSoundBlueprintRefs,
                     soundSourceLabel: soundSourceLabel,
                     soundTagsDraft: $soundTagsDraft
                 )
@@ -4928,6 +4990,69 @@ struct SoundBlueprintsPanel: View {
     @State private var isSavingBlueprint = false
     @State private var blueprintError: String?
 
+    private var blueprintPresetPicker: some View {
+        Picker("Style preset", selection: $draftTemplate) {
+            Text("Neutral").tag("neutral")
+            Text("Punchy trailer").tag("punchy_trailer")
+            Text("Soft vocal").tag("soft_vocal")
+        }
+        .pickerStyle(.menu)
+    }
+
+    private var addReferencesButton: some View {
+        Button {
+            isImporterPresented = true
+        } label: {
+            Label("Add references…", systemImage: "waveform.badge.plus")
+        }
+        .buttonStyle(SecondaryActionButtonStyle())
+        .tooltip("Choose one or more audio/video reference files", enabled: showTooltips)
+    }
+
+    private var saveBlueprintButton: some View {
+        Button {
+            blueprintError = nil
+            let name = draftName.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !name.isEmpty else { return }
+            Task {
+                isSavingBlueprint = true
+                defer { isSavingBlueprint = false }
+                do {
+                    let ids = try await uploadProjectFiles(draftReferenceURLs)
+                    onCreate(CreateSoundBlueprintRequest(
+                        name: name,
+                        templateId: draftTemplate,
+                        referenceFileIds: ids
+                    ))
+                    draftReferenceURLs = []
+                } catch {
+                    blueprintError = error.localizedDescription
+                }
+            }
+        } label: {
+            Label("Save blueprint", systemImage: "plus.rectangle.on.folder")
+        }
+        .buttonStyle(PrimaryActionButtonStyle())
+        .tooltip("Upload references and persist blueprint for this project", enabled: showTooltips)
+        .disabled(isSavingBlueprint)
+    }
+
+    private var blueprintActionButtonsHorizontal: some View {
+        HStack(spacing: CinefuseTokens.Spacing.s) {
+            addReferencesButton
+            saveBlueprintButton
+        }
+    }
+
+    private var blueprintActionButtonsStacked: some View {
+        VStack(alignment: .leading, spacing: CinefuseTokens.Spacing.xs) {
+            addReferencesButton
+                .frame(maxWidth: .infinity, alignment: .leading)
+            saveBlueprintButton
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
     var body: some View {
         SectionCard(
             title: "Sound blueprints",
@@ -4935,48 +5060,19 @@ struct SoundBlueprintsPanel: View {
             isCollapsed: $isCollapsed
         ) {
             VStack(alignment: .leading, spacing: CinefuseTokens.Spacing.s) {
-                HStack(spacing: CinefuseTokens.Spacing.s) {
-                    TextField("Blueprint name", text: $draftName)
-                        .textFieldStyle(.roundedBorder)
-                    Picker("Style preset", selection: $draftTemplate) {
-                        Text("Neutral").tag("neutral")
-                        Text("Punchy trailer").tag("punchy_trailer")
-                        Text("Soft vocal").tag("soft_vocal")
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: CinefuseTokens.Spacing.s) {
+                        TextField("Blueprint name", text: $draftName)
+                            .textFieldStyle(.roundedBorder)
+                        blueprintPresetPicker
+                        blueprintActionButtonsHorizontal
                     }
-                    .pickerStyle(.menu)
-                    .frame(minWidth: 160)
-                    Button {
-                        isImporterPresented = true
-                    } label: {
-                        Label("Add references…", systemImage: "waveform.badge.plus")
+                    VStack(alignment: .leading, spacing: CinefuseTokens.Spacing.s) {
+                        TextField("Blueprint name", text: $draftName)
+                            .textFieldStyle(.roundedBorder)
+                        blueprintPresetPicker
+                        blueprintActionButtonsStacked
                     }
-                    .buttonStyle(SecondaryActionButtonStyle())
-                    .tooltip("Choose one or more audio/video reference files", enabled: showTooltips)
-                    Button {
-                        blueprintError = nil
-                        let name = draftName.trimmingCharacters(in: .whitespacesAndNewlines)
-                        guard !name.isEmpty else { return }
-                        Task {
-                            isSavingBlueprint = true
-                            defer { isSavingBlueprint = false }
-                            do {
-                                let ids = try await uploadProjectFiles(draftReferenceURLs)
-                                onCreate(CreateSoundBlueprintRequest(
-                                    name: name,
-                                    templateId: draftTemplate,
-                                    referenceFileIds: ids
-                                ))
-                                draftReferenceURLs = []
-                            } catch {
-                                blueprintError = error.localizedDescription
-                            }
-                        }
-                    } label: {
-                        Label("Save blueprint", systemImage: "plus.rectangle.on.folder")
-                    }
-                    .buttonStyle(PrimaryActionButtonStyle())
-                    .tooltip("Upload references and persist blueprint for this project", enabled: showTooltips)
-                    .disabled(isSavingBlueprint)
                 }
                 if !draftReferenceURLs.isEmpty {
                     ScrollView(.horizontal, showsIndicators: false) {
@@ -5480,8 +5576,12 @@ struct ShotsPanel: View {
     let showTooltips: Bool
     @Binding var isCollapsed: Bool
     var panelMode: ShotsPanelMode = .videoClips
+    var soundBlueprints: [SoundBlueprint] = []
+    @Binding var selectedSoundBlueprintIdsByShotId: [String: Set<String>]
+    let onImportSoundBlueprintRefs: (String, [URL]) -> Void
     let soundSourceLabel: (Shot) -> String
     @Binding var soundTagsDraft: String
+    @State private var blueprintFileImportShotId: String?
     @State private var pendingDeleteShotId: String?
     @State private var selectedDiagnostics: ArtifactStatusPresentation?
     @State private var soundTagsByShotId: [String: String] = [:]
@@ -5573,11 +5673,114 @@ struct ShotsPanel: View {
         panelMode == .audioSounds ? "Create Sound" : "Create Shot"
     }
 
+    private func flipBlueprintSelection(shotId: String, blueprintId: String) {
+        var map = selectedSoundBlueprintIdsByShotId
+        var set = map[shotId] ?? []
+        if set.contains(blueprintId) {
+            set.remove(blueprintId)
+        } else {
+            set.insert(blueprintId)
+        }
+        if set.isEmpty {
+            map.removeValue(forKey: shotId)
+        } else {
+            map[shotId] = set
+        }
+        selectedSoundBlueprintIdsByShotId = map
+    }
+
+    private func blueprintPickerSummary(for shot: Shot) -> String {
+        let n = selectedSoundBlueprintIdsByShotId[shot.id]?.count ?? 0
+        if n == 0 {
+            return "Choose blueprints…"
+        }
+        return n == 1 ? "1 blueprint selected" : "\(n) blueprints selected"
+    }
+
+    /// Menu (picker-style) plus Import — always offers a concrete control, not only prose.
+    @ViewBuilder
+    private func soundBlueprintAssociationSection(shot: Shot) -> some View {
+        VStack(alignment: .leading, spacing: CinefuseTokens.Spacing.xs) {
+            Text("Sound blueprints")
+                .font(CinefuseTokens.Typography.caption.weight(.semibold))
+                .foregroundStyle(CinefuseTokens.ColorRole.textPrimary)
+            if soundBlueprints.isEmpty {
+                Text("None yet — import files here, or use Sound blueprints on the left.")
+                    .font(CinefuseTokens.Typography.micro)
+                    .foregroundStyle(CinefuseTokens.ColorRole.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            if soundBlueprints.isEmpty {
+                Button {
+                    blueprintFileImportShotId = shot.id
+                } label: {
+                    Label("Import reference files…", systemImage: "square.and.arrow.down")
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .buttonStyle(SecondaryActionButtonStyle())
+                .tooltip("Creates a blueprint from these files and selects it for this sound.", enabled: showTooltips)
+            } else {
+                Menu {
+                    ForEach(soundBlueprints) { blueprint in
+                        Button {
+                            flipBlueprintSelection(shotId: shot.id, blueprintId: blueprint.id)
+                        } label: {
+                            HStack {
+                                Text(blueprint.name)
+                                Spacer(minLength: 12)
+                                if selectedSoundBlueprintIdsByShotId[shot.id]?.contains(blueprint.id) == true {
+                                    Image(systemName: "checkmark")
+                                }
+                            }
+                        }
+                    }
+                } label: {
+                    HStack(spacing: CinefuseTokens.Spacing.xs) {
+                        Image(systemName: "list.bullet.rectangle.portrait")
+                        Text(blueprintPickerSummary(for: shot))
+                            .lineLimit(1)
+                        Spacer(minLength: 4)
+                        Image(systemName: "chevron.up.chevron.down")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(CinefuseTokens.ColorRole.textSecondary)
+                    }
+                    .font(CinefuseTokens.Typography.body)
+                    .padding(.horizontal, CinefuseTokens.Spacing.s)
+                    .padding(.vertical, 8)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(
+                        RoundedRectangle(cornerRadius: CinefuseTokens.Radius.small)
+                            .fill(CinefuseTokens.ColorRole.surfacePrimary.opacity(0.95))
+                    )
+                }
+                .menuStyle(.button)
+                Button {
+                    blueprintFileImportShotId = shot.id
+                } label: {
+                    Label("Import reference files…", systemImage: "plus.circle")
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .buttonStyle(SecondaryActionButtonStyle())
+                .tooltip("Adds another blueprint from files and selects it for this sound.", enabled: showTooltips)
+            }
+            Text("Generate merges chosen blueprint file IDs on the server. No selection = prompt only.")
+                .font(CinefuseTokens.Typography.micro)
+                .foregroundStyle(CinefuseTokens.ColorRole.textSecondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(CinefuseTokens.Spacing.s)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: CinefuseTokens.Radius.small)
+                .strokeBorder(CinefuseTokens.ColorRole.textSecondary.opacity(0.25), lineWidth: 1)
+        )
+    }
+
     var body: some View {
         SectionCard(
             title: panelMode == .audioSounds ? "Sounds" : "Shots",
             subtitle: panelMode == .audioSounds
-                ? "Draft sounds, quote, generate, tag. Blueprints apply from the left panel."
+                ? "Quote, then on each sound card choose blueprint references (or none), then Generate."
                 : "1: Draft shot 2: Quote cost 3: Generate 4: Review",
             isCollapsed: $isCollapsed
         ) {
@@ -5712,6 +5915,9 @@ struct ShotsPanel: View {
                                     .font(CinefuseTokens.Typography.caption)
                                     .foregroundStyle(CinefuseTokens.ColorRole.textSecondary)
                                 if panelMode == .audioSounds {
+                                    soundBlueprintAssociationSection(shot: shot)
+                                }
+                                if panelMode == .audioSounds {
                                     HStack(spacing: CinefuseTokens.Spacing.s) {
                                         Text("Origin (automatic)")
                                             .font(CinefuseTokens.Typography.caption)
@@ -5829,6 +6035,7 @@ struct ShotsPanel: View {
         .onChange(of: shots.map(\.id)) { _, ids in
             let allowed = Set(ids)
             soundTagsByShotId = soundTagsByShotId.filter { allowed.contains($0.key) }
+            selectedSoundBlueprintIdsByShotId = selectedSoundBlueprintIdsByShotId.filter { allowed.contains($0.key) }
         }
         .confirmationDialog("Delete this shot?", isPresented: Binding(
             get: { pendingDeleteShotId != nil },

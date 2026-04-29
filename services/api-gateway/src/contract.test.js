@@ -945,3 +945,87 @@ test("api contract: project file upload registers ids for blueprints and charact
     });
   });
 });
+
+test("api contract: shot generate merges soundBlueprintIds into shot audioRefs", async () => {
+  const headers = authHeaders("usr_contract_bp_generate");
+  await clearProjects();
+  const server = createHttpServer();
+
+  await new Promise((resolve) => server.listen(0, resolve));
+  const address = server.address();
+  const port = typeof address === "object" && address ? address.port : 0;
+  const baseUrl = `http://127.0.0.1:${port}`;
+
+  const createProject = await fetch(`${baseUrl}/api/v1/cinefuse/projects`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ title: "Blueprint Generate Project" })
+  });
+  assert.equal(createProject.status, 201);
+  const projectId = (await createProject.json()).project.id;
+
+  const uploadHeaders = {
+    ...headers,
+    "content-type": "application/octet-stream",
+    "x-filename": "ref.wav"
+  };
+  const upload = await fetch(`${baseUrl}/api/v1/cinefuse/projects/${projectId}/files`, {
+    method: "POST",
+    headers: uploadHeaders,
+    body: Buffer.from("fake-audio-bytes")
+  });
+  assert.equal(upload.status, 201);
+  const fileId = (await upload.json()).file.id;
+
+  const blueprintRes = await fetch(`${baseUrl}/api/v1/cinefuse/projects/${projectId}/sound-blueprints`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({
+      name: "Ref blueprint",
+      templateId: "neutral",
+      referenceFileIds: [fileId]
+    })
+  });
+  assert.equal(blueprintRes.status, 201);
+  const bpId = (await blueprintRes.json()).soundBlueprint.id;
+
+  const createShot = await fetch(`${baseUrl}/api/v1/cinefuse/projects/${projectId}/shots`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ prompt: "Sound with blueprint", modelTier: "budget" })
+  });
+  assert.equal(createShot.status, 201);
+  const shotId = (await createShot.json()).shot.id;
+
+  const gen = await fetch(`${baseUrl}/api/v1/cinefuse/projects/${projectId}/shots/${shotId}/generate`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ soundBlueprintIds: [bpId] })
+  });
+  assert.equal(gen.status, 200);
+
+  const timeline = await fetch(`${baseUrl}/api/v1/cinefuse/projects/${projectId}/timeline`, { headers });
+  assert.equal(timeline.status, 200);
+  const shotAfter = (await timeline.json()).shots.find((s) => s.id === shotId);
+  assert.ok(shotAfter);
+  assert.deepEqual(shotAfter.audioRefs, [fileId]);
+
+  const bad = await fetch(`${baseUrl}/api/v1/cinefuse/projects/${projectId}/shots/${shotId}/generate`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ soundBlueprintIds: ["00000000-0000-4000-8000-000000000000"] })
+  });
+  assert.equal(bad.status, 400);
+  const badBody = await bad.json();
+  assert.equal(badBody.code, "SOUND_BLUEPRINT_NOT_FOUND");
+
+  await new Promise((resolve, reject) => {
+    server.close((error) => {
+      if (error) {
+        reject(error);
+        return;
+      }
+      resolve();
+    });
+  });
+});

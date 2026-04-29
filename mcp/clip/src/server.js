@@ -94,6 +94,15 @@ function uniqueNonEmptyStrings(values) {
   return ordered;
 }
 
+/** Pubfuse/Cinefuse file IDs used as reference audio for clip/sound generation. */
+function normalizeAudioRefs(input) {
+  const raw = input?.audioRefs;
+  if (!Array.isArray(raw)) {
+    return [];
+  }
+  return uniqueNonEmptyStrings(raw);
+}
+
 function clipText(value, maxLength = 220) {
   if (typeof value !== "string") {
     return "";
@@ -138,12 +147,14 @@ async function generateViaFal({ input, config, modelTier }) {
     authorization: `Key ${falApiKey}`,
     "content-type": "application/json"
   };
+  const audioRefs = normalizeAudioRefs(input);
   const submitPayload = {
     prompt: input?.prompt ?? "",
     duration: Number(input?.durationSec ?? config.estimatedDurationSec),
     modelTier,
     shotId: input?.shotId ?? null,
-    projectId: input?.projectId ?? null
+    projectId: input?.projectId ?? null,
+    audioRefs
   };
 
   const { response: submitResponse, payload: submitBody, text: submitText } = await fetchJson(submitUrl, {
@@ -413,7 +424,8 @@ async function generateViaProvider({ input, config, modelTier }) {
           modelId: config.modelId,
           shotId: input?.shotId ?? null,
           projectId: input?.projectId ?? null,
-          userId: input?.userId ?? null
+          userId: input?.userId ?? null,
+          audioRefs: normalizeAudioRefs(input)
         }),
         signal: AbortSignal.timeout(20_000)
       });

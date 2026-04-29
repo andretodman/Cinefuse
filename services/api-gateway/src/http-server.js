@@ -86,6 +86,56 @@ function coerceProviderStatusCode(value) {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
+/**
+ * Resolves reference file IDs from project sound blueprints in request order, deduped.
+ * @returns {{ merged: string[] } | { error: string, message: string }}
+ */
+async function mergedAudioRefsFromBlueprintIds(projectId, soundBlueprintIds) {
+  const raw = Array.isArray(soundBlueprintIds) ? soundBlueprintIds : [];
+  const requested = raw.filter((id) => typeof id === "string" && id.trim().length > 0);
+  const blueprints = await listSoundBlueprints(projectId);
+  const byId = new Map(blueprints.map((b) => [b.id, b]));
+  for (const id of requested) {
+    if (!byId.has(id)) {
+      return {
+        error: "SOUND_BLUEPRINT_NOT_FOUND",
+        message: `Unknown sound blueprint for this project: ${id}`
+      };
+    }
+  }
+  const seen = new Set();
+  const merged = [];
+  for (const id of requested) {
+    const bp = byId.get(id);
+    for (const ref of bp?.referenceFileIds ?? []) {
+      if (typeof ref === "string" && ref.trim().length > 0 && !seen.has(ref)) {
+        seen.add(ref);
+        merged.push(ref);
+      }
+    }
+  }
+  return { merged };
+}
+
+/**
+ * When `payload.soundBlueprintIds` is set, merges blueprint reference file IDs onto the shot (persisted).
+ * When omitted, returns the shot unchanged.
+ */
+async function shotWithMergedBlueprintRefs(projectId, shot, payload) {
+  if (payload.soundBlueprintIds === undefined) {
+    return { shot };
+  }
+  const resolved = await mergedAudioRefsFromBlueprintIds(projectId, payload.soundBlueprintIds);
+  if (resolved.error) {
+    return { error: resolved.error, message: resolved.message };
+  }
+  const shotToQueue = await saveShot({
+    ...shot,
+    audioRefs: resolved.merged
+  });
+  return { shot: shotToQueue };
+}
+
 function applyLegacyProjectsAliasHeaders(response, pathName) {
   if (pathName !== "/v1/projects") {
     return;
@@ -441,12 +491,14 @@ export function createHttpServer() {
         jobId: task.jobId,
         modelTier: currentShot.modelTier
       });
+      const audioRefs = Array.isArray(currentShot.audioRefs) ? currentShot.audioRefs : [];
       const generation = await mcpHost.invoke("clip", "generate_clip", {
         shotId: task.shotId,
         projectId: task.projectId,
         prompt: currentShot.prompt,
         modelTier: currentShot.modelTier,
-        userId: task.userId
+        userId: task.userId,
+        audioRefs
       });
       clearInterval(progressTimer);
       console.info("[render] clip.generate_clip completed", {
@@ -584,13 +636,15 @@ export function createHttpServer() {
   }
 
   async function queueShotGeneration({ projectId, shot, userId, idempotencyKey }) {
+    const audioRefs = Array.isArray(shot.audioRefs) ? shot.audioRefs : [];
     const quote = await mcpHost.invoke("clip", "quote_clip", {
       shotId: shot.id,
       projectId,
       prompt: shot.prompt,
       modelTier: shot.modelTier,
       characterLocks: shot.characterLocks ?? [],
-      userId
+      userId,
+      audioRefs
     });
     const jobId = randomUUID();
     const generationIdempotencyKey = idempotencyKey ?? `shot-generate:${shot.id}:${jobId}`;
@@ -1587,9 +1641,13 @@ export function createHttpServer() {
         });
       }
       const payload = await readBody(request);
+      const appliedRetry = await shotWithMergedBlueprintRefs(projectId, shot, payload);
+      if (appliedRetry.error) {
+        return writeError(response, 400, appliedRetry.message, appliedRetry.error);
+      }
       const result = await queueShotGeneration({
         projectId,
-        shot,
+        shot: appliedRetry.shot,
         userId: auth.userId,
         idempotencyKey: payload.idempotencyKey
       });
@@ -1625,9 +1683,13 @@ export function createHttpServer() {
       }
 
       const payload = await readBody(request);
+      const applied = await shotWithMergedBlueprintRefs(projectId, shot, payload);
+      if (applied.error) {
+        return writeError(response, 400, applied.message, applied.error);
+      }
       const result = await queueShotGeneration({
         projectId,
-        shot,
+        shot: applied.shot,
         userId: auth.userId,
         idempotencyKey: payload.idempotencyKey
       });
@@ -1713,9 +1775,13 @@ export function createHttpServer() {
         return writeError(response, 404, "shot not found", "SHOT_NOT_FOUND");
       }
       const payload = await readBody(request);
+      const appliedJobRetry = await shotWithMergedBlueprintRefs(projectId, shot, payload);
+      if (appliedJobRetry.error) {
+        return writeError(response, 400, appliedJobRetry.message, appliedJobRetry.error);
+      }
       const result = await queueShotGeneration({
         projectId,
-        shot,
+        shot: appliedJobRetry.shot,
         userId: auth.userId,
         idempotencyKey: payload.idempotencyKey
       });

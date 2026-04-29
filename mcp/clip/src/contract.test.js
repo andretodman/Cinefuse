@@ -24,3 +24,15 @@ test("clip contract: generate returns cost and clip output", async () => {
   assert.equal(typeof result.clipUrl, "string");
   assert.equal(result.clipUrl.length > 0, true);
 });
+
+test("clip contract: generate_clip forwards audioRefs in response input", async () => {
+  const server = createServer();
+  const result = await server.invoke("generate_clip", {
+    shotId: "shot_contract_audio",
+    modelTier: "budget",
+    prompt: "Ambient pad",
+    audioRefs: ["file-ref-1", "file-ref-2"]
+  });
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.input?.audioRefs, ["file-ref-1", "file-ref-2"]);
+});
