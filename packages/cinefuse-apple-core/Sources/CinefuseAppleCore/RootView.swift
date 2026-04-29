@@ -689,7 +689,15 @@ struct ProjectWorkspaceScreen: View {
             onCreateJob: { Task { await createJob() } },
             onRetryJob: { jobId in Task { await retryOrRestartJob(jobId: jobId) } },
             onDeleteJob: { jobId in Task { await deleteJobFromProject(jobId: jobId) } },
-            onReorderShots: { from, to in Task { await reorderShots(from: from, to: to) } },
+            onReorderShots: { from, to in
+                Task {
+                    if CreationMode(rawValue: creationModeRaw) == .audio {
+                        await reorderAudibleShots(from: from, to: to)
+                    } else {
+                        await reorderShots(from: from, to: to)
+                    }
+                }
+            },
             onGenerateDialogue: { Task { await generateDialogueTrack() } },
             onGenerateScore: { Task { await generateScoreTrack() } },
             onGenerateSFX: { Task { await generateSFXTrack() } },
@@ -2481,6 +2489,41 @@ struct ProjectWorkspaceScreen: View {
         }
     }
 
+    /// Reorders only shots that carry sound metadata; silent video clips stay in place in the full project shot list.
+    private func reorderAudibleShots(from: IndexSet, to: Int) async {
+        guard let selectedProjectId else { return }
+        let sorted = shots.sorted { lhs, rhs in
+            let leftIndex = lhs.orderIndex ?? Int.max
+            let rightIndex = rhs.orderIndex ?? Int.max
+            if leftIndex == rightIndex {
+                return lhs.id < rhs.id
+            }
+            return leftIndex < rightIndex
+        }
+        var audible = sorted.filter { $0.hasSoundContent(audioTracks: audioTracks) }
+        audible.move(fromOffsets: from, toOffset: to)
+        var qi = 0
+        let merged = sorted.map { shot -> Shot in
+            if shot.hasSoundContent(audioTracks: audioTracks) {
+                let next = audible[qi]
+                qi += 1
+                return next
+            }
+            return shot
+        }
+        shots = merged
+        do {
+            _ = try await api.reorderTimelineShots(
+                token: model.bearerToken,
+                projectId: selectedProjectId,
+                shotIds: merged.map(\.id)
+            )
+            await loadSelectedProjectDetails(showLoadingIndicator: false)
+        } catch {
+            model.errorMessage = error.localizedDescription
+        }
+    }
+
     private func generateDialogueTrack() async {
         guard let selectedProjectId else { return }
         do {
@@ -2896,7 +2939,7 @@ struct ProjectDetailScreen: View {
 
                     if !isRenderWorkspace {
                         HorizontalTimelineTrack(
-                            shots: sortedShots,
+                            shots: shotsForSoundOrVideoTimeline,
                             jobs: jobs,
                             localThumbnailURLByShotId: localThumbnailURLByShotId,
                             selectedShotId: $selectedTimelineShotId,
@@ -3181,9 +3224,17 @@ struct ProjectDetailScreen: View {
 #endif
     }
 
+    /// In Audio creation mode, the horizontal timeline and audio preview only include shots that have linked audio metadata or an audio lane with a source.
+    private var shotsForSoundOrVideoTimeline: [Shot] {
+        if isAudioCreationMode {
+            return sortedShots.filter { $0.hasSoundContent(audioTracks: audioTracks) }
+        }
+        return sortedShots
+    }
+
     private var timelineShotBoundaries: [TimelineShotBoundary] {
         var cursorMs = 0
-        return sortedShots.map { shot in
+        return shotBoundarySource.map { shot in
             let durationMs = max((shot.durationSec ?? 5) * 1_000, 500)
             let boundary = TimelineShotBoundary(
                 shotId: shot.id,
@@ -3193,6 +3244,13 @@ struct ProjectDetailScreen: View {
             cursorMs += durationMs
             return boundary
         }
+    }
+
+    private var shotBoundarySource: [Shot] {
+        if isAudioCreationMode {
+            return sortedShots.filter { $0.hasSoundContent(audioTracks: audioTracks) }
+        }
+        return sortedShots
     }
 
     private var sortedShots: [Shot] {
@@ -3222,7 +3280,7 @@ struct ProjectDetailScreen: View {
     private var centerPreviewPanel: some View {
         if isAudioCreationMode {
             EditorAudioPreviewPanel(
-                shots: sortedShots,
+                shots: shotsForSoundOrVideoTimeline,
                 audioTracks: audioTracks,
                 selectedShotId: $selectedTimelineShotId,
                 playbackRequestToken: previewPlaybackRequestToken,
@@ -3248,7 +3306,7 @@ struct ProjectDetailScreen: View {
     private var embeddedPopoutPreviewPanel: some View {
         if isAudioCreationMode {
             EditorAudioPreviewPanel(
-                shots: sortedShots,
+                shots: shotsForSoundOrVideoTimeline,
                 audioTracks: audioTracks,
                 selectedShotId: $selectedTimelineShotId,
                 playbackRequestToken: previewPlaybackRequestToken,
@@ -4574,15 +4632,19 @@ struct EditorAudioPreviewPanel: View {
     private static let loopPreferenceKey = "cinefuse.editor.preview.loopEnabled"
     private static let playbackRates: [Double] = [0.5, 0.75, 1.0, 1.25, 1.5, 2.0]
 
+    private func shotMayPlayClipUrl(_ shot: Shot) -> Bool {
+        shot.hasSoundContent(audioTracks: audioTracks)
+    }
+
     private var playableMediaURLs: [URL] {
         var urls: [URL] = []
-        for shot in shots {
+        for shot in shots where shotMayPlayClipUrl(shot) {
             if let clip = shot.clipUrl, let url = URL(string: clip) {
                 urls.append(url)
             }
         }
         for track in audioTracks {
-            if let source = track.sourceUrl, let url = URL(string: source) {
+            if let source = track.sourceUrl, !source.isEmpty, let url = URL(string: source) {
                 urls.append(url)
             }
         }
@@ -4592,15 +4654,30 @@ struct EditorAudioPreviewPanel: View {
     private var primaryPreviewURL: URL? {
         if let selectedShotId,
            let shot = shots.first(where: { $0.id == selectedShotId }),
+           shotMayPlayClipUrl(shot) {
+            if let track = audioTracks.first(where: { $0.shotId == shot.id }),
+               let source = track.sourceUrl,
+               !source.isEmpty,
+               let url = URL(string: source) {
+                return url
+            }
+            if let clip = shot.clipUrl, let url = URL(string: clip) {
+                return url
+            }
+        }
+        if let shot = shots.first(where: { shotMayPlayClipUrl($0) }),
            let clip = shot.clipUrl,
            let url = URL(string: clip) {
             return url
         }
-        return playableMediaURLs.first
+        return audioTracks.compactMap { track -> URL? in
+            guard let source = track.sourceUrl, !source.isEmpty else { return nil }
+            return URL(string: source)
+        }.first
     }
 
     private var shotsClipSignature: String {
-        shots.map { "\($0.id):\($0.clipUrl ?? "")" }.joined(separator: "|")
+        shots.map { "\($0.id):\($0.clipUrl ?? ""):\(shotMayPlayClipUrl($0))" }.joined(separator: "|")
     }
 
     private var tracksSourceSignature: String {

@@ -116,6 +116,20 @@ public struct ListAudioTracksResponse: Codable {
     public let audioTracks: [AudioTrack]
 }
 
+extension Shot {
+    /// Shots that participate in the sound timeline and audio preview: linked `audioRefs` and/or an audio lane with a source URL scoped to this shot.
+    public func hasSoundContent(audioTracks: [AudioTrack]) -> Bool {
+        if let refs = audioRefs, !refs.isEmpty {
+            return true
+        }
+        return audioTracks.contains { track in
+            guard track.shotId == id else { return false }
+            guard let url = track.sourceUrl else { return false }
+            return !url.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }
+    }
+}
+
 // MARK: - Sound blueprints (audio creation)
 
 public struct SoundBlueprint: Codable, Identifiable, Equatable, Sendable {
