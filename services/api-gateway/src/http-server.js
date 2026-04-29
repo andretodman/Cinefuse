@@ -11,6 +11,7 @@ import {
   getProject,
   getShot,
   listCharacters,
+  getCharacter,
   listAudioTracks,
   listJobs,
   listProjects,
@@ -1138,10 +1139,16 @@ export function createHttpServer() {
       } catch (error) {
         return writeError(response, 400, error?.message ?? "invalid file reference", "INVALID_FILE_REFERENCE");
       }
+      const existingCharacter = await getCharacter(projectId, characterId);
+      if (!existingCharacter) {
+        return writeError(response, 404, "character not found", "CHARACTER_NOT_FOUND");
+      }
       const trained = await mcpHost.invoke("character", "train_identity", {
         projectId,
         characterId,
-        referenceFileIds
+        referenceFileIds,
+        name: existingCharacter.name,
+        description: existingCharacter.description ?? ""
       });
       const trainingSparksCost = Number(trained.sparksCost ?? 0);
       await mcpHost.invoke("billing", "debit", {

@@ -521,6 +521,27 @@ export async function listCharacters(projectId) {
   return rows.map(mapCharacterRow);
 }
 
+export async function getCharacter(projectId, characterId) {
+  const db = getPool();
+  if (!db) {
+    const character = characters.get(characterId);
+    if (!character || character.projectId !== projectId) {
+      return null;
+    }
+    return character;
+  }
+  const { rows } = await db.query(
+    `SELECT *
+     FROM cinefuse_characters
+     WHERE project_id = $1 AND id = $2`,
+    [projectId, characterId]
+  );
+  if (!rows.length) {
+    return null;
+  }
+  return mapCharacterRow(rows[0]);
+}
+
 export async function saveCharacter(input) {
   const existing = characters.get(input.id);
   const now = new Date().toISOString();

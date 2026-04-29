@@ -5449,6 +5449,185 @@ struct StoryboardPanel: View {
     }
 }
 
+private enum CharacterTrainingRefMediaKind {
+    case image, video, audio, unknown
+}
+
+private func characterTrainingRefMediaKind(for url: URL) -> CharacterTrainingRefMediaKind {
+    let ext = url.pathExtension.lowercased()
+    if let ut = UTType(filenameExtension: ext) {
+        if ut.conforms(to: .image) { return .image }
+        if ut.conforms(to: .movie) || ut.conforms(to: .video) || ut.conforms(to: .mpeg4Movie) {
+            return .video
+        }
+        if ut.conforms(to: .audio) { return .audio }
+    }
+    let imageExt: Set<String> = ["jpg", "jpeg", "png", "gif", "heic", "webp", "tif", "tiff", "bmp"]
+    let videoExt: Set<String> = ["mov", "mp4", "m4v", "avi", "mkv", "webm"]
+    let audioExt: Set<String> = ["m4a", "wav", "aac", "mp3", "caf", "aiff", "flac", "ogg"]
+    if imageExt.contains(ext) { return .image }
+    if videoExt.contains(ext) { return .video }
+    if audioExt.contains(ext) { return .audio }
+    return .unknown
+}
+
+private func characterTrainingImageFromFile(_ url: URL) -> Image? {
+    let scoped = url.startAccessingSecurityScopedResource()
+    defer {
+        if scoped { url.stopAccessingSecurityScopedResource() }
+    }
+#if canImport(AppKit) && !targetEnvironment(macCatalyst)
+    guard let ns = NSImage(contentsOf: url) else { return nil }
+    return Image(nsImage: ns)
+#elseif canImport(UIKit)
+    guard let ui = UIImage(contentsOfFile: url.path) else { return nil }
+    return Image(uiImage: ui)
+#else
+    return nil
+#endif
+}
+
+private func characterTrainingImageFromJPEGData(_ data: Data) -> Image? {
+#if canImport(AppKit) && !targetEnvironment(macCatalyst)
+    guard let ns = NSImage(data: data) else { return nil }
+    return Image(nsImage: ns)
+#elseif canImport(UIKit)
+    guard let ui = UIImage(data: data) else { return nil }
+    return Image(uiImage: ui)
+#else
+    return nil
+#endif
+}
+
+#if canImport(AVFoundation)
+private func characterTrainingVideoThumbnailJPEG(from url: URL) -> Data? {
+    let scoped = url.startAccessingSecurityScopedResource()
+    defer {
+        if scoped { url.stopAccessingSecurityScopedResource() }
+    }
+    let asset = AVURLAsset(url: url)
+    let generator = AVAssetImageGenerator(asset: asset)
+    generator.appliesPreferredTrackTransform = true
+    generator.maximumSize = CGSize(width: 512, height: 512)
+    let frameTime = CMTime(seconds: 0.15, preferredTimescale: 600)
+    guard let cgImage = try? generator.copyCGImage(at: frameTime, actualTime: nil) else {
+        return nil
+    }
+#if canImport(AppKit) && !targetEnvironment(macCatalyst)
+    let image = NSImage(cgImage: cgImage, size: .zero)
+    guard let tiff = image.tiffRepresentation,
+          let rep = NSBitmapImageRep(data: tiff) else {
+        return nil
+    }
+    return rep.representation(using: .jpeg, properties: [.compressionFactor: 0.88])
+#elseif canImport(UIKit)
+    return UIImage(cgImage: cgImage).jpegData(compressionQuality: 0.88)
+#else
+    return nil
+#endif
+}
+#endif
+
+/// Local training reference: thumbnail in a square; double-click to confirm removal.
+private struct CharacterTrainingReferenceTile: View {
+    let url: URL
+    let showTooltips: Bool
+    let onRemove: () -> Void
+    @State private var thumbnail: Image?
+    @State private var loadedKind: CharacterTrainingRefMediaKind = .unknown
+    @State private var confirmDelete = false
+
+    private let tileSize: CGFloat = 56
+
+    var body: some View {
+        ZStack {
+            Group {
+                switch loadedKind {
+                case .image, .video:
+                    if let thumbnail {
+                        thumbnail
+                            .resizable()
+                            .scaledToFill()
+                    } else {
+                        ProgressView()
+                            .scaleEffect(0.65)
+                    }
+                case .audio:
+                    Image(systemName: "waveform")
+                        .font(.system(size: 26, weight: .medium))
+                        .foregroundStyle(CinefuseTokens.ColorRole.accent)
+                case .unknown:
+                    Image(systemName: "doc.fill")
+                        .font(.system(size: 22))
+                        .foregroundStyle(CinefuseTokens.ColorRole.textSecondary)
+                }
+            }
+            .frame(width: tileSize, height: tileSize)
+            .clipped()
+
+            VStack {
+                Spacer()
+                Text(url.lastPathComponent)
+                    .font(CinefuseTokens.Typography.micro)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 4)
+                    .padding(.vertical, 2)
+                    .frame(maxWidth: .infinity)
+                    .background(.black.opacity(0.55))
+            }
+        }
+        .frame(width: tileSize, height: tileSize)
+        .background(CinefuseTokens.ColorRole.surfacePrimary.opacity(0.92))
+        .clipShape(RoundedRectangle(cornerRadius: CinefuseTokens.Radius.small))
+        .overlay(
+            RoundedRectangle(cornerRadius: CinefuseTokens.Radius.small)
+                .stroke(CinefuseTokens.ColorRole.borderSubtle, lineWidth: 1)
+        )
+        .contentShape(Rectangle())
+        .onTapGesture(count: 2) {
+            confirmDelete = true
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Reference file \(url.lastPathComponent)")
+        .accessibilityHint("Double tap to remove from training list")
+        .tooltip(url.lastPathComponent, enabled: showTooltips)
+        .confirmationDialog(
+            "Remove this reference?",
+            isPresented: $confirmDelete,
+            titleVisibility: .visible
+        ) {
+            Button("Delete", role: .destructive, action: onRemove)
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Remove \(url.lastPathComponent) from the training list. The file on disk is not deleted.")
+        }
+        .task(id: url) {
+            await loadThumbnail()
+        }
+    }
+
+    @MainActor
+    private func loadThumbnail() async {
+        loadedKind = characterTrainingRefMediaKind(for: url)
+        thumbnail = nil
+        switch loadedKind {
+        case .image:
+            thumbnail = characterTrainingImageFromFile(url)
+        case .video:
+#if canImport(AVFoundation)
+            if let data = characterTrainingVideoThumbnailJPEG(from: url) {
+                thumbnail = characterTrainingImageFromJPEGData(data)
+            }
+#endif
+            break
+        case .audio, .unknown:
+            break
+        }
+    }
+}
+
 private struct CharacterTrainingReferenceButtons: View {
     @Binding var trainingURLs: [URL]
     let showTooltips: Bool
@@ -5644,16 +5823,19 @@ struct CharacterPanel: View {
                                         )
                                     }
                                     ForEach(Array((trainingRefsByCharacterId[character.id] ?? []).enumerated()), id: \.offset) { _, ref in
-                                        VStack(spacing: 2) {
-                                            Image(systemName: "doc")
-                                                .font(.title3)
-                                            Text(ref.lastPathComponent)
-                                                .font(CinefuseTokens.Typography.micro)
-                                                .lineLimit(1)
-                                        }
-                                        .frame(width: 72, height: 56)
-                                        .background(CinefuseTokens.ColorRole.surfacePrimary.opacity(0.9))
-                                        .clipShape(RoundedRectangle(cornerRadius: CinefuseTokens.Radius.small))
+                                        CharacterTrainingReferenceTile(
+                                            url: ref,
+                                            showTooltips: showTooltips,
+                                            onRemove: {
+                                                var list = trainingRefsByCharacterId[character.id] ?? []
+                                                list.removeAll { $0 == ref }
+                                                if list.isEmpty {
+                                                    trainingRefsByCharacterId[character.id] = nil
+                                                } else {
+                                                    trainingRefsByCharacterId[character.id] = list
+                                                }
+                                            }
+                                        )
                                     }
                                 }
                             }

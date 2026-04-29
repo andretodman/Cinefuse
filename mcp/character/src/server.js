@@ -34,9 +34,21 @@ export function createServer() {
       }
 
       if (tool === "train_identity") {
-        const existing = characters.get(input?.characterId);
+        let existing = characters.get(input?.characterId);
+        // Gateway persists characters in DB; the MCP Map is in-memory only and can be empty after
+        // restarts or desync. Seed from the train payload (filled by gateway from DB) so training works.
         if (!existing) {
-          throw new Error("character not found");
+          existing = {
+            id: input?.characterId,
+            projectId: input?.projectId,
+            name: input?.name ?? "Untitled Character",
+            description: input?.description ?? "",
+            status: "draft",
+            previewUrl: null
+          };
+          if (existing.id) {
+            characters.set(existing.id, existing);
+          }
         }
         const referenceFileIds = Array.isArray(input?.referenceFileIds) ? input.referenceFileIds : [];
         const consistencyScore = 0.87;
