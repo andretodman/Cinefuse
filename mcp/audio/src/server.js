@@ -568,7 +568,8 @@ async function runGenerateScore(tool, kind, input) {
       skipped: false,
       outputCreated: true,
       providerAdapter: "stub",
-      providerEndpoint: stubMediaRootUrl(),
+      // Diagnostic marker for local/test fallback; not a real upstream API.
+      providerEndpoint: "stub://media",
       providerRequestId: null,
       track: { ...track, providerAdapter: "stub", modelId: "music_v1" }
     };
