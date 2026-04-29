@@ -85,7 +85,7 @@ Clients should refresh jobs/timeline and surface `skippedFeature` / `featureErro
 ### Audio export (layered mixdown)
 
 - `POST /api/v1/cinefuse/projects/{projectId}/export/audio-mix` → `{ "job": {...}, "export": { "fileUrl", "sparksCost", "costToUsCents" } }`  
-  Mixes current `audio-tracks` via export MCP `encode_audio_mixdown` and records a job with `kind: "audio_export"`.
+  Mixes current `audio-tracks` via export MCP `encode_audio_mixdown` and records a job with `kind: "audio_export"`. Optional JSON body `{ "idempotencyKey": "<string>" }`; default key is `export-audio-mix:{projectId}` for billing/MCP correlation.
 
 ### Sparks
 

@@ -1407,16 +1407,21 @@ export function createHttpServer() {
       if (!project) {
         return writeError(response, 404, "project not found", "PROJECT_NOT_FOUND");
       }
+      const payload = await readBody(request);
+      const audioMixIdempotencyKey = typeof payload.idempotencyKey === "string" && payload.idempotencyKey.length > 0
+        ? payload.idempotencyKey
+        : `export-audio-mix:${projectId}`;
       const timelineAudioTracks = await listAudioTracks(projectId);
       const exported = await mcpHost.invoke("export", "encode_audio_mixdown", {
         projectId,
-        audioTracks: timelineAudioTracks
+        audioTracks: timelineAudioTracks,
+        idempotencyKey: audioMixIdempotencyKey
       });
       const sparksCost = Number(exported.export?.sparksCost ?? 18);
       await mcpHost.invoke("billing", "debit", {
         userId: auth.userId,
         amount: sparksCost,
-        idempotencyKey: `export-audio-mix:${projectId}`,
+        idempotencyKey: audioMixIdempotencyKey,
         relatedResourceType: "project",
         relatedResourceId: projectId
       });
@@ -1425,12 +1430,13 @@ export function createHttpServer() {
         projectId,
         kind: "audio_export",
         status: "done",
-        inputPayload: {},
+        inputPayload: { idempotencyKey: audioMixIdempotencyKey },
         outputPayload: {
           fileUrl: exported.export?.fileUrl ?? null,
           sparksCost,
           operation: "encode_audio_mixdown",
-          costToUsCents: Number(exported.export?.costToUsCents ?? 0)
+          costToUsCents: Number(exported.export?.costToUsCents ?? 0),
+          requestId: audioMixIdempotencyKey
         },
         costToUsCents: Number(exported.export?.costToUsCents ?? 0)
       });
