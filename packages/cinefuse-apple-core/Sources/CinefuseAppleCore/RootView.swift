@@ -575,6 +575,89 @@ enum ScoreGenerationLyricsMode: String, CaseIterable, Identifiable {
     }
 }
 
+/// Video vs Audio creation mode: two compact segments; selected side reads depressed into the track.
+private struct CreationModeBinarySwitch: View {
+    @Binding var creationModeRaw: String
+
+    private var selectedMode: CreationMode {
+        CreationMode(rawValue: creationModeRaw) ?? .video
+    }
+
+    var body: some View {
+        HStack(spacing: 2) {
+            ForEach(CreationMode.allCases) { mode in
+                let isSelected = selectedMode == mode
+                Button {
+                    creationModeRaw = mode.rawValue
+                } label: {
+                    segmentLabel(mode: mode, isSelected: isSelected)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(accessibilityLabel(for: mode))
+                .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : [.isButton])
+            }
+        }
+        .padding(3)
+        .background(
+            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                .fill(CinefuseTokens.ColorRole.surfaceSecondary.opacity(0.72))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                .strokeBorder(CinefuseTokens.ColorRole.borderSubtle.opacity(0.45), lineWidth: 1)
+        )
+        .fixedSize(horizontal: true, vertical: false)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Creation mode")
+    }
+
+    @ViewBuilder
+    private func segmentLabel(mode: CreationMode, isSelected: Bool) -> some View {
+        Text(shortLabel(for: mode))
+            .font(CinefuseTokens.Typography.micro)
+            .foregroundStyle(
+                isSelected
+                    ? CinefuseTokens.ColorRole.textPrimary
+                    : CinefuseTokens.ColorRole.textSecondary
+            )
+            .frame(minWidth: 36)
+            .padding(.vertical, 4)
+            .padding(.horizontal, 7)
+            .background(
+                RoundedRectangle(cornerRadius: 5, style: .continuous)
+                    .fill(isSelected ? Color.black.opacity(0.14) : Color.clear)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 5, style: .continuous)
+                    .strokeBorder(
+                        isSelected ? CinefuseTokens.ColorRole.borderSubtle.opacity(0.65) : Color.clear,
+                        lineWidth: 1
+                    )
+            )
+            .shadow(
+                color: isSelected ? Color.black.opacity(0.22) : .clear,
+                radius: 0,
+                x: 0,
+                y: 1
+            )
+            .padding(1)
+    }
+
+    private func shortLabel(for mode: CreationMode) -> String {
+        switch mode {
+        case .video: return "Video"
+        case .audio: return "Audio"
+        }
+    }
+
+    private func accessibilityLabel(for mode: CreationMode) -> String {
+        switch mode {
+        case .video: return "Video creation"
+        case .audio: return "Audio creation"
+        }
+    }
+}
+
 struct ProjectWorkspaceScreen: View {
     @Environment(AppModel.self) private var model
     @Environment(\.scenePhase) private var scenePhase
@@ -1247,14 +1330,8 @@ struct ProjectWorkspaceScreen: View {
                 .tooltip("Creation mode and workspace layout", enabled: editorSettings.showTooltips)
             } else {
                 HStack(spacing: CinefuseTokens.Spacing.xxs) {
-                    Picker("Creation", selection: $creationModeRaw) {
-                        ForEach(CreationMode.allCases) { mode in
-                            Text(mode.label).tag(mode.rawValue)
-                        }
-                    }
-                    .pickerStyle(.menu)
-                    .frame(minWidth: 100)
-                    .tooltip("Video Creation or Audio Creation mode", enabled: editorSettings.showTooltips)
+                    CreationModeBinarySwitch(creationModeRaw: $creationModeRaw)
+                        .tooltip("Video Creation or Audio Creation mode", enabled: editorSettings.showTooltips)
 
                     Picker("Workspace", selection: $workspacePresetRaw) {
                         ForEach(EditorWorkspacePreset.allCases) { preset in
@@ -1366,14 +1443,8 @@ struct ProjectWorkspaceScreen: View {
     private var macOSGlobalWorkspaceControls: some View {
         HStack(spacing: CinefuseTokens.Spacing.xs) {
             HStack(spacing: CinefuseTokens.Spacing.xxs) {
-                Picker("Creation", selection: $creationModeRaw) {
-                    ForEach(CreationMode.allCases) { mode in
-                        Text(mode.label).tag(mode.rawValue)
-                    }
-                }
-                .pickerStyle(.menu)
-                .frame(minWidth: 100)
-                .tooltip("Video Creation or Audio Creation mode", enabled: editorSettings.showTooltips)
+                CreationModeBinarySwitch(creationModeRaw: $creationModeRaw)
+                    .tooltip("Video Creation or Audio Creation mode", enabled: editorSettings.showTooltips)
 
                 Picker("Workspace", selection: $workspacePresetRaw) {
                     ForEach(EditorWorkspacePreset.allCases) { preset in
@@ -3660,6 +3731,8 @@ struct ProjectDetailScreen: View {
     @State private var projectTitleDraft = ""
     @State private var previewPlaybackRequestToken = 0
     @State private var isPreviewPoppedOut = false
+    /// Timeline strip expands to fill the editor; hides preview workspace until exited (card header control).
+    @State private var isTimelineFullscreen = false
 #if os(iOS)
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
 #endif
@@ -3818,7 +3891,8 @@ struct ProjectDetailScreen: View {
                                         showTooltips: showTooltips,
                                         themePalette: timelineThemeMode.palette,
                                         isCollapsed: $collapseTimelinePanel,
-                                        clipVisualStyle: isAudioCreationMode ? .audioWaveform : .videoThumbnail
+                                        clipVisualStyle: isAudioCreationMode ? .audioWaveform : .videoThumbnail,
+                                        isTimelineFullscreen: $isTimelineFullscreen
                                     )
                                 } else {
                                     VStack(spacing: 0) {
@@ -3837,7 +3911,8 @@ struct ProjectDetailScreen: View {
                                             showTooltips: showTooltips,
                                             themePalette: timelineThemeMode.palette,
                                             isCollapsed: $collapseTimelinePanel,
-                                            clipVisualStyle: isAudioCreationMode ? .audioWaveform : .videoThumbnail
+                                            clipVisualStyle: isAudioCreationMode ? .audioWaveform : .videoThumbnail,
+                                            isTimelineFullscreen: $isTimelineFullscreen
                                         )
                                         .frame(height: CGFloat(clampedTimelineStripHeight(timelineStripHeight)), alignment: .top)
                                         .clipped()
@@ -3853,9 +3928,11 @@ struct ProjectDetailScreen: View {
                             }
                             .frame(maxWidth: .infinity, alignment: .leading)
                         }
-                        .frame(maxHeight: CGFloat(timelineVerticalScrollMaxHeight))
+                        .frame(maxHeight: isTimelineFullscreen ? .infinity : CGFloat(timelineVerticalScrollMaxHeight))
+                        .layoutPriority(isTimelineFullscreen ? 1 : 0)
                     }
 
+                    if isRenderWorkspace || !isTimelineFullscreen {
                     GeometryReader { geometry in
                         let totalWidth = Double(max(geometry.size.width, 320))
                         let totalHeight = Double(max(geometry.size.height, 280))
@@ -4023,7 +4100,9 @@ struct ProjectDetailScreen: View {
                     .animation(CinefuseTokens.Motion.panel, value: showLeftPane)
                     .animation(CinefuseTokens.Motion.panel, value: showRightPane)
                     .animation(CinefuseTokens.Motion.panel, value: showBottomPane)
+                    }
                 }
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             } else {
                 ContentUnavailableView(
                     "Select a Project",
@@ -4063,6 +4142,7 @@ struct ProjectDetailScreen: View {
             sanitizePersistedLayout()
         }
         .onChange(of: project?.id) { _, _ in
+            isTimelineFullscreen = false
             guard let project else { return }
             projectTitleDraft = project.title
             isRenamingProjectTitle = false
@@ -4076,6 +4156,17 @@ struct ProjectDetailScreen: View {
         .onChange(of: isPreviewFullscreen) { _, full in
             if full {
                 isPreviewPoppedOut = false
+                isTimelineFullscreen = false
+            }
+        }
+        .onChange(of: isTimelineFullscreen) { _, full in
+            if full {
+                isPreviewFullscreen = false
+            }
+        }
+        .onChange(of: workspacePresetRaw) { _, _ in
+            if (EditorWorkspacePreset(rawValue: workspacePresetRaw) ?? .editing) == .render {
+                isTimelineFullscreen = false
             }
         }
         .onChange(of: isPreviewPoppedOut) { _, isPoppedOut in
@@ -5063,6 +5154,7 @@ struct HorizontalTimelineTrack: View {
     let themePalette: CinefuseTokens.ThemePalette
     @Binding var isCollapsed: Bool
     var clipVisualStyle: TimelineClipVisualStyle = .videoThumbnail
+    @Binding var isTimelineFullscreen: Bool
     @AppStorage("cinefuse.editor.timeline.clipDensity") private var clipDensityRaw = TimelineClipDensity.large.rawValue
     @EnvironmentObject private var editorPlaybackState: EditorPlaybackState
     @State private var orderedShots: [Shot] = []
@@ -5090,6 +5182,27 @@ struct HorizontalTimelineTrack: View {
 
     private var timelineDensityToolbar: some View {
         HStack(spacing: CinefuseTokens.Spacing.xxs) {
+            Button {
+                isTimelineFullscreen.toggle()
+            } label: {
+                Image(systemName: isTimelineFullscreen
+                    ? "arrow.down.right.and.arrow.up.left"
+                    : "arrow.up.left.and.arrow.down.right")
+                    .font(.system(size: CinefuseTokens.Control.iconSymbolSize * 0.88, weight: .medium))
+                    .foregroundStyle(
+                        isTimelineFullscreen
+                            ? CinefuseTokens.ColorRole.accent
+                            : CinefuseTokens.ColorRole.textSecondary.opacity(0.92)
+                    )
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(Text(isTimelineFullscreen ? "Exit full-screen timeline" : "Full-screen timeline"))
+            .tooltip(
+                isTimelineFullscreen
+                    ? "Show preview and side panels again"
+                    : "Expand the timeline; hide the preview workspace",
+                enabled: showTooltips
+            )
             ForEach(TimelineClipDensity.allCases) { density in
                 Button {
                     clipDensityRaw = density.rawValue
@@ -5910,6 +6023,14 @@ struct EditorPreviewPanel: View {
     @State private var loopObserver: NSObjectProtocol?
     private static let loopPreferenceKey = "cinefuse.editor.preview.loopEnabled"
     private static let playbackRates: [Double] = [0.5, 0.75, 1.0, 1.25, 1.5, 2.0]
+    /// `nil` while classifying the selected clip (audio-only vs video).
+    @State private var assetIsAudioOnly: Bool?
+    @State private var waveformPeaks: [Float] = []
+
+    private var waveformProgressFraction: Double {
+        guard editorPlaybackState.durationSeconds > 0 else { return 0 }
+        return min(1, max(0, editorPlaybackState.currentTimeSeconds / editorPlaybackState.durationSeconds))
+    }
 
     private var playableShots: [Shot] {
         shots.filter { shot in
@@ -5937,11 +6058,44 @@ struct EditorPreviewPanel: View {
                         message: "Generate clips to preview timeline playback."
                     )
                 } else {
-                    InlinePreviewPlayerSurface(player: queuePlayer)
-                        .frame(minHeight: 280)
-                        .clipShape(RoundedRectangle(cornerRadius: CinefuseTokens.Radius.medium))
+                    Group {
+                        if assetIsAudioOnly == nil {
+                            ProgressView("Loading preview…")
+                                .frame(maxWidth: .infinity, minHeight: 280)
+                        } else if assetIsAudioOnly == true {
+                            VStack(alignment: .leading, spacing: CinefuseTokens.Spacing.xs) {
+                                ZStack {
+                                    RoundedRectangle(cornerRadius: CinefuseTokens.Radius.medium)
+                                        .fill(CinefuseTokens.ColorRole.surfaceSecondary.opacity(0.55))
+                                    if waveformPeaks.isEmpty {
+                                        ProgressView()
+                                            .frame(maxWidth: .infinity)
+                                            .padding(.vertical, 48)
+                                    } else {
+                                        AudioWaveformWithPlayhead(
+                                            peaks: waveformPeaks,
+                                            progressFraction: waveformProgressFraction,
+                                            onSeekFraction: { editorPlaybackState.seek(fraction: $0) }
+                                        )
+                                        .padding(.horizontal, CinefuseTokens.Spacing.s)
+                                        .padding(.vertical, CinefuseTokens.Spacing.s)
+                                    }
+                                }
+                                .frame(minHeight: 112)
+                                PlaybackTimeLabels(playback: editorPlaybackState)
+                                InlinePreviewPlayerSurface(player: queuePlayer)
+                                    .frame(height: 2)
+                                    .opacity(0.02)
+                                    .allowsHitTesting(false)
+                            }
+                        } else {
+                            InlinePreviewPlayerSurface(player: queuePlayer)
+                                .frame(minHeight: 280)
+                                .clipShape(RoundedRectangle(cornerRadius: CinefuseTokens.Radius.medium))
 
-                    PlaybackTimeLabels(playback: editorPlaybackState)
+                            PlaybackTimeLabels(playback: editorPlaybackState)
+                        }
+                    }
 
                     HStack(spacing: CinefuseTokens.Spacing.s) {
                         IconCommandButton(
@@ -6038,9 +6192,61 @@ struct EditorPreviewPanel: View {
             attachPlaybackState()
         }
         .onChange(of: selectedShotId) { _, _ in
+            playSelectedOnly()
             attachPlaybackState()
         }
     }
+
+    /// Extensions we treat as audio-only without probing the asset (instant waveform path).
+    private static func urlLooksAudioOnly(_ url: URL) -> Bool {
+        let ext = url.pathExtension.lowercased()
+        return ["wav", "mp3", "aac", "m4a", "flac", "ogg", "aiff", "aif", "caf"].contains(ext)
+    }
+
+#if canImport(AVFoundation)
+    /// True when the file has no video track but has audio (or unknown tracks — defer to video surface).
+    private static func assetHasNoVideoTrack(url: URL) async -> Bool {
+        let asset = AVURLAsset(url: url)
+        do {
+            let videos = try await asset.loadTracks(withMediaType: .video)
+            if !videos.isEmpty { return false }
+            let audios = try await asset.loadTracks(withMediaType: .audio)
+            return !audios.isEmpty
+        } catch {
+            return false
+        }
+    }
+
+    private func reloadAssetKindAndWaveform() async {
+        guard let shot = selectedShot,
+              let url = shot.playbackURL(localRecords: localFileRecordsByRemoteURL)
+        else {
+            await MainActor.run {
+                assetIsAudioOnly = nil
+                waveformPeaks = []
+            }
+            return
+        }
+        if Self.urlLooksAudioOnly(url) {
+            await MainActor.run { assetIsAudioOnly = true }
+            let peaks = (try? await WaveformPeakLoader.loadPeaks(from: url)) ?? []
+            await MainActor.run { waveformPeaks = peaks }
+            return
+        }
+        await MainActor.run { assetIsAudioOnly = nil }
+        let audioOnly = await Self.assetHasNoVideoTrack(url: url)
+        let peaks: [Float]
+        if audioOnly {
+            peaks = (try? await WaveformPeakLoader.loadPeaks(from: url)) ?? []
+        } else {
+            peaks = []
+        }
+        await MainActor.run {
+            assetIsAudioOnly = audioOnly
+            waveformPeaks = peaks
+        }
+    }
+#endif
 
     private func attachPlaybackState() {
         editorPlaybackState.attach(player: queuePlayer, shotId: selectedShot?.id)
@@ -6064,6 +6270,9 @@ struct EditorPreviewPanel: View {
         }
         startPlayback()
         attachPlaybackState()
+#if canImport(AVFoundation)
+        Task { await reloadAssetKindAndWaveform() }
+#endif
     }
 
     private func playSelectedOnly() {
@@ -6077,6 +6286,9 @@ struct EditorPreviewPanel: View {
         queuePlayer.insert(AVPlayerItem(url: url), after: nil)
         startPlayback()
         attachPlaybackState()
+#if canImport(AVFoundation)
+        Task { await reloadAssetKindAndWaveform() }
+#endif
     }
 
     private func configureLoopObserver() {
