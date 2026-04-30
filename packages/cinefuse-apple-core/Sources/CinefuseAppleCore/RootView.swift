@@ -1329,16 +1329,36 @@ struct ProjectWorkspaceScreen: View {
                 Menu {
                     Section("Creation") {
                         ForEach(CreationMode.allCases) { mode in
-                            Button(mode.label) {
+                            Button {
                                 creationModeRaw = mode.rawValue
+                            } label: {
+                                HStack {
+                                    Text(mode.label)
+                                    Spacer(minLength: 8)
+                                    if creationModeRaw == mode.rawValue {
+                                        Image(systemName: "checkmark")
+                                            .font(.caption.weight(.semibold))
+                                            .foregroundStyle(CinefuseTokens.ColorRole.accent)
+                                    }
+                                }
                             }
                         }
                     }
-                    Section("Workspace") {
+                    Section("Layout") {
                         ForEach(EditorWorkspacePreset.allCases) { preset in
-                            Button(preset.label) {
+                            Button {
                                 workspacePresetRaw = preset.rawValue
                                 applyWorkspacePreset(preset.rawValue)
+                            } label: {
+                                HStack {
+                                    Text(preset.label)
+                                    Spacer(minLength: 8)
+                                    if workspacePresetRaw == preset.rawValue {
+                                        Image(systemName: "checkmark")
+                                            .font(.caption.weight(.semibold))
+                                            .foregroundStyle(CinefuseTokens.ColorRole.accent)
+                                    }
+                                }
                             }
                         }
                     }
@@ -1359,17 +1379,11 @@ struct ProjectWorkspaceScreen: View {
                     CreationModeBinarySwitch(creationModeRaw: $creationModeRaw)
                         .tooltip("Video Creation or Audio Creation mode", enabled: editorSettings.showTooltips)
 
-                    Picker("Workspace", selection: $workspacePresetRaw) {
-                        ForEach(EditorWorkspacePreset.allCases) { preset in
-                            Text(preset.label).tag(preset.rawValue)
+                    EditorWorkspacePresetSegmentSwitch(workspacePresetRaw: $workspacePresetRaw)
+                        .onChange(of: workspacePresetRaw) { _, newValue in
+                            applyWorkspacePreset(newValue)
                         }
-                    }
-                    .pickerStyle(.menu)
-                    .frame(minWidth: 124)
-                    .onChange(of: workspacePresetRaw) { _, newValue in
-                        applyWorkspacePreset(newValue)
-                    }
-                    .tooltip("Choose workspace layout preset", enabled: editorSettings.showTooltips)
+                        .tooltip("Choose workspace layout: Edit, Audio, Review, or Render", enabled: editorSettings.showTooltips)
                 }
             }
 
@@ -1472,17 +1486,11 @@ struct ProjectWorkspaceScreen: View {
                 CreationModeBinarySwitch(creationModeRaw: $creationModeRaw)
                     .tooltip("Video Creation or Audio Creation mode", enabled: editorSettings.showTooltips)
 
-                Picker("Workspace", selection: $workspacePresetRaw) {
-                    ForEach(EditorWorkspacePreset.allCases) { preset in
-                        Text(preset.label).tag(preset.rawValue)
+                EditorWorkspacePresetSegmentSwitch(workspacePresetRaw: $workspacePresetRaw)
+                    .onChange(of: workspacePresetRaw) { _, newValue in
+                        applyWorkspacePreset(newValue)
                     }
-                }
-                .pickerStyle(.menu)
-                .frame(minWidth: 124)
-                .onChange(of: workspacePresetRaw) { _, newValue in
-                    applyWorkspacePreset(newValue)
-                }
-                .tooltip("Choose workspace layout preset", enabled: editorSettings.showTooltips)
+                    .tooltip("Choose workspace layout: Edit, Audio, Review, or Render", enabled: editorSettings.showTooltips)
             }
 
             IconCommandButton(
@@ -5184,6 +5192,84 @@ enum EditorWorkspacePreset: String, CaseIterable, Identifiable {
         case .audio: return "Audio"
         case .review: return "Review"
         case .render: return "Render"
+        }
+    }
+}
+
+/// Edit / Audio / Review / Render layout presets; matches ``CreationModeBinarySwitch`` styling (segmented “radio” row).
+private struct EditorWorkspacePresetSegmentSwitch: View {
+    @Binding var workspacePresetRaw: String
+
+    private var selectedPreset: EditorWorkspacePreset {
+        EditorWorkspacePreset(rawValue: workspacePresetRaw) ?? .editing
+    }
+
+    var body: some View {
+        HStack(spacing: 2) {
+            ForEach(EditorWorkspacePreset.allCases) { preset in
+                let isSelected = selectedPreset == preset
+                Button {
+                    workspacePresetRaw = preset.rawValue
+                } label: {
+                    segmentLabel(preset: preset, isSelected: isSelected)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(accessibilityLabel(for: preset))
+                .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : [.isButton])
+            }
+        }
+        .padding(3)
+        .background(
+            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                .fill(CinefuseTokens.ColorRole.surfaceSecondary.opacity(0.72))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                .strokeBorder(CinefuseTokens.ColorRole.borderSubtle.opacity(0.45), lineWidth: 1)
+        )
+        .fixedSize(horizontal: true, vertical: false)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Workspace layout")
+    }
+
+    @ViewBuilder
+    private func segmentLabel(preset: EditorWorkspacePreset, isSelected: Bool) -> some View {
+        Text(preset.label)
+            .font(CinefuseTokens.Typography.micro)
+            .foregroundStyle(
+                isSelected
+                    ? CinefuseTokens.ColorRole.textPrimary
+                    : CinefuseTokens.ColorRole.textSecondary
+            )
+            .frame(minWidth: 26)
+            .padding(.vertical, 4)
+            .padding(.horizontal, 5)
+            .background(
+                RoundedRectangle(cornerRadius: 5, style: .continuous)
+                    .fill(isSelected ? Color.black.opacity(0.14) : Color.clear)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 5, style: .continuous)
+                    .strokeBorder(
+                        isSelected ? CinefuseTokens.ColorRole.borderSubtle.opacity(0.65) : Color.clear,
+                        lineWidth: 1
+                    )
+            )
+            .shadow(
+                color: isSelected ? Color.black.opacity(0.22) : .clear,
+                radius: 0,
+                x: 0,
+                y: 1
+            )
+            .padding(1)
+    }
+
+    private func accessibilityLabel(for preset: EditorWorkspacePreset) -> String {
+        switch preset {
+        case .editing: return "Editing layout"
+        case .audio: return "Audio workspace layout"
+        case .review: return "Review layout"
+        case .render: return "Render layout"
         }
     }
 }
