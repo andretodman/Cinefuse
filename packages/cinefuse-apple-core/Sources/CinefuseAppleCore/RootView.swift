@@ -558,6 +558,23 @@ private struct ResetPasswordSheet: View {
     }
 }
 
+/// Lyrics behavior for `POST .../audio/score` (ElevenLabs Music MCP).
+enum ScoreGenerationLyricsMode: String, CaseIterable, Identifiable {
+    case instrumental
+    case auto
+    case custom
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .instrumental: return "Instrumental"
+        case .auto: return "Lyrics (auto)"
+        case .custom: return "Lyrics (custom)"
+        }
+    }
+}
+
 struct ProjectWorkspaceScreen: View {
     @Environment(AppModel.self) private var model
     @Environment(\.scenePhase) private var scenePhase
@@ -607,6 +624,13 @@ struct ProjectWorkspaceScreen: View {
     /// Per-shot sound origin: `"generated"` (prompt → pipeline) or `"uploaded"` (user file). Not user-editable; set by create/upload flows.
     @State private var shotSoundSourceById: [String: String] = [:]
     @State private var soundTagsDraft = ""
+    /// ElevenLabs score (audio workspace): target length in seconds (clamped 3…600 server-side).
+    @State private var scoreDurationSeconds: Double = 30
+    /// Score generation: instrumental, model-written lyrics, or user lyrics (composition plan).
+    @State private var scoreLyricsModeSelection: ScoreGenerationLyricsMode = .instrumental
+    @State private var scoreCustomLyricsDraft = ""
+    /// Maximizes the center preview column (toolbar icon); clears pop-out window when engaged.
+    @State private var isPreviewFullscreen = false
     @State private var jobKindDraft = "clip"
     @State private var isLoadingProjectDetails = false
     @State private var isRefreshingProjectDetails = false
@@ -839,6 +863,9 @@ struct ProjectWorkspaceScreen: View {
             newCharacterName: $newCharacterName,
             newCharacterDescription: $newCharacterDescription,
             jobKindDraft: $jobKindDraft,
+            scoreDurationSeconds: $scoreDurationSeconds,
+            scoreLyricsModeSelection: $scoreLyricsModeSelection,
+            scoreCustomLyricsDraft: $scoreCustomLyricsDraft,
             onCloseProject: closeProject,
             onDeleteProject: { Task { await deleteSelectedProject() } },
             onRenameProject: { title in Task { await renameSelectedProject(title: title) } },
@@ -894,6 +921,7 @@ struct ProjectWorkspaceScreen: View {
             onAddAudioTrack: { Task { await addEmptyAudioLane() } },
             onEnsureVideoLaneSlot: { lane in await ensureVideoLaneSlot(laneIndex: lane) },
             onRefreshStatusDetails: { await refreshGenerationStatusSnapshot() },
+            isPreviewFullscreen: $isPreviewFullscreen,
             mobileEditorPresentedPanel: mobileEditorPresentedPanelBinding
         )
         .environmentObject(editorPlaybackState)
@@ -1104,6 +1132,11 @@ struct ProjectWorkspaceScreen: View {
         .task(id: selectedProjectId) {
             await observeProjectEvents()
         }
+        .onChange(of: selectedProjectId) { _, newId in
+            if newId == nil {
+                isPreviewFullscreen = false
+            }
+        }
         .onChange(of: apiServerModeRaw) { _, _ in
             Task {
                 await refresh(selectProjectId: selectedProjectId)
@@ -1291,6 +1324,21 @@ struct ProjectWorkspaceScreen: View {
                 tooltipEnabled: editorSettings.showTooltips
             )
 
+            if selectedProjectId != nil {
+                IconCommandButton(
+                    systemName: isPreviewFullscreen
+                        ? "arrow.down.right.and.arrow.up.left"
+                        : "arrow.up.left.and.arrow.down.right",
+                    label: isPreviewFullscreen ? "Exit full-screen preview" : "Full-screen preview",
+                    action: {
+                        withAnimation(CinefuseTokens.Motion.panel) {
+                            isPreviewFullscreen.toggle()
+                        }
+                    },
+                    tooltipEnabled: editorSettings.showTooltips
+                )
+            }
+
             if !workspaceEditorLayoutTraits.useCompactWorkspaceChrome {
                 IconCommandButton(
                     systemName: "arrow.left.arrow.right.square",
@@ -1405,6 +1453,20 @@ struct ProjectWorkspaceScreen: View {
                 },
                 tooltipEnabled: editorSettings.showTooltips
             )
+            if selectedProjectId != nil {
+                IconCommandButton(
+                    systemName: isPreviewFullscreen
+                        ? "arrow.down.right.and.arrow.up.left"
+                        : "arrow.up.left.and.arrow.down.right",
+                    label: isPreviewFullscreen ? "Exit full-screen preview" : "Full-screen preview",
+                    action: {
+                        withAnimation(CinefuseTokens.Motion.panel) {
+                            isPreviewFullscreen.toggle()
+                        }
+                    },
+                    tooltipEnabled: editorSettings.showTooltips
+                )
+            }
             IconCommandButton(
                 systemName: "arrow.left.arrow.right.square",
                 label: "Swap side panels",
@@ -2738,12 +2800,16 @@ struct ProjectWorkspaceScreen: View {
         guard let selectedProjectId else { return }
         model.errorMessage = nil
         do {
+            let soundDurationSec = isAudioCreationWorkspace
+                ? Int(min(600, max(3, scoreDurationSeconds.rounded())))
+                : nil
             quotedShotCost = try await api.quoteShot(
                 token: model.bearerToken,
                 projectId: selectedProjectId,
                 prompt: shotPromptDraft,
                 modelTier: shotModelTierDraft,
-                generationKind: isAudioCreationWorkspace ? "sound" : nil
+                generationKind: isAudioCreationWorkspace ? "sound" : nil,
+                durationSec: soundDurationSec
             )
         } catch {
             model.errorMessage = error.localizedDescription
@@ -3172,16 +3238,70 @@ struct ProjectWorkspaceScreen: View {
         }
     }
 
+    private func scoreStylePromptForGeneration() -> String {
+        let draft = shotPromptDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !draft.isEmpty {
+            return draft
+        }
+        return audioTrackTitleDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
     private func generateScoreTrack() async {
         guard let selectedProjectId else { return }
+        model.errorMessage = nil
+
+        let durationSecs = isAudioCreationWorkspace ? scoreDurationSeconds : 10
+        let durationMs = Int(min(600_000, max(3000, durationSecs * 1000)))
+
+        let titleTrimmed = audioTrackTitleDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+        let titleForTrack = titleTrimmed.isEmpty ? "Score bed" : titleTrimmed
+
+        var lyricsModeArg: String?
+        var lyricsTextArg: String?
+
+        if isAudioCreationWorkspace {
+            switch scoreLyricsModeSelection {
+            case .instrumental:
+                lyricsModeArg = "instrumental"
+            case .auto:
+                lyricsModeArg = "auto"
+            case .custom:
+                lyricsModeArg = "custom"
+                let lyrics = scoreCustomLyricsDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+                if lyrics.isEmpty {
+                    model.errorMessage = "Add lyrics for custom mode, or switch to Instrumental or Lyrics (auto)."
+                    return
+                }
+                lyricsTextArg = lyrics
+            }
+            let style = scoreStylePromptForGeneration()
+            if lyricsModeArg != "custom", style.isEmpty {
+                model.errorMessage = "Add a prompt on the selected sound or in the draft so the score has a style."
+                return
+            }
+            if lyricsModeArg == "custom", style.isEmpty {
+                model.errorMessage = "Add a style prompt (shot or draft) for custom lyrics."
+                return
+            }
+        } else {
+            lyricsModeArg = "instrumental"
+        }
+
+        let stylePrompt = scoreStylePromptForGeneration()
+
         do {
             let result = try await api.generateScore(
                 token: model.bearerToken,
                 projectId: selectedProjectId,
-                title: "Score bed",
+                title: titleForTrack,
                 laneIndex: 1,
                 startMs: 0,
-                durationMs: 10000
+                durationMs: durationMs,
+                prompt: stylePrompt.isEmpty ? nil : stylePrompt,
+                mood: nil,
+                lyricsMode: lyricsModeArg,
+                lyricsText: lyricsTextArg,
+                forceInstrumental: nil
             )
             noteAudioGenerationOutcome(result, label: "Score")
             await loadSelectedProjectDetails(showLoadingIndicator: false)
@@ -3455,6 +3575,9 @@ struct ProjectDetailScreen: View {
     @Binding var newCharacterName: String
     @Binding var newCharacterDescription: String
     @Binding var jobKindDraft: String
+    @Binding var scoreDurationSeconds: Double
+    @Binding var scoreLyricsModeSelection: ScoreGenerationLyricsMode
+    @Binding var scoreCustomLyricsDraft: String
 
     let onCloseProject: () -> Void
     let onDeleteProject: () -> Void
@@ -3501,6 +3624,8 @@ struct ProjectDetailScreen: View {
     /// Video mode: create empty audio lane at index 0 or 1 for timeline layering.
     let onEnsureVideoLaneSlot: (Int) async -> Void
     let onRefreshStatusDetails: () async -> Void
+    /// When true, center preview fills the top workspace (side columns hidden).
+    @Binding var isPreviewFullscreen: Bool
     @Binding var mobileEditorPresentedPanel: MobileEditorPresentedPanel?
     @EnvironmentObject private var editorPlaybackState: EditorPlaybackState
     @Environment(\.editorMobileInspectorSheet) private var editorMobileInspectorSheet
@@ -3523,6 +3648,7 @@ struct ProjectDetailScreen: View {
     @AppStorage("cinefuse.editor.collapse.audio") private var collapseAudioPanel = false
     @AppStorage("cinefuse.editor.collapse.jobs") private var collapseJobsPanel = false
     @AppStorage("cinefuse.editor.collapse.soundBlueprints") private var collapseSoundBlueprintsPanel = false
+    @State private var collapseScoreGenerationPanel = false
     /// Allocated height for the timeline strip when expanded (drag the handle under the timeline to resize).
     @AppStorage("cinefuse.editor.timelineStripHeight") private var timelineStripHeight: Double = 220
     /// Caps the timeline column (strip + optional video audio layers) so it scrolls vertically instead of pushing the workspace away.
@@ -3548,6 +3674,10 @@ struct ProjectDetailScreen: View {
 #else
         .desktopLike
 #endif
+    }
+
+    private var isAudioCreationWorkspace: Bool {
+        CreationMode(rawValue: creationModeRaw) == .audio
     }
 
     /// When sheet-based side chrome is active, inline columns are hidden so width stays with the preview.
@@ -3761,8 +3891,9 @@ struct ProjectDetailScreen: View {
                             totalHeight - effectiveBottomHeight - (showsBottomRegion ? bottomHandleHeight : 0)
                         )
                         let sideFrame = paneLayout(totalWidth: totalWidth)
-                        let showsLeftPanel = effectiveShowLeftPane && sideFrame.left > 1
-                        let showsRightPanel = effectiveShowRightPane && sideFrame.right > 1
+                        let previewFs = isPreviewFullscreen
+                        let showsLeftPanel = effectiveShowLeftPane && sideFrame.left > 1 && !previewFs
+                        let showsRightPanel = effectiveShowRightPane && sideFrame.right > 1 && !previewFs
 
                         VStack(spacing: 0) {
                             if isRenderWorkspace {
@@ -3795,63 +3926,70 @@ struct ProjectDetailScreen: View {
 #endif
                                 }
                             } else {
-                                if shouldUseEmbeddedPopoutPreview {
-                                    embeddedPopoutPreviewPanel
-                                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                                    .transition(.opacity.combined(with: .move(edge: .top)))
-                                } else {
-                                    HStack(alignment: .top, spacing: 0) {
-                                    if showsLeftPanel {
-                                        sidePaneContainer {
-                                            if swapSidePanes {
-                                                rightPaneContent
-                                            } else {
-                                                leftPaneContent
-                                            }
-                                        }
-                                        .frame(width: isPreviewPoppedOut ? nil : CGFloat(sideFrame.left))
-                                        .frame(maxWidth: isPreviewPoppedOut ? .infinity : nil)
-                                        .frame(minWidth: 0, maxHeight: .infinity)
-                                        if !isPreviewPoppedOut {
-                                            VerticalPanelHandle(
-                                                accessibilityLabel: "Resize left and center panels"
-                                            ) { delta in
-                                                leftPaneWidth = clampedLeftPaneWidth(
-                                                    leftPaneWidth + delta,
-                                                    totalWidth: totalWidth,
-                                                    opposingPaneWidth: sideFrame.right
-                                                )
-                                            }
-                                        }
-                                    }
-
-                                    if !isPreviewPoppedOut {
+                                Group {
+                                    if previewFs && !shouldUseEmbeddedPopoutPreview {
                                         centerPreviewPanel
                                             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-                                    }
+                                            .transition(.opacity)
+                                    } else if shouldUseEmbeddedPopoutPreview {
+                                        embeddedPopoutPreviewPanel
+                                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                                            .transition(.opacity.combined(with: .move(edge: .top)))
+                                    } else {
+                                        HStack(alignment: .top, spacing: 0) {
+                                            if showsLeftPanel {
+                                                sidePaneContainer {
+                                                    if swapSidePanes {
+                                                        rightPaneContent
+                                                    } else {
+                                                        leftPaneContent
+                                                    }
+                                                }
+                                                .frame(width: isPreviewPoppedOut ? nil : CGFloat(sideFrame.left))
+                                                .frame(maxWidth: isPreviewPoppedOut ? .infinity : nil)
+                                                .frame(minWidth: 0, maxHeight: .infinity)
+                                                if !isPreviewPoppedOut {
+                                                    VerticalPanelHandle(
+                                                        accessibilityLabel: "Resize left and center panels"
+                                                    ) { delta in
+                                                        leftPaneWidth = clampedLeftPaneWidth(
+                                                            leftPaneWidth + delta,
+                                                            totalWidth: totalWidth,
+                                                            opposingPaneWidth: sideFrame.right
+                                                        )
+                                                    }
+                                                }
+                                            }
 
-                                    if showsRightPanel {
-                                        if !isPreviewPoppedOut {
-                                            VerticalPanelHandle(
-                                                accessibilityLabel: "Resize center and right panels"
-                                            ) { delta in
-                                                rightPaneWidth = clampedRightPaneWidth(
-                                                    rightPaneWidth - delta,
-                                                    totalWidth: totalWidth,
-                                                    opposingPaneWidth: sideFrame.left
-                                                )
+                                            if !isPreviewPoppedOut {
+                                                centerPreviewPanel
+                                                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                                            }
+
+                                            if showsRightPanel {
+                                                if !isPreviewPoppedOut {
+                                                    VerticalPanelHandle(
+                                                        accessibilityLabel: "Resize center and right panels"
+                                                    ) { delta in
+                                                        rightPaneWidth = clampedRightPaneWidth(
+                                                            rightPaneWidth - delta,
+                                                            totalWidth: totalWidth,
+                                                            opposingPaneWidth: sideFrame.left
+                                                        )
+                                                    }
+                                                }
+                                                sidePaneContainer {
+                                                    if swapSidePanes {
+                                                        leftPaneContent
+                                                    } else {
+                                                        rightPaneContent
+                                                    }
+                                                }
+                                                .frame(width: isPreviewPoppedOut ? nil : CGFloat(sideFrame.right))
+                                                .frame(maxWidth: isPreviewPoppedOut ? .infinity : nil)
+                                                .frame(minWidth: 0, maxHeight: .infinity)
                                             }
                                         }
-                                        sidePaneContainer {
-                                            if swapSidePanes {
-                                                leftPaneContent
-                                            } else {
-                                                rightPaneContent
-                                            }
-                                        }
-                                        .frame(width: isPreviewPoppedOut ? nil : CGFloat(sideFrame.right))
-                                        .frame(maxWidth: isPreviewPoppedOut ? .infinity : nil)
-                                        .frame(minWidth: 0, maxHeight: .infinity)
                                     }
                                 }
                                 .frame(height: CGFloat(topWorkspaceHeight))
@@ -3879,7 +4017,6 @@ struct ProjectDetailScreen: View {
                                     .frame(height: CGFloat(effectiveBottomHeight), alignment: .top)
                                     .clipped()
                                 }
-                            }
                         }
                     }
                     .frame(minHeight: 380)
@@ -3937,7 +4074,15 @@ struct ProjectDetailScreen: View {
                 projectTitleDraft = value
             }
         }
+        .onChange(of: isPreviewFullscreen) { _, full in
+            if full {
+                isPreviewPoppedOut = false
+            }
+        }
         .onChange(of: isPreviewPoppedOut) { _, isPoppedOut in
+            if isPoppedOut {
+                isPreviewFullscreen = false
+            }
 #if canImport(AppKit) && !targetEnvironment(macCatalyst)
             if isPoppedOut {
                 presentPreviewPopoutWindow()
@@ -4376,6 +4521,55 @@ struct ProjectDetailScreen: View {
                     soundTagsDraft: $soundTagsDraft,
                     onRefreshStatusDetails: onRefreshStatusDetails
                 )
+                if isAudioCreationWorkspace {
+                    SectionCard(
+                        title: "Score generation",
+                        subtitle:
+                            "ElevenLabs Music. Style follows the selected sound or draft. Lyrics (auto) may add vocals.",
+                        isCollapsed: $collapseScoreGenerationPanel
+                    ) {
+                        VStack(alignment: .leading, spacing: CinefuseTokens.Spacing.s) {
+                            HStack(spacing: CinefuseTokens.Spacing.s) {
+                                Text("Duration")
+                                    .font(CinefuseTokens.Typography.caption)
+                                    .foregroundStyle(CinefuseTokens.ColorRole.textSecondary)
+                                Slider(value: $scoreDurationSeconds, in: 3...600, step: 1)
+                                Text("\(Int(scoreDurationSeconds))s")
+                                    .font(CinefuseTokens.Typography.caption.monospacedDigit())
+                                    .foregroundStyle(CinefuseTokens.ColorRole.textSecondary)
+                                    .frame(minWidth: 40, alignment: .trailing)
+                            }
+                            Picker("Score type", selection: $scoreLyricsModeSelection) {
+                                ForEach(ScoreGenerationLyricsMode.allCases) { mode in
+                                    Text(mode.label).tag(mode)
+                                }
+                            }
+#if os(iOS)
+                            .pickerStyle(.menu)
+#else
+                            .pickerStyle(.segmented)
+#endif
+                            if scoreLyricsModeSelection == .custom {
+                                TextField(
+                                    "Lyrics",
+                                    text: $scoreCustomLyricsDraft,
+                                    axis: .vertical
+                                )
+                                .lineLimit(5...14)
+                                .textFieldStyle(.roundedBorder)
+                                .font(CinefuseTokens.Typography.body)
+                            }
+                            Button {
+                                onGenerateScore()
+                            } label: {
+                                Label("Generate score", systemImage: "music.note")
+                            }
+                            .buttonStyle(PrimaryActionButtonStyle())
+                            .tooltip("Generate background score with current settings", enabled: showTooltips)
+                        }
+                        .padding(CinefuseTokens.Spacing.s)
+                    }
+                }
                 if isAudioCreationMode {
                     SectionCard(
                         title: "Audio export",
@@ -5502,24 +5696,23 @@ struct TimelineClipCard: View {
                     lineWidth: isSelected ? 2 : 1
                 )
         )
-        .overlay(timelinePlaybackProgressOverlay)
+        .overlay(timelineVerticalPlayheadOverlay)
     }
 
     @ViewBuilder
-    private var timelinePlaybackProgressOverlay: some View {
-        if let playbackProgressFraction, playbackProgressFraction > 0 {
+    private var timelineVerticalPlayheadOverlay: some View {
+        if let playbackProgressFraction {
             GeometryReader { geo in
-                VStack {
-                    Spacer(minLength: 0)
-                    ZStack(alignment: .leading) {
-                        Capsule()
-                            .fill(CinefuseTokens.ColorRole.borderSubtle.opacity(0.45))
-                            .frame(height: clipDensity == .thin ? 3 : 4)
-                        Capsule()
-                            .fill(CinefuseTokens.ColorRole.accent)
-                            .frame(width: max(3, geo.size.width * CGFloat(min(1, playbackProgressFraction))), height: clipDensity == .thin ? 3 : 4)
-                    }
+                let w = geo.size.width
+                let h = geo.size.height
+                let x = w * CGFloat(min(1, max(0, playbackProgressFraction)))
+                ZStack(alignment: .leading) {
+                    Rectangle()
+                        .fill(CinefuseTokens.ColorRole.accent)
+                        .frame(width: 2, height: h)
+                        .offset(x: max(0, min(w - 2, x - 1)))
                 }
+                .frame(width: w, height: h)
             }
             .allowsHitTesting(false)
         }
@@ -5709,7 +5902,7 @@ struct TimelineClipCard: View {
                         lineWidth: isSelected ? 2 : 1
                     )
 
-                timelinePlaybackProgressOverlay
+                timelineVerticalPlayheadOverlay
             }
         )
     }
@@ -5793,9 +5986,7 @@ struct EditorPreviewPanel: View {
                         .frame(minHeight: 280)
                         .clipShape(RoundedRectangle(cornerRadius: CinefuseTokens.Radius.medium))
 
-                    PlaybackTimelineScrubber(playback: editorPlaybackState) { fraction in
-                        editorPlaybackState.seek(fraction: fraction)
-                    }
+                    PlaybackTimeLabels(playback: editorPlaybackState)
 
                     HStack(spacing: CinefuseTokens.Spacing.s) {
                         IconCommandButton(
@@ -6096,9 +6287,7 @@ struct EditorAudioPreviewPanel: View {
                                 }
                             }
                             .frame(minHeight: 112)
-                            PlaybackTimelineScrubber(playback: editorPlaybackState) { fraction in
-                                editorPlaybackState.seek(fraction: fraction)
-                            }
+                            PlaybackTimeLabels(playback: editorPlaybackState)
                             InlinePreviewPlayerSurface(player: queuePlayer)
                                 .frame(height: 2)
                                 .opacity(0.02)

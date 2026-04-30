@@ -201,3 +201,32 @@ struct PlaybackTimelineScrubber: View {
         return String(format: "%d:%02d", m, s)
     }
 }
+
+/// Compact current / duration labels (no scrub slider).
+struct PlaybackTimeLabels: View {
+    @ObservedObject var playback: EditorPlaybackState
+
+    var body: some View {
+        HStack(spacing: CinefuseTokens.Spacing.xxs) {
+            Text(Self.formatClock(playback.currentTimeSeconds))
+                .font(CinefuseTokens.Typography.nano)
+                .foregroundStyle(CinefuseTokens.ColorRole.textSecondary)
+                .monospacedDigit()
+            Text("/")
+                .font(CinefuseTokens.Typography.nano)
+                .foregroundStyle(CinefuseTokens.ColorRole.textSecondary.opacity(0.75))
+            Text(Self.formatClock(playback.durationSeconds))
+                .font(CinefuseTokens.Typography.nano)
+                .foregroundStyle(CinefuseTokens.ColorRole.textSecondary)
+                .monospacedDigit()
+        }
+    }
+
+    private static func formatClock(_ seconds: Double) -> String {
+        guard seconds.isFinite, seconds >= 0 else { return "0:00" }
+        let total = Int(seconds.rounded(.down))
+        let m = total / 60
+        let s = total % 60
+        return String(format: "%d:%02d", m, s)
+    }
+}

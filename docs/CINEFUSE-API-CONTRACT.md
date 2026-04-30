@@ -27,7 +27,7 @@ All clients and services should target these routes.
 
 - `POST /api/v1/cinefuse/projects/{projectId}/shots`
 - `GET /api/v1/cinefuse/projects/{projectId}/shots`
-- `POST /api/v1/cinefuse/projects/{projectId}/shots/quote`
+- `POST /api/v1/cinefuse/projects/{projectId}/shots/quote` — optional **`durationMs`** or **`durationSec`** when **`generationKind`** is **`sound`** (defaults ~5s); Sparks for sound quotes scale by **30s buckets** to match `generate_score` billing.
 - `POST /api/v1/cinefuse/projects/{projectId}/shots/{shotId}/generate`
 
 ### Jobs
@@ -50,6 +50,23 @@ Each route invokes the `audio` MCP with a deterministic idempotency key. Respons
 - `POST /api/v1/cinefuse/projects/{projectId}/audio/sfx`
 - `POST /api/v1/cinefuse/projects/{projectId}/audio/mix`
 - `POST /api/v1/cinefuse/projects/{projectId}/audio/lipsync`
+
+**`POST .../audio/score` (ElevenLabs Music — score/bed)**
+
+Forwarded to MCP `generate_score`. Common JSON fields:
+
+| Field | Notes |
+|-------|--------|
+| `title` | Track label; also used as a **style fallback** when `prompt` / `mood` are absent. |
+| `prompt` | Style / scene description for instrumental or auto-vocal generation. |
+| `mood` | Short mood string; instrumental requests default to “Instrumental … mood music…”. For **auto vocals**, prefer `lyricsMode: "auto"` with `prompt` or set `forceInstrumental: false`. |
+| `durationMs` | Target length **3000–600000** (fed to ElevenLabs as `music_length_ms`). Sparks scale by **30s buckets** on the server. |
+| `laneIndex`, `startMs`, `shotId`, `idempotencyKey` | Placement / correlation as today. |
+| `lyricsMode` | `"instrumental"` (default when omitted and `forceInstrumental` is not `false`), `"auto"` (model may add vocals; uses prompt path with `force_instrumental: false`), or `"custom"` (user lyrics via composition plan). |
+| `forceInstrumental` | Legacy: explicit `false` implies auto vocals when `lyricsMode` is omitted. |
+| `lyricsLines` | Array of strings for **custom** lyrics (lines chunked to ≤200 chars server-side). |
+| `lyricsText` | Alternative: multiline string split on newlines. |
+| `compositionPlan` | Optional raw ElevenLabs `MusicPrompt` object; when set with `lyricsMode: "custom"`, used instead of building a plan from `lyricsLines`. |
 
 **Success with artifact**
 

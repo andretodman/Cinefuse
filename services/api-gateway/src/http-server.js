@@ -925,7 +925,8 @@ export function createHttpServer() {
           projectId,
           prompt: shot.prompt,
           modelTier: shot.modelTier,
-          userId
+          userId,
+          durationMs: Math.round(Math.max(3, Number(shot.durationSec ?? 5)) * 1000)
         })
       : await mcpHost.invoke("clip", "quote_clip", {
           shotId: shot.id,
@@ -1970,7 +1971,11 @@ export function createHttpServer() {
             prompt: payload.prompt,
             modelTier,
             projectId,
-            userId: auth.userId
+            userId: auth.userId,
+            durationMs:
+              typeof payload.durationMs === "number"
+                ? payload.durationMs
+                : Math.round(Math.max(3, Number(payload.durationSec ?? 5)) * 1000)
           })
         : await mcpHost.invoke("clip", "quote_clip", {
             prompt: payload.prompt,

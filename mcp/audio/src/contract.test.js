@@ -12,10 +12,19 @@ test("audio contract: list_tools and invoke", async () => {
   assert.equal(quote.ok, true);
   assert.equal(quote.sparksCost, 70);
   assert.equal(quote.modelId, "music_v1");
+  const quoteLong = await server.invoke("quote_sound", {
+    modelTier: "standard",
+    durationMs: 45_000
+  });
+  assert.equal(quoteLong.sparksCost, 140);
+  assert.equal(quoteLong.durationBuckets, 2);
   const result = await server.invoke("generate_score", { mood: "tense" });
   assert.equal(result.ok, true);
   assert.equal(result.adapter, "stub");
   assert.equal(typeof result.providerEndpoint, "string");
   assert.ok(result.providerEndpoint.length > 0);
   assert.equal(result.providerRequestId, null);
+  const resultTitle = await server.invoke("generate_score", { title: "Underscore cue" });
+  assert.equal(resultTitle.ok, true);
+  assert.equal(resultTitle.track?.sparksCost > 0, true);
 });

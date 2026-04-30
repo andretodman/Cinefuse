@@ -352,18 +352,39 @@ public struct APIClient {
         title: String,
         laneIndex: Int,
         startMs: Int,
-        durationMs: Int
+        durationMs: Int,
+        prompt: String? = nil,
+        mood: String? = nil,
+        lyricsMode: String? = nil,
+        lyricsText: String? = nil,
+        forceInstrumental: Bool? = nil
     ) async throws -> AudioGenerationAPIResponse {
         var request = URLRequest(url: buildURL(path: "\(Self.cinefusePrefix)/projects/\(projectId)/audio/score"))
         request.httpMethod = "POST"
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = try JSONEncoder().encode([
+        var payload: [String: AnyEncodable] = [
             "title": AnyEncodable(title),
             "laneIndex": AnyEncodable(laneIndex),
             "startMs": AnyEncodable(startMs),
             "durationMs": AnyEncodable(durationMs)
-        ] as [String: AnyEncodable])
+        ]
+        if let prompt, !prompt.isEmpty {
+            payload["prompt"] = AnyEncodable(prompt)
+        }
+        if let mood, !mood.isEmpty {
+            payload["mood"] = AnyEncodable(mood)
+        }
+        if let lyricsMode, !lyricsMode.isEmpty {
+            payload["lyricsMode"] = AnyEncodable(lyricsMode)
+        }
+        if let lyricsText, !lyricsText.isEmpty {
+            payload["lyricsText"] = AnyEncodable(lyricsText)
+        }
+        if let forceInstrumental {
+            payload["forceInstrumental"] = AnyEncodable(forceInstrumental)
+        }
+        request.httpBody = try JSONEncoder().encode(payload)
         let (data, response) = try await URLSession.shared.data(for: request)
         try validate(response: response, data: data)
         return try JSONDecoder().decode(AudioGenerationAPIResponse.self, from: data)
@@ -627,12 +648,14 @@ public struct APIClient {
     }
 
     /// - Parameter generationKind: Pass `"sound"` in Audio Creation mode so the gateway quotes the audio path; default is video/clip.
+    /// - Parameter durationSec: Optional sound length for score quotes (Sparks scale by ~30s buckets server-side).
     public func quoteShot(
         token: String,
         projectId: String,
         prompt: String,
         modelTier: String,
-        generationKind: String? = nil
+        generationKind: String? = nil,
+        durationSec: Int? = nil
     ) async throws -> ShotQuote {
         var request = URLRequest(url: buildURL(path: "\(Self.cinefusePrefix)/projects/\(projectId)/shots/quote"))
         request.httpMethod = "POST"
@@ -644,6 +667,9 @@ public struct APIClient {
         ]
         if let generationKind {
             body["generationKind"] = generationKind
+        }
+        if let durationSec {
+            body["durationSec"] = durationSec
         }
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
         let (data, response) = try await URLSession.shared.data(for: request)
