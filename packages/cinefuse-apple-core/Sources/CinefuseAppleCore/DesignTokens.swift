@@ -43,6 +43,8 @@ enum CinefuseTokens {
         static let logoWidth: CGFloat = 92
         static let logoHeight: CGFloat = 24
         static let settingsPanelWidth: CGFloat = 420
+        /// Wider layout when the iPad build runs on macOS (“Designed for iPad”).
+        static let settingsPanelWidthIOSMac: CGFloat = 560
         static let timelineRulerHeight: CGFloat = 28
         static let timelineNotchMinor: CGFloat = 8
         static let timelineNotchMajor: CGFloat = 14

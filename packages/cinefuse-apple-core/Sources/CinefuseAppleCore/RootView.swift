@@ -37,7 +37,28 @@ public struct CinefuseRootView: View {
             }
         }
         .background(CinefuseTokens.ColorRole.canvas)
+#if os(iOS)
+        .onAppear(perform: preferLandscapeWindowWhenIOSAppOnMac)
+        .onChange(of: model.isAuthenticated) { _, isAuthed in
+            if isAuthed {
+                preferLandscapeWindowWhenIOSAppOnMac()
+            }
+        }
+#endif
     }
+
+#if os(iOS)
+    /// “Designed for iPad” on macOS often opens in portrait; request landscape for a proper desktop aspect ratio.
+    private func preferLandscapeWindowWhenIOSAppOnMac() {
+        guard ProcessInfo.processInfo.isiOSAppOnMac else { return }
+        guard let scene = UIApplication.shared.connectedScenes.compactMap({ $0 as? UIWindowScene }).first else {
+            return
+        }
+        if #available(iOS 16.0, *) {
+            scene.requestGeometryUpdate(.iOS(interfaceOrientations: .landscapeRight)) { _ in }
+        }
+    }
+#endif
 }
 
 struct TimelineRulerView: View {
@@ -590,6 +611,7 @@ struct ProjectWorkspaceScreen: View {
     @State private var hasLiveEventsConnection = false
     @State private var editorSettings = EditorSettingsModel()
     @State private var showSettingsPanel = false
+    @State private var settingsSheetDetent: PresentationDetent = .large
     @State private var showHelpCenter = false
     @State private var showDebugWindow = false
     @State private var showOnboardingSheet = false
@@ -1157,8 +1179,13 @@ struct ProjectWorkspaceScreen: View {
         )
         .sheet(isPresented: $showSettingsPanel) {
             workspaceSettingsPanel
-                .presentationDetents([.medium, .large])
+                .presentationDetents([.medium, .large], selection: $settingsSheetDetent)
                 .presentationDragIndicator(.visible)
+        }
+        .onChange(of: showSettingsPanel) { _, isOpen in
+            if isOpen {
+                settingsSheetDetent = .large
+            }
         }
 #else
         IconCommandButton(
@@ -1177,72 +1204,84 @@ struct ProjectWorkspaceScreen: View {
 #endif
     }
 
+    private var workspaceSettingsPreferredWidth: CGFloat {
+#if os(iOS)
+        if ProcessInfo.processInfo.isiOSAppOnMac {
+            return CinefuseTokens.Control.settingsPanelWidthIOSMac
+        }
+#endif
+        return CinefuseTokens.Control.settingsPanelWidth
+    }
+
     private var workspaceSettingsPanel: some View {
-        VStack(alignment: .leading, spacing: CinefuseTokens.Spacing.m) {
-            HStack(alignment: .top, spacing: CinefuseTokens.Spacing.s) {
-                VStack(alignment: .leading, spacing: CinefuseTokens.Spacing.xxs) {
-                    Text("Editor Settings")
-                        .font(CinefuseTokens.Typography.sectionTitle)
-                    Text("Appearance, workspace behavior, and server controls.")
+        ScrollView {
+            VStack(alignment: .leading, spacing: CinefuseTokens.Spacing.m) {
+                HStack(alignment: .top, spacing: CinefuseTokens.Spacing.s) {
+                    VStack(alignment: .leading, spacing: CinefuseTokens.Spacing.xxs) {
+                        Text("Editor Settings")
+                            .font(CinefuseTokens.Typography.sectionTitle)
+                        Text("Appearance, workspace behavior, and server controls.")
+                            .font(CinefuseTokens.Typography.caption)
+                            .foregroundStyle(CinefuseTokens.ColorRole.textSecondary)
+                    }
+                    Spacer()
+                    Button {
+                        withAnimation(CinefuseTokens.Motion.quick) {
+                            showSettingsPanel = false
+                        }
+                    } label: {
+                        Label("Close", systemImage: "xmark")
+                    }
+                    .buttonStyle(SecondaryActionButtonStyle())
+                    .keyboardShortcut(.cancelAction)
+                }
+
+                settingsSection("Appearance", subtitle: "Theme and visual presentation.") {
+                    Picker("Theme", selection: timelineThemeModeBinding) {
+                        ForEach(TimelineThemeMode.allCases) { mode in
+                            Text(mode.label).tag(mode)
+                        }
+                    }
+                    .pickerStyle(.menu)
+                    Text("Theme is saved automatically.")
                         .font(CinefuseTokens.Typography.caption)
                         .foregroundStyle(CinefuseTokens.ColorRole.textSecondary)
                 }
-                Spacer()
-                Button {
-                    withAnimation(CinefuseTokens.Motion.quick) {
-                        showSettingsPanel = false
-                    }
-                } label: {
-                    Label("Close", systemImage: "xmark")
-                }
-                .buttonStyle(SecondaryActionButtonStyle())
-                .keyboardShortcut(.cancelAction)
-            }
 
-            settingsSection("Appearance", subtitle: "Theme and visual presentation.") {
-                Picker("Theme", selection: timelineThemeModeBinding) {
-                    ForEach(TimelineThemeMode.allCases) { mode in
-                        Text(mode.label).tag(mode)
-                    }
+                settingsSection("Workspace Behavior", subtitle: "Editing and restore preferences.") {
+                    Toggle("Show tooltips", isOn: $editorSettings.showTooltips)
+                    Toggle("Restore last open project", isOn: $editorSettings.restoreLastOpenWorkspace)
                 }
-                .pickerStyle(.menu)
-                Text("Theme is saved automatically.")
-                    .font(CinefuseTokens.Typography.caption)
-                    .foregroundStyle(CinefuseTokens.ColorRole.textSecondary)
-            }
 
-            settingsSection("Workspace Behavior", subtitle: "Editing and restore preferences.") {
-                Toggle("Show tooltips", isOn: $editorSettings.showTooltips)
-                Toggle("Restore last open project", isOn: $editorSettings.restoreLastOpenWorkspace)
-            }
-
-            settingsSection("Server Connection", subtitle: "Active API endpoint and connectivity.") {
-                Picker("API Server", selection: $apiServerModeRaw) {
-                    ForEach(APIServerMode.allCases) { mode in
-                        Text(mode.label).tag(mode.rawValue)
+                settingsSection("Server Connection", subtitle: "Active API endpoint and connectivity.") {
+                    Picker("API Server", selection: $apiServerModeRaw) {
+                        ForEach(APIServerMode.allCases) { mode in
+                            Text(mode.label).tag(mode.rawValue)
+                        }
                     }
-                }
-                .pickerStyle(.menu)
-                if (APIServerMode(rawValue: apiServerModeRaw) ?? .local) == .custom {
-                    TextField("https://your-server.example.com", text: $customServerBaseURL)
-                        .textFieldStyle(.roundedBorder)
-                        .transition(.opacity.combined(with: .move(edge: .top)))
-                }
-                Text("Current API base URL: \(activeServerBaseURL)")
-                    .font(CinefuseTokens.Typography.caption)
-                    .foregroundStyle(CinefuseTokens.ColorRole.textSecondary)
-                serverStatusBadge
-                Button("Reconnect Server") {
-                    Task {
-                        await refresh(selectProjectId: selectedProjectId)
-                        await refreshServerHealth()
+                    .pickerStyle(.menu)
+                    if (APIServerMode(rawValue: apiServerModeRaw) ?? .local) == .custom {
+                        TextField("https://your-server.example.com", text: $customServerBaseURL)
+                            .textFieldStyle(.roundedBorder)
+                            .transition(.opacity.combined(with: .move(edge: .top)))
                     }
+                    Text("Current API base URL: \(activeServerBaseURL)")
+                        .font(CinefuseTokens.Typography.caption)
+                        .foregroundStyle(CinefuseTokens.ColorRole.textSecondary)
+                    serverStatusBadge
+                    Button("Reconnect Server") {
+                        Task {
+                            await refresh(selectProjectId: selectedProjectId)
+                            await refreshServerHealth()
+                        }
+                    }
+                    .buttonStyle(SecondaryActionButtonStyle())
                 }
-                .buttonStyle(SecondaryActionButtonStyle())
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(CinefuseTokens.Spacing.m)
         }
-        .padding(CinefuseTokens.Spacing.m)
-        .frame(width: CinefuseTokens.Control.settingsPanelWidth)
+        .frame(width: workspaceSettingsPreferredWidth)
         .animation(CinefuseTokens.Motion.standard, value: apiServerModeRaw)
     }
 
