@@ -4745,7 +4745,7 @@ struct ProjectDetailScreen: View {
                             .tooltip("Run audio mixdown for all lanes", enabled: showTooltips)
                             if let exportStatus = latestExportArtifactStatus {
                                 GenerationStatusDot(status: exportStatus)
-                                    .tooltip(exportStatus.summary, enabled: showTooltips)
+                                    .tooltip(exportStatus.expandedTooltip, enabled: showTooltips)
                                     .onTapGesture {
                                         onOpenDebugWindow()
                                     }
@@ -4866,7 +4866,7 @@ struct ProjectDetailScreen: View {
                                 .buttonStyle(PrimaryActionButtonStyle())
                             if let exportStatus = latestExportArtifactStatus {
                                 GenerationStatusDot(status: exportStatus)
-                                    .tooltip(exportStatus.summary, enabled: showTooltips)
+                                    .tooltip(exportStatus.expandedTooltip, enabled: showTooltips)
                                     .onTapGesture {
                                         showDebugWindow = true
                                     }
@@ -6102,6 +6102,18 @@ struct TimelineClipCard: View {
                 Text("\(shot.modelTier.capitalized) · \(shot.durationSec ?? 0)s")
                     .font(CinefuseTokens.Typography.nano)
                     .foregroundStyle(CinefuseTokens.ColorRole.textSecondary)
+                if let failLine = clipStatusPresentation.inlineFailureReason?.trimmingCharacters(in: .whitespacesAndNewlines),
+                   !failLine.isEmpty {
+                    Text(failLine)
+                        .font(CinefuseTokens.Typography.nano)
+                        .foregroundStyle(
+                            clipStatusPresentation.level == .error
+                                ? CinefuseTokens.ColorRole.danger.opacity(0.9)
+                                : CinefuseTokens.ColorRole.textSecondary
+                        )
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         }
@@ -6218,6 +6230,7 @@ struct TimelineClipCard: View {
             HStack(spacing: isAudioTimelineCard ? 4 : CinefuseTokens.Spacing.xs) {
                 GenerationStatusDot(status: clipStatusPresentation)
                     .scaleEffect(isAudioTimelineCard ? 0.62 : 1)
+                    .tooltip(clipStatusPresentation.expandedTooltip, enabled: showTooltips)
                 Text("#\(index + 1)")
                     .font(isAudioTimelineCard ? CinefuseTokens.Typography.micro.weight(.semibold) : CinefuseTokens.Typography.caption.weight(.semibold))
                 Spacer()
@@ -6225,6 +6238,20 @@ struct TimelineClipCard: View {
                     StatusBadge(status: shot.status)
                         .scaleEffect(isAudioTimelineCard ? 0.88 : 1)
                 }
+            }
+
+            if let failLine = clipStatusPresentation.inlineFailureReason?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !failLine.isEmpty {
+                Text(failLine)
+                    .font(clipDensity == .medium ? CinefuseTokens.Typography.nano : CinefuseTokens.Typography.micro)
+                    .foregroundStyle(
+                        clipStatusPresentation.level == .error
+                            ? CinefuseTokens.ColorRole.danger.opacity(0.9)
+                            : CinefuseTokens.ColorRole.textSecondary
+                    )
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .textSelection(.enabled)
             }
 
             Text(shot.prompt.isEmpty ? "Untitled clip" : shot.prompt)
@@ -8698,7 +8725,7 @@ struct ShotsPanel: View {
                             VStack(alignment: .leading, spacing: CinefuseTokens.Spacing.xxs) {
                                 HStack(spacing: CinefuseTokens.Spacing.xs) {
                                     GenerationStatusDot(status: presentation)
-                                        .tooltip(presentation.summary, enabled: showTooltips)
+                                        .tooltip(presentation.expandedTooltip, enabled: showTooltips)
                                         .contextMenu {
                                             Button("Copy Diagnostics") {
                                                 copyTextToClipboard(presentation.details)
@@ -8712,6 +8739,20 @@ struct ShotsPanel: View {
                                         StatusBadge(status: shot.status)
                                     }
                                     Spacer()
+                                }
+                                if let failLine = presentation.inlineFailureReason?.trimmingCharacters(in: .whitespacesAndNewlines),
+                                   !failLine.isEmpty {
+                                    Text(failLine)
+                                        .font(CinefuseTokens.Typography.micro)
+                                        .foregroundStyle(
+                                            presentation.level == .error
+                                                ? CinefuseTokens.ColorRole.danger.opacity(0.92)
+                                                : CinefuseTokens.ColorRole.textSecondary
+                                        )
+                                        .lineLimit(3)
+                                        .multilineTextAlignment(.leading)
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                        .textSelection(.enabled)
                                 }
                                 Text(shot.prompt.isEmpty ? "Untitled shot" : shot.prompt)
                                     .font(CinefuseTokens.Typography.body)
@@ -9088,7 +9129,7 @@ struct JobsPanel: View {
                                     VStack(alignment: .leading, spacing: CinefuseTokens.Spacing.xs) {
                                         HStack(spacing: CinefuseTokens.Spacing.s) {
                                             GenerationStatusDot(status: presentation)
-                                                .tooltip(presentation.summary, enabled: showTooltips)
+                                                .tooltip(presentation.expandedTooltip, enabled: showTooltips)
                                                 .onTapGesture {
                                                     diagnosticsSheetJobId = job.id
                                                     selectedDiagnostics = presentation
@@ -9110,6 +9151,20 @@ struct JobsPanel: View {
                                             Text("Cost to us: \(job.costToUsCents)c")
                                                 .font(CinefuseTokens.Typography.caption)
                                                 .foregroundStyle(CinefuseTokens.ColorRole.textSecondary)
+                                        }
+                                        if let failLine = presentation.inlineFailureReason?.trimmingCharacters(in: .whitespacesAndNewlines),
+                                           !failLine.isEmpty {
+                                            Text(failLine)
+                                                .font(CinefuseTokens.Typography.micro)
+                                                .foregroundStyle(
+                                                    presentation.level == .error
+                                                        ? CinefuseTokens.ColorRole.danger.opacity(0.92)
+                                                        : CinefuseTokens.ColorRole.textSecondary
+                                                )
+                                                .lineLimit(3)
+                                                .multilineTextAlignment(.leading)
+                                                .frame(maxWidth: .infinity, alignment: .leading)
+                                                .textSelection(.enabled)
                                         }
                                         if let prompt = job.promptText?.trimmingCharacters(in: .whitespacesAndNewlines),
                                            !prompt.isEmpty {
@@ -9286,10 +9341,28 @@ struct ArtifactStatusPresentation: Identifiable {
         case error
     }
 
-    let id = UUID()
+    let id: UUID
     let level: Level
     let summary: String
     let details: String
+    /// Short user-visible reason (e.g. policy refusal) shown under the status LED on panels.
+    let inlineFailureReason: String?
+
+    init(level: Level, summary: String, details: String, inlineFailureReason: String? = nil) {
+        self.id = UUID()
+        self.level = level
+        self.summary = summary
+        self.details = details
+        self.inlineFailureReason = inlineFailureReason
+    }
+
+    /// Tooltip on the status dot: summary plus optional public failure line.
+    var expandedTooltip: String {
+        if let r = inlineFailureReason?.trimmingCharacters(in: .whitespacesAndNewlines), !r.isEmpty {
+            return "\(summary)\n\n\(r)"
+        }
+        return summary
+    }
 }
 
 struct RenderRequestState {
@@ -9419,6 +9492,27 @@ private func primaryArtifactFailureMessage(
         ?? trimmedNonEmpty(requestState?.errorMessage)
         ?? trimmedNonEmpty(localRecord?.errorMessage)
         ?? fallback
+}
+
+private func truncatedFailureLine(_ text: String, maxScalars: Int = 220) -> String {
+    let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
+    if t.isEmpty { return "" }
+    if t.count <= maxScalars { return t }
+    return String(t.prefix(maxScalars - 1)) + "…"
+}
+
+/// Public one-liner for under the LED; drops empty / useless “unknown” only.
+private func artifactPublicFailureLine(
+    job: Job?,
+    requestState: RenderRequestState?,
+    localRecord: LocalFileRecord?
+) -> String? {
+    let raw = primaryArtifactFailureMessage(job: job, requestState: requestState, localRecord: localRecord, fallback: "")
+    let t = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !t.isEmpty else { return nil }
+    if t.lowercased() == "unknown" { return nil }
+    let out = truncatedFailureLine(t)
+    return out.isEmpty ? nil : out
 }
 
 private func requestTimelineLines(_ requestState: RenderRequestState?, job: Job? = nil) -> [String] {
@@ -9622,7 +9716,8 @@ private func artifactStatusPresentation(
         return ArtifactStatusPresentation(
             level: .warning,
             summary: "Audio feature skipped (non-blocking)",
-            details: detailLines.joined(separator: "\n")
+            details: detailLines.joined(separator: "\n"),
+            inlineFailureReason: truncatedFailureLine(reason)
         )
     }
     let apiEvidence = [
@@ -9658,7 +9753,8 @@ private func artifactStatusPresentation(
         return ArtifactStatusPresentation(
             level: .error,
             summary: "Request timed out or failed",
-            details: details.joined(separator: "\n")
+            details: details.joined(separator: "\n"),
+            inlineFailureReason: artifactPublicFailureLine(job: job, requestState: requestState, localRecord: localRecord)
         )
     }
     if job.status == "failed" || localRecord?.status == .downloadFailed || localRecord?.status == .writeFailed {
@@ -9678,7 +9774,8 @@ private func artifactStatusPresentation(
         return ArtifactStatusPresentation(
             level: .error,
             summary: "File generation failed or file sync error",
-            details: detailText
+            details: detailText,
+            inlineFailureReason: artifactPublicFailureLine(job: job, requestState: requestState, localRecord: localRecord)
         )
     }
 
@@ -9728,13 +9825,15 @@ private func artifactStatusPresentation(
         return ArtifactStatusPresentation(
             level: .warning,
             summary: "Shot already generating; wait for current render",
-            details: waitingDetailText
+            details: waitingDetailText,
+            inlineFailureReason: truncatedFailureLine(error)
         )
     }
     return ArtifactStatusPresentation(
         level: .warning,
         summary: waitingSummary,
-        details: waitingDetailText
+        details: waitingDetailText,
+        inlineFailureReason: nil
     )
 }
 
@@ -9781,7 +9880,8 @@ private func shotArtifactStatusPresentation(
         return ArtifactStatusPresentation(
             level: .warning,
             summary: "Retry skipped because backend status changed",
-            details: details.joined(separator: "\n")
+            details: details.joined(separator: "\n"),
+            inlineFailureReason: truncatedFailureLine(retryConflict)
         )
     }
     let shotJobInvokeDone = (job?.invokeState ?? "")
@@ -9830,7 +9930,8 @@ private func shotArtifactStatusPresentation(
         return ArtifactStatusPresentation(
             level: .error,
             summary: "\(artifactNoun) request timed out or failed",
-            details: details.joined(separator: "\n")
+            details: details.joined(separator: "\n"),
+            inlineFailureReason: artifactPublicFailureLine(job: job, requestState: requestState, localRecord: localRecord)
         )
     }
     if shot.status == "failed" {
@@ -9855,7 +9956,12 @@ private func shotArtifactStatusPresentation(
             artifactKind: artifactKindTag
         ) + (stubGuidance.map { ["Hint: \($0)"] } ?? [])
             + (job.map { jobPipelineDebugLines(job: $0, shotStatus: shot.status) } ?? []) + requestLines
-        return ArtifactStatusPresentation(level: .error, summary: "\(artifactNoun) generation failed", details: details.joined(separator: "\n"))
+        return ArtifactStatusPresentation(
+            level: .error,
+            summary: "\(artifactNoun) generation failed",
+            details: details.joined(separator: "\n"),
+            inlineFailureReason: artifactPublicFailureLine(job: job, requestState: requestState, localRecord: localRecord)
+        )
     }
 
     if localRecord?.status == .synced || localRecord?.status == .alreadyPresent {
@@ -9900,7 +10006,15 @@ private func shotArtifactStatusPresentation(
             localPath: localRecord?.localPath,
             artifactKind: artifactKindTag
         ) + requestLines
-        return ArtifactStatusPresentation(level: .error, summary: "\(artifactNoun) rendered but local file sync failed", details: details.joined(separator: "\n"))
+        let syncErr = localRecord?.errorMessage?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let syncInline = (syncErr.flatMap { $0.isEmpty ? nil : truncatedFailureLine($0) })
+            ?? artifactPublicFailureLine(job: job, requestState: requestState, localRecord: localRecord)
+        return ArtifactStatusPresentation(
+            level: .error,
+            summary: "\(artifactNoun) rendered but local file sync failed",
+            details: details.joined(separator: "\n"),
+            inlineFailureReason: syncInline
+        )
     }
 
     /// Shot is ready on the server but local file row may still be syncing — do not fall through to "still in progress".
