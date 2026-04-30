@@ -3648,7 +3648,6 @@ struct ProjectDetailScreen: View {
     @AppStorage("cinefuse.editor.collapse.audio") private var collapseAudioPanel = false
     @AppStorage("cinefuse.editor.collapse.jobs") private var collapseJobsPanel = false
     @AppStorage("cinefuse.editor.collapse.soundBlueprints") private var collapseSoundBlueprintsPanel = false
-    @State private var collapseScoreGenerationPanel = false
     /// Allocated height for the timeline strip when expanded (drag the handle under the timeline to resize).
     @AppStorage("cinefuse.editor.timelineStripHeight") private var timelineStripHeight: Double = 220
     /// Caps the timeline column (strip + optional video audio layers) so it scrolls vertically instead of pushing the workspace away.
@@ -4519,57 +4518,13 @@ struct ProjectDetailScreen: View {
                     selectedTimelineShotId: $selectedTimelineShotId,
                     soundSourceLabel: soundSourceLabel,
                     soundTagsDraft: $soundTagsDraft,
-                    onRefreshStatusDetails: onRefreshStatusDetails
+                    onRefreshStatusDetails: onRefreshStatusDetails,
+                    showScoreGenerationControls: isAudioCreationWorkspace,
+                    scoreDurationSeconds: $scoreDurationSeconds,
+                    scoreLyricsModeSelection: $scoreLyricsModeSelection,
+                    scoreCustomLyricsDraft: $scoreCustomLyricsDraft,
+                    onGenerateScore: onGenerateScore
                 )
-                if isAudioCreationWorkspace {
-                    SectionCard(
-                        title: "Score generation",
-                        subtitle:
-                            "ElevenLabs Music. Style follows the selected sound or draft. Lyrics (auto) may add vocals.",
-                        isCollapsed: $collapseScoreGenerationPanel
-                    ) {
-                        VStack(alignment: .leading, spacing: CinefuseTokens.Spacing.s) {
-                            HStack(spacing: CinefuseTokens.Spacing.s) {
-                                Text("Duration")
-                                    .font(CinefuseTokens.Typography.caption)
-                                    .foregroundStyle(CinefuseTokens.ColorRole.textSecondary)
-                                Slider(value: $scoreDurationSeconds, in: 3...600, step: 1)
-                                Text("\(Int(scoreDurationSeconds))s")
-                                    .font(CinefuseTokens.Typography.caption.monospacedDigit())
-                                    .foregroundStyle(CinefuseTokens.ColorRole.textSecondary)
-                                    .frame(minWidth: 40, alignment: .trailing)
-                            }
-                            Picker("Score type", selection: $scoreLyricsModeSelection) {
-                                ForEach(ScoreGenerationLyricsMode.allCases) { mode in
-                                    Text(mode.label).tag(mode)
-                                }
-                            }
-#if os(iOS)
-                            .pickerStyle(.menu)
-#else
-                            .pickerStyle(.segmented)
-#endif
-                            if scoreLyricsModeSelection == .custom {
-                                TextField(
-                                    "Lyrics",
-                                    text: $scoreCustomLyricsDraft,
-                                    axis: .vertical
-                                )
-                                .lineLimit(5...14)
-                                .textFieldStyle(.roundedBorder)
-                                .font(CinefuseTokens.Typography.body)
-                            }
-                            Button {
-                                onGenerateScore()
-                            } label: {
-                                Label("Generate score", systemImage: "music.note")
-                            }
-                            .buttonStyle(PrimaryActionButtonStyle())
-                            .tooltip("Generate background score with current settings", enabled: showTooltips)
-                        }
-                        .padding(CinefuseTokens.Spacing.s)
-                    }
-                }
                 if isAudioCreationMode {
                     SectionCard(
                         title: "Audio export",
@@ -7532,6 +7487,12 @@ struct ShotsPanel: View {
     let soundSourceLabel: (Shot) -> String
     @Binding var soundTagsDraft: String
     let onRefreshStatusDetails: () async -> Void
+    /// Audio workspace: score settings card above Quote / Create Sound (ElevenLabs Music).
+    var showScoreGenerationControls: Bool = false
+    @Binding var scoreDurationSeconds: Double
+    @Binding var scoreLyricsModeSelection: ScoreGenerationLyricsMode
+    @Binding var scoreCustomLyricsDraft: String
+    let onGenerateScore: () -> Void
     @State private var pendingDeleteShotId: String?
     @State private var selectedDiagnostics: ArtifactStatusPresentation?
     @State private var diagnosticsSheetShotId: String?
@@ -7781,15 +7742,77 @@ struct ShotsPanel: View {
         }
     }
 
+    /// Inline card above Quote / Create Sound: ElevenLabs Music score duration and lyrics mode.
+    private var scoreGenerationSoundCard: some View {
+        VStack(alignment: .leading, spacing: CinefuseTokens.Spacing.s) {
+            Text("Score generation")
+                .font(CinefuseTokens.Typography.cardTitle)
+            Text(
+                "ElevenLabs Music. Style follows the selected sound or prompt draft. Lyrics (auto) may add vocals."
+            )
+            .font(CinefuseTokens.Typography.micro)
+            .foregroundStyle(CinefuseTokens.ColorRole.textSecondary)
+            .fixedSize(horizontal: false, vertical: true)
+            HStack(spacing: CinefuseTokens.Spacing.s) {
+                Text("Duration")
+                    .font(CinefuseTokens.Typography.caption)
+                    .foregroundStyle(CinefuseTokens.ColorRole.textSecondary)
+                Slider(value: $scoreDurationSeconds, in: 3...600, step: 1)
+                Text("\(Int(scoreDurationSeconds))s")
+                    .font(CinefuseTokens.Typography.caption.monospacedDigit())
+                    .foregroundStyle(CinefuseTokens.ColorRole.textSecondary)
+                    .frame(minWidth: 40, alignment: .trailing)
+            }
+            Picker("Lyrics mode", selection: $scoreLyricsModeSelection) {
+                ForEach(ScoreGenerationLyricsMode.allCases) { mode in
+                    Text(mode.label).tag(mode)
+                }
+            }
+#if os(iOS)
+            .pickerStyle(.menu)
+#else
+            .pickerStyle(.segmented)
+#endif
+            if scoreLyricsModeSelection == .custom {
+                TextField(
+                    "Custom lyrics",
+                    text: $scoreCustomLyricsDraft,
+                    axis: .vertical
+                )
+                .lineLimit(5...14)
+                .textFieldStyle(.roundedBorder)
+                .font(CinefuseTokens.Typography.body)
+            }
+            Button {
+                onGenerateScore()
+            } label: {
+                Label("Generate score", systemImage: "music.note")
+            }
+            .buttonStyle(PrimaryActionButtonStyle())
+            .tooltip("Generate background score with current settings", enabled: showTooltips)
+        }
+        .padding(CinefuseTokens.Spacing.s)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: CinefuseTokens.Radius.medium, style: .continuous)
+                .fill(CinefuseTokens.ColorRole.surfaceSecondary.opacity(0.88))
+        )
+    }
+
     var body: some View {
         SectionCard(
             title: panelMode == .audioSounds ? "Sounds" : "Shots",
             subtitle: panelMode == .audioSounds
-                ? "Tier row includes Sound blueprints (menu). Add reference files on the left panel only. Timeline selection scopes which sound’s blueprint set you edit."
+                ? (showScoreGenerationControls
+                    ? "Score card first: duration and instrumental vs lyrics. Then prompt, tier, Sound blueprints, Quote, Create Sound."
+                    : "Tier row includes Sound blueprints (menu). Add reference files on the left panel only. Timeline selection scopes which sound’s blueprint set you edit.")
                 : "1: Draft shot 2: Quote cost 3: Generate 4: Review",
             isCollapsed: $isCollapsed
         ) {
             VStack(alignment: .leading, spacing: CinefuseTokens.Spacing.s) {
+                if panelMode == .audioSounds && showScoreGenerationControls {
+                    scoreGenerationSoundCard
+                }
                 ViewThatFits(in: .horizontal) {
                     HStack(alignment: .center, spacing: CinefuseTokens.Spacing.s) {
                         TextField(promptFieldTitle, text: $shotPromptDraft)
