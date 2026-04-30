@@ -6,6 +6,48 @@ import UIKit
 #endif
 
 /// Panels presented as sheets on iPhone / compact iPad instead of inline columns or bottom strips.
+/// True when left/right inspector, jobs, or audio lanes are presented inside the iOS sheet wrapper (single outer `ScrollView`).
+private struct EditorMobileInspectorSheetKey: EnvironmentKey {
+    static let defaultValue = false
+}
+
+extension EnvironmentValues {
+    /// Set by ``ProjectDetailScreen`` sheet content so nested panels avoid conflicting scroll views / infinite height.
+    public var editorMobileInspectorSheet: Bool {
+        get { self[EditorMobileInspectorSheetKey.self] }
+        set { self[EditorMobileInspectorSheetKey.self] = newValue }
+    }
+}
+
+/// Vertical density of clip cards in the horizontal timeline (persisted).
+public enum TimelineClipDensity: String, CaseIterable, Identifiable, Sendable {
+    /// Single short row: thumbnail or waveform strip + one-line prompt.
+    case thin
+    /// Balanced detail between thin and full.
+    case medium
+    /// Full card chrome (default; matches pre-density timeline).
+    case large
+
+    public var id: String { rawValue }
+
+    /// SF Symbol for the editor toolbar (selected state uses accent in the parent).
+    public var toolbarSymbolName: String {
+        switch self {
+        case .thin: return "rectangle.split.1x2"
+        case .medium: return "square.grid.2x2"
+        case .large: return "square.grid.3x3"
+        }
+    }
+
+    public var accessibilityLabel: String {
+        switch self {
+        case .thin: return "Thin clip cards"
+        case .medium: return "Medium clip cards"
+        case .large: return "Large clip cards"
+        }
+    }
+}
+
 public enum MobileEditorPresentedPanel: String, Identifiable, Sendable {
     case leftInspector
     case rightInspector

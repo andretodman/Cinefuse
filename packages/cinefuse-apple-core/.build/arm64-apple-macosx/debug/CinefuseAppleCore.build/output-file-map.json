@@ -44,6 +44,13 @@
     "swift-dependencies": "/Users/atodman/Documents/GitHub/Cinefuse/packages/cinefuse-apple-core/.build/arm64-apple-macosx/debug/CinefuseAppleCore.build/EditorMobileLayout.swiftdeps",
     "diagnostics": "/Users/atodman/Documents/GitHub/Cinefuse/packages/cinefuse-apple-core/.build/arm64-apple-macosx/debug/CinefuseAppleCore.build/EditorMobileLayout.dia"
   },
+  "/Users/atodman/Documents/GitHub/Cinefuse/packages/cinefuse-apple-core/Sources/CinefuseAppleCore/EditorPlaybackState.swift": {
+    "dependencies": "/Users/atodman/Documents/GitHub/Cinefuse/packages/cinefuse-apple-core/.build/arm64-apple-macosx/debug/CinefuseAppleCore.build/EditorPlaybackState.d",
+    "object": "/Users/atodman/Documents/GitHub/Cinefuse/packages/cinefuse-apple-core/.build/arm64-apple-macosx/debug/CinefuseAppleCore.build/EditorPlaybackState.swift.o",
+    "swiftmodule": "/Users/atodman/Documents/GitHub/Cinefuse/packages/cinefuse-apple-core/.build/arm64-apple-macosx/debug/CinefuseAppleCore.build/EditorPlaybackState~partial.swiftmodule",
+    "swift-dependencies": "/Users/atodman/Documents/GitHub/Cinefuse/packages/cinefuse-apple-core/.build/arm64-apple-macosx/debug/CinefuseAppleCore.build/EditorPlaybackState.swiftdeps",
+    "diagnostics": "/Users/atodman/Documents/GitHub/Cinefuse/packages/cinefuse-apple-core/.build/arm64-apple-macosx/debug/CinefuseAppleCore.build/EditorPlaybackState.dia"
+  },
   "/Users/atodman/Documents/GitHub/Cinefuse/packages/cinefuse-apple-core/Sources/CinefuseAppleCore/GeneratedFilesStore.swift": {
     "dependencies": "/Users/atodman/Documents/GitHub/Cinefuse/packages/cinefuse-apple-core/.build/arm64-apple-macosx/debug/CinefuseAppleCore.build/GeneratedFilesStore.d",
     "object": "/Users/atodman/Documents/GitHub/Cinefuse/packages/cinefuse-apple-core/.build/arm64-apple-macosx/debug/CinefuseAppleCore.build/GeneratedFilesStore.swift.o",
@@ -78,6 +85,13 @@
     "swiftmodule": "/Users/atodman/Documents/GitHub/Cinefuse/packages/cinefuse-apple-core/.build/arm64-apple-macosx/debug/CinefuseAppleCore.build/StatusStyles~partial.swiftmodule",
     "swift-dependencies": "/Users/atodman/Documents/GitHub/Cinefuse/packages/cinefuse-apple-core/.build/arm64-apple-macosx/debug/CinefuseAppleCore.build/StatusStyles.swiftdeps",
     "diagnostics": "/Users/atodman/Documents/GitHub/Cinefuse/packages/cinefuse-apple-core/.build/arm64-apple-macosx/debug/CinefuseAppleCore.build/StatusStyles.dia"
+  },
+  "/Users/atodman/Documents/GitHub/Cinefuse/packages/cinefuse-apple-core/Sources/CinefuseAppleCore/WaveformAndTimelineViews.swift": {
+    "dependencies": "/Users/atodman/Documents/GitHub/Cinefuse/packages/cinefuse-apple-core/.build/arm64-apple-macosx/debug/CinefuseAppleCore.build/WaveformAndTimelineViews.d",
+    "object": "/Users/atodman/Documents/GitHub/Cinefuse/packages/cinefuse-apple-core/.build/arm64-apple-macosx/debug/CinefuseAppleCore.build/WaveformAndTimelineViews.swift.o",
+    "swiftmodule": "/Users/atodman/Documents/GitHub/Cinefuse/packages/cinefuse-apple-core/.build/arm64-apple-macosx/debug/CinefuseAppleCore.build/WaveformAndTimelineViews~partial.swiftmodule",
+    "swift-dependencies": "/Users/atodman/Documents/GitHub/Cinefuse/packages/cinefuse-apple-core/.build/arm64-apple-macosx/debug/CinefuseAppleCore.build/WaveformAndTimelineViews.swiftdeps",
+    "diagnostics": "/Users/atodman/Documents/GitHub/Cinefuse/packages/cinefuse-apple-core/.build/arm64-apple-macosx/debug/CinefuseAppleCore.build/WaveformAndTimelineViews.dia"
   },
   "/Users/atodman/Documents/GitHub/Cinefuse/packages/cinefuse-apple-core/.build/arm64-apple-macosx/debug/CinefuseAppleCore.build/DerivedSources/resource_bundle_accessor.swift": {
     "dependencies": "/Users/atodman/Documents/GitHub/Cinefuse/packages/cinefuse-apple-core/.build/arm64-apple-macosx/debug/CinefuseAppleCore.build/resource_bundle_accessor.d",

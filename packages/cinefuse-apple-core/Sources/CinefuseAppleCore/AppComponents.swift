@@ -62,26 +62,43 @@ struct SectionCard<Content: View>: View {
     let title: String
     let subtitle: String?
     let isCollapsed: Binding<Bool>?
+    let titleFont: Font
+    /// Vertical rhythm between title row, optional subtitle, and content.
+    let stackSpacing: CGFloat
+    let contentPadding: CGFloat
+    /// Shown to the **left** of the collapse chevron (e.g. timeline density controls).
+    let headerAccessory: AnyView?
     @ViewBuilder let content: Content
 
     init(
         title: String,
         subtitle: String? = nil,
         isCollapsed: Binding<Bool>? = nil,
+        titleFont: Font = CinefuseTokens.Typography.sectionTitle,
+        stackSpacing: CGFloat = CinefuseTokens.Spacing.s,
+        contentPadding: CGFloat = CinefuseTokens.Spacing.m,
+        headerAccessory: AnyView? = nil,
         @ViewBuilder content: () -> Content
     ) {
         self.title = title
         self.subtitle = subtitle
         self.isCollapsed = isCollapsed
+        self.titleFont = titleFont
+        self.stackSpacing = stackSpacing
+        self.contentPadding = contentPadding
+        self.headerAccessory = headerAccessory
         self.content = content()
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: CinefuseTokens.Spacing.s) {
+        VStack(alignment: .leading, spacing: stackSpacing) {
             HStack(alignment: .center, spacing: CinefuseTokens.Spacing.s) {
                 Text(title)
-                    .font(CinefuseTokens.Typography.sectionTitle)
+                    .font(titleFont)
                 Spacer(minLength: CinefuseTokens.Spacing.s)
+                if let headerAccessory {
+                    headerAccessory
+                }
                 if let isCollapsed {
                     Button {
                         withAnimation(CinefuseTokens.Motion.panel) {
@@ -105,7 +122,7 @@ struct SectionCard<Content: View>: View {
                     .transition(.opacity.combined(with: .move(edge: .top)))
             }
         }
-        .padding(CinefuseTokens.Spacing.m)
+        .padding(contentPadding)
         .background(
             RoundedRectangle(cornerRadius: CinefuseTokens.Radius.large)
                 .fill(CinefuseTokens.ColorRole.surfacePrimary.opacity(0.92))

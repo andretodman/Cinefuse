@@ -68,6 +68,16 @@ See repo `.env.example` § ElevenLabs for **`ELEVENLABS_*`** and **`CINEFUSE_AUD
 2. **`CINEFUSE_AUDIO_UPLOAD_URL`** (or gateway internal upload + **`CINEFUSE_GATEWAY_PUBLIC_ORIGIN`**) so generated MP3 lands in Pubfuse Files — see `.env.example`.
 3. Run **`pnpm --filter @cinefuse/mcp-audio test`** after changing validators or compose logic.
 
+## Cinefuse Apple editor (preview / timeline)
+
+When debugging **audio preview** or **timeline playback chrome** in the Swift editor (`packages/cinefuse-apple-core`):
+
+- **Audio preview** decodes peaks from the **same local `file://` URL** the preview player uses (`WaveformPeakLoader` → linear PCM via `AVAssetReader`), draws **`AudioWaveformWithPlayhead`**, and shares transport state through **`EditorPlaybackState`** (`PlaybackTimelineScrubber`, scrub/seek).
+- **Video preview** uses the same **`PlaybackTimelineScrubber`** under the QuickTime-style surface so **current time / duration** track the file.
+- **Horizontal timeline cards** get widths **proportional to `Shot.durationSec`** (scaled to the viewport; scroll when the natural strip is wider). Active-clip playhead on a card uses **`activeShotId`** + player time when preview matches that shot.
+
+This is client-side only; ElevenLabs compose/upload behavior is unchanged.
+
 ## References
 
 - ElevenLabs: [Compose music API](https://elevenlabs.io/docs/api-reference/music/compose)

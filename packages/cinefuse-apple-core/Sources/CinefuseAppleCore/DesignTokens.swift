@@ -45,9 +45,10 @@ enum CinefuseTokens {
         static let settingsPanelWidth: CGFloat = 420
         /// Wider layout when the iPad build runs on macOS (“Designed for iPad”).
         static let settingsPanelWidthIOSMac: CGFloat = 560
-        static let timelineRulerHeight: CGFloat = 28
-        static let timelineNotchMinor: CGFloat = 8
-        static let timelineNotchMajor: CGFloat = 14
+        /// Thin strip under “Sound timeline” / “Timeline” headers (ticks + second labels).
+        static let timelineRulerHeight: CGFloat = 15
+        static let timelineNotchMinor: CGFloat = 4
+        static let timelineNotchMajor: CGFloat = 7
     }
 
     enum Motion {

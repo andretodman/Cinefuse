@@ -77,12 +77,12 @@ struct TimelineRulerView: View {
             let step = width / CGFloat(seconds)
             ZStack(alignment: .bottomLeading) {
                 Rectangle()
-                    .fill(palette.timelineRuler.opacity(0.14))
+                    .fill(palette.timelineRuler.opacity(0.12))
                 HStack(alignment: .bottom, spacing: 0) {
                     ForEach(0...seconds, id: \.self) { second in
-                        VStack(spacing: 2) {
+                        VStack(spacing: 0) {
                             Rectangle()
-                                .fill(palette.timelineRuler.opacity(second % 5 == 0 ? 0.9 : 0.55))
+                                .fill(palette.timelineRuler.opacity(second % 5 == 0 ? 0.85 : 0.45))
                                 .frame(
                                     width: 1,
                                     height: second % 5 == 0
@@ -91,8 +91,10 @@ struct TimelineRulerView: View {
                                 )
                             if second % 5 == 0 {
                                 Text("\(second)s")
-                                    .font(CinefuseTokens.Typography.micro)
-                                    .foregroundStyle(CinefuseTokens.ColorRole.textSecondary)
+                                    .font(CinefuseTokens.Typography.nano)
+                                    .foregroundStyle(CinefuseTokens.ColorRole.textSecondary.opacity(0.95))
+                                    .lineLimit(1)
+                                    .minimumScaleFactor(0.85)
                             } else {
                                 Spacer(minLength: 0)
                             }
@@ -101,7 +103,7 @@ struct TimelineRulerView: View {
                     }
                 }
                 .padding(.horizontal, CinefuseTokens.Spacing.xs)
-                .padding(.vertical, CinefuseTokens.Spacing.xxs)
+                .padding(.vertical, 2)
             }
             .clipShape(RoundedRectangle(cornerRadius: CinefuseTokens.Radius.small))
         }
@@ -636,9 +638,15 @@ struct ProjectWorkspaceScreen: View {
     @AppStorage("cinefuse.server.mode") private var apiServerModeRaw = APIServerMode.local.rawValue
     @AppStorage("cinefuse.server.customBaseURL") private var customServerBaseURL = ""
     @AppStorage("cinefuse.onboarding.completed") private var onboardingCompleted = false
+#if os(iOS)
+    /// Synced with ``ProjectDetailScreen`` — toolbar toggles on iPhone / compact iPad to collapse timeline or preview for more canvas space.
+    @AppStorage("cinefuse.editor.collapse.timeline") private var collapseTimelinePanelChrome = false
+    @AppStorage("cinefuse.editor.collapse.preview") private var collapsePreviewPanelChrome = false
+#endif
 
     private let inFlightStatuses: Set<String> = ["queued", "generating", "running", "processing"]
     private let generatedFilesStore = GeneratedFilesStore()
+    @StateObject private var editorPlaybackState = EditorPlaybackState()
     private var localServerBaseURL: String {
         ProcessInfo.processInfo.environment["CINEFUSE_API_BASE_URL"] ?? "http://localhost:4000"
     }
@@ -884,9 +892,11 @@ struct ProjectWorkspaceScreen: View {
             },
             onExportAudioMix: { Task { await exportLayeredAudioMix() } },
             onAddAudioTrack: { Task { await addEmptyAudioLane() } },
+            onEnsureVideoLaneSlot: { lane in await ensureVideoLaneSlot(laneIndex: lane) },
             onRefreshStatusDetails: { await refreshGenerationStatusSnapshot() },
             mobileEditorPresentedPanel: mobileEditorPresentedPanelBinding
         )
+        .environmentObject(editorPlaybackState)
     }
 
     /// Re-fetches timeline + jobs only (no scenes/characters/blueprints, no file sync, no full-page loading).
@@ -989,6 +999,30 @@ struct ProjectWorkspaceScreen: View {
                 title: "Track \(nextLane + 1)",
                 shotId: nil,
                 laneIndex: nextLane,
+                startMs: 0,
+                durationMs: 1000
+            )
+            await loadSelectedProjectDetails(showLoadingIndicator: false)
+        } catch {
+            model.errorMessage = error.localizedDescription
+        }
+    }
+
+    /// Creates an empty lane slot at fixed index 0 or 1 for video-mode layering UI (no-op if a track already uses that lane).
+    private func ensureVideoLaneSlot(laneIndex: Int) async {
+        guard let selectedProjectId else { return }
+        guard laneIndex == 0 || laneIndex == 1 else { return }
+        if audioTracks.contains(where: { $0.laneIndex == laneIndex }) {
+            return
+        }
+        do {
+            _ = try await api.createAudioTrack(
+                token: model.bearerToken,
+                projectId: selectedProjectId,
+                kind: "lane",
+                title: laneIndex == 0 ? "Primary layer" : "Secondary layer",
+                shotId: nil,
+                laneIndex: laneIndex,
                 startMs: 0,
                 durationMs: 1000
             )
@@ -1216,6 +1250,30 @@ struct ProjectWorkspaceScreen: View {
                 action: { rightPanelChromeAction() },
                 tooltipEnabled: editorSettings.showTooltips
             )
+
+            if workspaceEditorLayoutTraits.useSheetBasedSidePanels
+                || workspaceEditorLayoutTraits.useCompactWorkspaceChrome {
+                IconCommandButton(
+                    systemName: collapseTimelinePanelChrome ? "rectangle.expand.vertical" : "rectangle.compress.vertical",
+                    label: collapseTimelinePanelChrome ? "Expand timeline" : "Collapse timeline",
+                    action: {
+                        withAnimation(CinefuseTokens.Motion.panel) {
+                            collapseTimelinePanelChrome.toggle()
+                        }
+                    },
+                    tooltipEnabled: editorSettings.showTooltips
+                )
+                IconCommandButton(
+                    systemName: collapsePreviewPanelChrome ? "play.square.fill" : "play.square",
+                    label: collapsePreviewPanelChrome ? "Expand preview" : "Collapse preview",
+                    action: {
+                        withAnimation(CinefuseTokens.Motion.panel) {
+                            collapsePreviewPanelChrome.toggle()
+                        }
+                    },
+                    tooltipEnabled: editorSettings.showTooltips
+                )
+            }
 
             if !isAudioCreationWorkspace {
                 IconCommandButton(
@@ -3438,8 +3496,12 @@ struct ProjectDetailScreen: View {
     let onPlayBlueprintReferenceFile: (String) -> Void
     let onExportAudioMix: () -> Void
     let onAddAudioTrack: () -> Void
+    /// Video mode: create empty audio lane at index 0 or 1 for timeline layering.
+    let onEnsureVideoLaneSlot: (Int) async -> Void
     let onRefreshStatusDetails: () async -> Void
     @Binding var mobileEditorPresentedPanel: MobileEditorPresentedPanel?
+    @EnvironmentObject private var editorPlaybackState: EditorPlaybackState
+    @Environment(\.editorMobileInspectorSheet) private var editorMobileInspectorSheet
     @AppStorage("cinefuse.editor.leftPaneWidth") private var leftPaneWidth: Double = 460
     @AppStorage("cinefuse.editor.rightPaneWidth") private var rightPaneWidth: Double = 460
     @AppStorage("cinefuse.editor.bottomPaneHeight") private var bottomPaneHeight: Double = 240
@@ -3461,6 +3523,8 @@ struct ProjectDetailScreen: View {
     @AppStorage("cinefuse.editor.collapse.soundBlueprints") private var collapseSoundBlueprintsPanel = false
     /// Allocated height for the timeline strip when expanded (drag the handle under the timeline to resize).
     @AppStorage("cinefuse.editor.timelineStripHeight") private var timelineStripHeight: Double = 220
+    /// Caps the timeline column (strip + optional video audio layers) so it scrolls vertically instead of pushing the workspace away.
+    @AppStorage("cinefuse.editor.timeline.verticalScrollMaxHeight") private var timelineVerticalScrollMaxHeight: Double = 540
     @State private var selectedTimelineShotId: String?
     @State private var trackSyncModes: [Int: AudioTrackSyncMode] = [:]
     @State private var laneVolumeByIndex: [Int: Float] = [:]
@@ -3570,18 +3634,26 @@ struct ProjectDetailScreen: View {
         .padding(CinefuseTokens.Spacing.s)
     }
 
+    /// Single scroll surface for iPhone / iPad sheets — avoids nested `ScrollView`s and empty vertical gaps from unconstrained heights.
     @ViewBuilder
     private func mobileInspectorSheetContents(for panel: MobileEditorPresentedPanel) -> some View {
-        switch panel {
-        case .leftInspector:
-            leftPaneContent
-        case .rightInspector:
-            rightPaneContent
-        case .audioLanes:
-            audioLanesPanelCard
-        case .jobs:
-            jobsPanelCard
+        ScrollView {
+            Group {
+                switch panel {
+                case .leftInspector:
+                    leftPaneStack
+                case .rightInspector:
+                    rightPaneStack
+                case .audioLanes:
+                    audioLanesPanelCard
+                case .jobs:
+                    jobsPanelMobileSheet
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .topLeading)
         }
+        .scrollDismissesKeyboard(.interactively)
+        .environment(\.editorMobileInspectorSheet, true)
     }
 #endif
 
@@ -3827,6 +3899,7 @@ struct ProjectDetailScreen: View {
                     }
             }
             .presentationDragIndicator(.visible)
+            .presentationDetents([.large])
         }
 #endif
         .onAppear {
@@ -3896,6 +3969,7 @@ struct ProjectDetailScreen: View {
         .frame(minWidth: 760, minHeight: 440)
         .padding(CinefuseTokens.Spacing.s)
         .background(CinefuseTokens.ColorRole.canvas)
+        .environmentObject(editorPlaybackState)
     }
 
     private func presentPreviewPopoutWindow() {
@@ -4020,6 +4094,136 @@ struct ProjectDetailScreen: View {
         audioTracks.map { "\($0.id):\($0.laneIndex)" }.joined(separator: "|")
     }
 
+    /// Video mode: two fixed lanes (0, 1) under the picture timeline for layering audio over the edit.
+    @ViewBuilder
+    private var videoLayerAudioUnderTimeline: some View {
+        VStack(alignment: .leading, spacing: CinefuseTokens.Spacing.s) {
+            Text("Audio over video")
+                .font(CinefuseTokens.Typography.caption.weight(.semibold))
+                .foregroundStyle(CinefuseTokens.ColorRole.textSecondary)
+            ForEach(0..<2, id: \.self) { laneIndex in
+                videoTimelineOverlayLaneBlock(laneIndex: laneIndex)
+            }
+        }
+        .padding(.top, CinefuseTokens.Spacing.xs)
+    }
+
+    @ViewBuilder
+    private func videoTimelineOverlayLaneBlock(laneIndex: Int) -> some View {
+        let tracksInLane = audioTracks
+            .filter { $0.laneIndex == laneIndex }
+            .sorted { $0.startMs < $1.startMs }
+        let laneHasRow = audioTracks.contains(where: { $0.laneIndex == laneIndex })
+
+        VStack(alignment: .leading, spacing: CinefuseTokens.Spacing.xxs) {
+            HStack(spacing: CinefuseTokens.Spacing.s) {
+                Label("Lane \(laneIndex + 1)", systemImage: "waveform")
+                    .font(CinefuseTokens.Typography.micro.weight(.semibold))
+                    .foregroundStyle(CinefuseTokens.ColorRole.textPrimary)
+                Spacer(minLength: 0)
+                if !laneHasRow {
+                    Button("Add lane") {
+                        Task { await onEnsureVideoLaneSlot(laneIndex) }
+                    }
+                    .buttonStyle(SecondaryActionButtonStyle())
+                    .font(CinefuseTokens.Typography.micro)
+                    .tooltip("Create lane \(laneIndex + 1) for layering", enabled: showTooltips)
+                }
+            }
+
+            if tracksInLane.isEmpty {
+                Text(
+                    laneHasRow
+                        ? "No clips on this lane yet. Use **Audio Lanes** below or generate dialogue, score, or SFX."
+                        : "Tap Add lane, then attach or generate audio that plays over the video timeline."
+                )
+                .font(CinefuseTokens.Typography.nano)
+                .foregroundStyle(CinefuseTokens.ColorRole.textSecondary)
+                .fixedSize(horizontal: false, vertical: true)
+            } else {
+                ForEach(tracksInLane) { track in
+                    videoOverlayLaneTrackRow(track: track)
+                }
+            }
+        }
+        .padding(CinefuseTokens.Spacing.s)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: CinefuseTokens.Radius.medium)
+                .fill(timelineThemeMode.palette.timelineBase.opacity(0.42))
+                .overlay(
+                    RoundedRectangle(cornerRadius: CinefuseTokens.Radius.medium)
+                        .stroke(timelineThemeMode.palette.timelineBevelTop, lineWidth: 1)
+                )
+        )
+    }
+
+    private func lockedAudioStartMs(for track: AudioTrack) -> Int {
+        guard let shotId = track.shotId,
+              let boundary = timelineShotBoundaries.first(where: { $0.shotId == shotId })
+        else {
+            return track.startMs
+        }
+        return boundary.startMs
+    }
+
+    @ViewBuilder
+    private func videoOverlayLaneTrackRow(track: AudioTrack) -> some View {
+        let laneMode = trackSyncModes[track.laneIndex] ?? .locked
+        let computedStartMs = laneMode == .locked ? lockedAudioStartMs(for: track) : track.startMs
+        VStack(alignment: .leading, spacing: CinefuseTokens.Spacing.xxs) {
+            HStack(spacing: CinefuseTokens.Spacing.s) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("\(track.kind.capitalized): \(track.title)")
+                        .font(CinefuseTokens.Typography.micro)
+                        .foregroundStyle(CinefuseTokens.ColorRole.textPrimary)
+                    Text("Start \(computedStartMs)ms • \(track.durationMs)ms")
+                        .font(CinefuseTokens.Typography.nano)
+                        .foregroundStyle(CinefuseTokens.ColorRole.textSecondary)
+                }
+                Spacer(minLength: 0)
+                Picker(
+                    "Sync",
+                    selection: Binding(
+                        get: { trackSyncModes[track.laneIndex] ?? .locked },
+                        set: { trackSyncModes[track.laneIndex] = $0 }
+                    )
+                ) {
+                    ForEach(AudioTrackSyncMode.allCases) { mode in
+                        Text(mode.label).tag(mode)
+                    }
+                }
+                .pickerStyle(.menu)
+                .frame(minWidth: 72)
+            }
+            HStack(spacing: CinefuseTokens.Spacing.s) {
+                Text("Vol")
+                    .font(CinefuseTokens.Typography.nano)
+                    .foregroundStyle(CinefuseTokens.ColorRole.textSecondary)
+                Slider(
+                    value: Binding(
+                        get: { Double(laneVolumeByIndex[track.laneIndex] ?? 1) },
+                        set: { laneVolumeByIndex[track.laneIndex] = Float($0) }
+                    ),
+                    in: 0...1.5
+                )
+                .frame(minWidth: 80, idealWidth: 140)
+                if let sourceUrl = track.sourceUrl, let url = URL(string: sourceUrl) {
+                    Link("Open", destination: url)
+                        .font(CinefuseTokens.Typography.nano)
+                }
+                if track.status.lowercased() != "ready" {
+                    StatusBadge(status: track.status)
+                }
+            }
+        }
+        .padding(CinefuseTokens.Spacing.xs)
+        .background(
+            RoundedRectangle(cornerRadius: CinefuseTokens.Radius.small)
+                .fill(CinefuseTokens.ColorRole.surfaceSecondary.opacity(0.88))
+        )
+    }
+
     @ViewBuilder
     private var centerPreviewPanel: some View {
         if isAudioCreationMode {
@@ -4078,38 +4282,42 @@ struct ProjectDetailScreen: View {
         }
     }
 
+    private var leftPaneStack: some View {
+        VStack(alignment: .leading, spacing: CinefuseTokens.Spacing.s) {
+            if isAudioCreationMode {
+                SoundBlueprintsPanel(
+                    blueprints: $soundBlueprints,
+                    showTooltips: showTooltips,
+                    isCollapsed: $collapseSoundBlueprintsPanel,
+                    uploadProjectFiles: uploadProjectFiles,
+                    onCreate: onCreateSoundBlueprint,
+                    onPlayReferenceFile: onPlayBlueprintReferenceFile
+                )
+            } else {
+                StoryboardPanel(
+                    scenes: scenes,
+                    onGenerateStoryboard: onGenerateStoryboard,
+                    onReviseScene: onReviseScene,
+                    isCollapsed: $collapseStoryboardPanel
+                )
+                CharacterPanel(
+                    characters: characters,
+                    newCharacterName: $newCharacterName,
+                    newCharacterDescription: $newCharacterDescription,
+                    onCreateCharacter: onCreateCharacter,
+                    uploadProjectFiles: uploadProjectFiles,
+                    onTrainCharacter: onTrainCharacter,
+                    showTooltips: showTooltips,
+                    isCollapsed: $collapseCharacterPanel
+                )
+            }
+        }
+        .padding(CinefuseTokens.Spacing.s)
+    }
+
     private var leftPaneContent: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: CinefuseTokens.Spacing.s) {
-                if isAudioCreationMode {
-                    SoundBlueprintsPanel(
-                        blueprints: $soundBlueprints,
-                        showTooltips: showTooltips,
-                        isCollapsed: $collapseSoundBlueprintsPanel,
-                        uploadProjectFiles: uploadProjectFiles,
-                        onCreate: onCreateSoundBlueprint,
-                        onPlayReferenceFile: onPlayBlueprintReferenceFile
-                    )
-                } else {
-                    StoryboardPanel(
-                        scenes: scenes,
-                        onGenerateStoryboard: onGenerateStoryboard,
-                        onReviseScene: onReviseScene,
-                        isCollapsed: $collapseStoryboardPanel
-                    )
-                    CharacterPanel(
-                        characters: characters,
-                        newCharacterName: $newCharacterName,
-                        newCharacterDescription: $newCharacterDescription,
-                        onCreateCharacter: onCreateCharacter,
-                        uploadProjectFiles: uploadProjectFiles,
-                        onTrainCharacter: onTrainCharacter,
-                        showTooltips: showTooltips,
-                        isCollapsed: $collapseCharacterPanel
-                    )
-                }
-            }
-            .padding(CinefuseTokens.Spacing.s)
+            leftPaneStack
         }
         .frame(minWidth: 0, maxWidth: .infinity)
         .clipped()
@@ -4117,7 +4325,14 @@ struct ProjectDetailScreen: View {
 
     private var rightPaneContent: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: CinefuseTokens.Spacing.s) {
+            rightPaneStack
+        }
+        .frame(minWidth: 0, maxWidth: .infinity)
+        .clipped()
+    }
+
+    private var rightPaneStack: some View {
+        VStack(alignment: .leading, spacing: CinefuseTokens.Spacing.s) {
                 ShotsPanel(
                     shots: shotsForSoundsPanelIfNeeded,
                     jobs: jobs,
@@ -4300,13 +4515,10 @@ struct ProjectDetailScreen: View {
                     }
                     .padding(CinefuseTokens.Spacing.s)
                 }
-                }
-
             }
-            .padding(CinefuseTokens.Spacing.s)
+
         }
-        .frame(minWidth: 0, maxWidth: .infinity)
-        .clipped()
+        .padding(CinefuseTokens.Spacing.s)
     }
 
     private var audioLanesPanelCard: some View {
@@ -4364,17 +4576,31 @@ struct ProjectDetailScreen: View {
                 }
                 .buttonStyle(SecondaryActionButtonStyle())
                 .tooltip("Add an empty lane for manual placement", enabled: showTooltips)
-                ScrollView {
-                    AudioLaneView(
-                        audioTracks: audioTracks,
-                        shotBoundaries: timelineShotBoundaries,
-                        syncModes: $trackSyncModes,
-                        themePalette: timelineThemeMode.palette,
-                        laneVolumes: $laneVolumeByIndex,
-                        masterVolume: $masterMixGain
-                    )
+                Group {
+                    if editorMobileInspectorSheet {
+                        AudioLaneView(
+                            audioTracks: audioTracks,
+                            shotBoundaries: timelineShotBoundaries,
+                            syncModes: $trackSyncModes,
+                            themePalette: timelineThemeMode.palette,
+                            laneVolumes: $laneVolumeByIndex,
+                            masterVolume: $masterMixGain
+                        )
+                        .frame(minHeight: 200)
+                    } else {
+                        ScrollView {
+                            AudioLaneView(
+                                audioTracks: audioTracks,
+                                shotBoundaries: timelineShotBoundaries,
+                                syncModes: $trackSyncModes,
+                                themePalette: timelineThemeMode.palette,
+                                laneVolumes: $laneVolumeByIndex,
+                                masterVolume: $masterMixGain
+                            )
+                        }
+                        .frame(maxHeight: .infinity, alignment: .top)
+                    }
                 }
-                .frame(maxHeight: .infinity, alignment: .top)
             }
         }
     }
@@ -4393,6 +4619,25 @@ struct ProjectDetailScreen: View {
             onDeleteJob: onDeleteJob,
             showTooltips: showTooltips,
             isCollapsed: $collapseJobsPanel,
+            onRefreshStatusDetails: onRefreshStatusDetails
+        )
+    }
+
+    /// Jobs sheet uses `editorMobileInspectorSheet` so the outer sheet `ScrollView` owns vertical scrolling (no collapsed header / infinite blank gap).
+    private var jobsPanelMobileSheet: some View {
+        JobsPanel(
+            jobs: jobs,
+            shots: shots,
+            localFileRecordsByRemoteURL: localFileRecordsByRemoteURL,
+            localThumbnailURLByShotId: localThumbnailURLByShotId,
+            localThumbnailURLByJobId: localThumbnailURLByJobId,
+            jobRequestStateById: jobRequestStateById,
+            jobKindDraft: $jobKindDraft,
+            onCreateJob: onCreateJob,
+            onRetryJob: onRetryJob,
+            onDeleteJob: onDeleteJob,
+            showTooltips: showTooltips,
+            isCollapsed: .constant(false),
             onRefreshStatusDetails: onRefreshStatusDetails
         )
     }
@@ -4657,6 +4902,8 @@ struct HorizontalTimelineTrack: View {
     let themePalette: CinefuseTokens.ThemePalette
     @Binding var isCollapsed: Bool
     var clipVisualStyle: TimelineClipVisualStyle = .videoThumbnail
+    @AppStorage("cinefuse.editor.timeline.clipDensity") private var clipDensityRaw = TimelineClipDensity.large.rawValue
+    @EnvironmentObject private var editorPlaybackState: EditorPlaybackState
     @State private var orderedShots: [Shot] = []
     @State private var draggingShotId: String?
     @State private var dragSourceIndex: Int?
@@ -4664,10 +4911,52 @@ struct HorizontalTimelineTrack: View {
     @State private var hiddenShotIds: Set<String> = []
     @State private var trimByShotId: [String: ClosedRange<Double>] = [:]
 
+    private var clipDensity: TimelineClipDensity {
+        TimelineClipDensity(rawValue: clipDensityRaw) ?? .large
+    }
+
+    /// Vertical space for the scrolling strip of clip cards (cards + padding inside the inner timeline tray).
+    private var timelineCardsStripHeight: CGFloat {
+        switch clipDensity {
+        case .thin:
+            return clipVisualStyle == .audioWaveform ? 54 : 62
+        case .medium:
+            return clipVisualStyle == .audioWaveform ? 92 : 118
+        case .large:
+            return clipVisualStyle == .audioWaveform ? 118 : 136
+        }
+    }
+
+    private var timelineDensityToolbar: some View {
+        HStack(spacing: CinefuseTokens.Spacing.xxs) {
+            ForEach(TimelineClipDensity.allCases) { density in
+                Button {
+                    clipDensityRaw = density.rawValue
+                } label: {
+                    Image(systemName: density.toolbarSymbolName)
+                        .font(.system(size: CinefuseTokens.Control.iconSymbolSize * 0.88, weight: clipDensity == density ? .bold : .regular))
+                        .foregroundStyle(
+                            clipDensity == density
+                                ? CinefuseTokens.ColorRole.accent
+                                : CinefuseTokens.ColorRole.textSecondary.opacity(0.92)
+                        )
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(Text(density.accessibilityLabel))
+            }
+        }
+    }
+
     var body: some View {
         SectionCard(
             title: clipVisualStyle == .audioWaveform ? "Sound timeline" : "Timeline",
-            isCollapsed: $isCollapsed
+            isCollapsed: $isCollapsed,
+            titleFont: clipVisualStyle == .audioWaveform
+                ? CinefuseTokens.Typography.caption.weight(.semibold)
+                : CinefuseTokens.Typography.sectionTitle,
+            stackSpacing: clipVisualStyle == .audioWaveform ? CinefuseTokens.Spacing.xxs : CinefuseTokens.Spacing.s,
+            contentPadding: clipVisualStyle == .audioWaveform ? CinefuseTokens.Spacing.s : CinefuseTokens.Spacing.m,
+            headerAccessory: AnyView(timelineDensityToolbar)
         ) {
             if visibleShots.isEmpty {
                 VStack(alignment: .leading, spacing: CinefuseTokens.Spacing.s) {
@@ -4682,49 +4971,61 @@ struct HorizontalTimelineTrack: View {
                     }
                 }
             } else {
-                VStack(alignment: .leading, spacing: CinefuseTokens.Spacing.xs) {
+                VStack(alignment: .leading, spacing: clipVisualStyle == .audioWaveform ? CinefuseTokens.Spacing.xxs : CinefuseTokens.Spacing.xs) {
                     TimelineRulerView(
                         shots: visibleShots,
                         trimByShotId: trimByShotId,
                         palette: themePalette
                     )
-                    ScrollView(.horizontal, showsIndicators: true) {
-                        HStack(spacing: CinefuseTokens.Spacing.s) {
-                            ForEach(Array(visibleShots.enumerated()), id: \.element.id) { index, shot in
-                                TimelineClipCard(
-                                    shot: shot,
-                                    localThumbnailURL: localThumbnailURLByShotId[shot.id],
-                                    clipStatusPresentation: clipArtifactStatus(for: shot),
-                                    index: index,
-                                    backendProgressPercent: latestBackendProgressPercent(for: shot.id),
-                                    trimRange: trimByShotId[shot.id],
-                                    isSelected: selectedShotId == shot.id,
-                                    canMoveLeft: index > 0,
-                                    canMoveRight: index < (visibleShots.count - 1),
-                                    onSelect: { selectedShotId = shot.id },
-                                    onPreview: { onPreviewShot(shot.id) },
-                                    onMoveLeft: {
-                                        commitMove(from: index, to: index - 1)
-                                        selectedShotId = shot.id
-                                    },
-                                    onMoveRight: {
-                                        commitMove(from: index, to: index + 1)
-                                        selectedShotId = shot.id
-                                    },
-                                    onDuplicate: { duplicateShot(shot.id) },
-                                    onDelete: { deleteShot(shot.id) },
-                                    onToggleHidden: { toggleHidden(shot.id) },
-                                    onTrimLeading: { adjustTrimLeading(for: shot.id, amount: 1) },
-                                    onTrimTrailing: { adjustTrimTrailing(for: shot.id, amount: 1) },
-                                    showTooltips: showTooltips,
-                                    isDragging: draggingShotId == shot.id,
-                                    onDragStarted: {
-                                        draggingShotId = shot.id
-                                        dragSourceIndex = index
-                                    },
-                                    clipVisualStyle: clipVisualStyle
-                                )
-                                .onDrop(
+                    GeometryReader { geo in
+                        let spacing = clipVisualStyle == .audioWaveform ? CinefuseTokens.Spacing.xs : CinefuseTokens.Spacing.s
+                        let widths = proportionalCardWidths(
+                            for: visibleShots,
+                            viewportWidth: geo.size.width,
+                            spacing: spacing,
+                            clipDensity: clipDensity
+                        )
+                        let contentWidth = widths.reduce(0, +) + spacing * CGFloat(max(0, visibleShots.count - 1))
+                        ScrollView(.horizontal, showsIndicators: true) {
+                            HStack(spacing: spacing) {
+                                ForEach(Array(visibleShots.enumerated()), id: \.element.id) { index, shot in
+                                    TimelineClipCard(
+                                        shot: shot,
+                                        localThumbnailURL: localThumbnailURLByShotId[shot.id],
+                                        clipStatusPresentation: clipArtifactStatus(for: shot),
+                                        index: index,
+                                        backendProgressPercent: latestBackendProgressPercent(for: shot.id),
+                                        trimRange: trimByShotId[shot.id],
+                                        isSelected: selectedShotId == shot.id,
+                                        canMoveLeft: index > 0,
+                                        canMoveRight: index < (visibleShots.count - 1),
+                                        onSelect: { selectedShotId = shot.id },
+                                        onPreview: { onPreviewShot(shot.id) },
+                                        onMoveLeft: {
+                                            commitMove(from: index, to: index - 1)
+                                            selectedShotId = shot.id
+                                        },
+                                        onMoveRight: {
+                                            commitMove(from: index, to: index + 1)
+                                            selectedShotId = shot.id
+                                        },
+                                        onDuplicate: { duplicateShot(shot.id) },
+                                        onDelete: { deleteShot(shot.id) },
+                                        onToggleHidden: { toggleHidden(shot.id) },
+                                        onTrimLeading: { adjustTrimLeading(for: shot.id, amount: 1) },
+                                        onTrimTrailing: { adjustTrimTrailing(for: shot.id, amount: 1) },
+                                        showTooltips: showTooltips,
+                                        isDragging: draggingShotId == shot.id,
+                                        onDragStarted: {
+                                            draggingShotId = shot.id
+                                            dragSourceIndex = index
+                                        },
+                                        clipVisualStyle: clipVisualStyle,
+                                        clipDensity: clipDensity,
+                                        cardWidth: widths.indices.contains(index) ? widths[index] : nil,
+                                        playbackProgressFraction: playbackFraction(for: shot)
+                                    )
+                                    .onDrop(
                                     of: [UTType.text],
                                     delegate: TimelineClipDropDelegate(
                                         destinationShot: shot,
@@ -4737,15 +5038,17 @@ struct HorizontalTimelineTrack: View {
                                     )
                                 )
                             }
+                            }
+                            .frame(width: max(geo.size.width, contentWidth))
+                            .padding(.vertical, clipVisualStyle == .audioWaveform ? 2 : CinefuseTokens.Spacing.xxs)
                         }
-                        .padding(.vertical, CinefuseTokens.Spacing.xxs)
                     }
-                    .frame(height: 136)
+                    .frame(height: timelineCardsStripHeight)
                     if !hiddenShots.isEmpty {
                         hiddenShotsControls
                     }
                 }
-                .padding(CinefuseTokens.Spacing.s)
+                .padding(clipVisualStyle == .audioWaveform ? CinefuseTokens.Spacing.xs : CinefuseTokens.Spacing.s)
                 .background(
                     RoundedRectangle(cornerRadius: CinefuseTokens.Radius.medium)
                         .fill(themePalette.timelineBase)
@@ -4964,6 +5267,60 @@ struct HorizontalTimelineTrack: View {
         )
     }
 
+    private func playbackFraction(for shot: Shot) -> Double? {
+        guard editorPlaybackState.activeShotId == shot.id,
+              editorPlaybackState.durationSeconds > 0
+        else {
+            return nil
+        }
+        let p = editorPlaybackState.currentTimeSeconds / editorPlaybackState.durationSeconds
+        guard p.isFinite else { return nil }
+        return min(1, max(0, p))
+    }
+
+    private func proportionalCardWidths(
+        for shots: [Shot],
+        viewportWidth: CGFloat,
+        spacing: CGFloat,
+        clipDensity: TimelineClipDensity
+    ) -> [CGFloat] {
+        let fallback = CinefuseTokens.Control.timelineCardWidth
+        guard !shots.isEmpty else { return [] }
+        let minW: CGFloat = {
+            let audioMin: CGFloat = switch clipDensity {
+            case .thin: 108
+            case .medium: 80
+            case .large: 72
+            }
+            let videoMin: CGFloat = switch clipDensity {
+            case .thin: 132
+            case .medium: 104
+            case .large: 96
+            }
+            return clipVisualStyle == .audioWaveform ? audioMin : videoMin
+        }()
+        let maxW: CGFloat = clipVisualStyle == .audioWaveform ? 440 : 560
+        let durations = shots.map { Double(max($0.durationSec ?? 5, 1)) }
+        let totalDur = durations.reduce(0, +)
+        guard totalDur > 0 else {
+            return shots.map { _ in fallback }
+        }
+        let pixelsPerSecond: CGFloat = 12
+        let spacingTotal = spacing * CGFloat(max(0, shots.count - 1))
+        var widths = durations.map { dur -> CGFloat in
+            max(minW, min(maxW, CGFloat(dur) * pixelsPerSecond))
+        }
+        let natural = widths.reduce(0, +) + spacingTotal
+        let target = max(viewportWidth, natural)
+        let inner = max(0, target - spacingTotal)
+        let sumW = widths.reduce(0, +)
+        if sumW > 0, inner > 0 {
+            let scale = inner / sumW
+            widths = widths.map { $0 * scale }
+        }
+        return widths
+    }
+
 }
 
 struct TimelineClipCard: View {
@@ -4990,6 +5347,12 @@ struct TimelineClipCard: View {
     let isDragging: Bool
     let onDragStarted: () -> Void
     var clipVisualStyle: TimelineClipVisualStyle = .videoThumbnail
+    /// Row height / chrome density for this clip (timeline toolbar).
+    var clipDensity: TimelineClipDensity = .large
+    /// When set, horizontal size follows timeline duration scaling (see `HorizontalTimelineTrack`).
+    var cardWidth: CGFloat?
+    /// Playhead position within this clip when it matches active preview (`0...1`).
+    var playbackProgressFraction: Double?
 
     private var previewFrameURL: URL? {
         if let localThumbnailURL {
@@ -5008,105 +5371,66 @@ struct TimelineClipCard: View {
         isSelected ? CinefuseTokens.ColorRole.surfacePrimary : CinefuseTokens.ColorRole.surfaceSecondary
     }
 
-    var body: some View {
-        VStack(alignment: .leading, spacing: CinefuseTokens.Spacing.xxs) {
-            HStack {
-                GenerationStatusDot(status: clipStatusPresentation)
-                Text("#\(index + 1)")
-                    .font(CinefuseTokens.Typography.caption.weight(.semibold))
-                Spacer()
-                if shot.status.lowercased() != "ready" {
-                    StatusBadge(status: shot.status)
-                }
-            }
+    private var isAudioTimelineCard: Bool {
+        clipVisualStyle == .audioWaveform
+    }
 
-            Text(shot.prompt.isEmpty ? "Untitled clip" : shot.prompt)
-                .font(CinefuseTokens.Typography.label)
-                .lineLimit(2)
-                .textSelection(.enabled)
-                .contextMenu {
-                    Button("Copy prompt") {
-                        copyTextToClipboard(shot.prompt.isEmpty ? "Untitled clip" : shot.prompt)
-                    }
-                }
-
-            Group {
-                Text("\(shot.modelTier.capitalized) · \(shot.durationSec ?? 0)s")
-                    .font(CinefuseTokens.Typography.caption)
-                    .foregroundStyle(CinefuseTokens.ColorRole.textSecondary)
-                if ["queued", "generating", "running", "processing"].contains(shot.status) {
-                    if let p = backendProgressPercent {
-                        HStack(spacing: CinefuseTokens.Spacing.xxs) {
-                            ProgressView(value: Double(p), total: 100)
-                                .controlSize(.mini)
-                                .tint(CinefuseTokens.ColorRole.accent)
-                                .animation(.easeInOut(duration: 0.28), value: p)
-                            Text("\(p)%")
-                                .font(CinefuseTokens.Typography.nano)
-                                .foregroundStyle(CinefuseTokens.ColorRole.textSecondary)
-                        }
-                    } else {
-                        HStack(spacing: CinefuseTokens.Spacing.xxs) {
-                            AnimatedIndeterminateProgressBar(height: 4)
-                                .frame(maxWidth: .infinity)
-                            Text(clipVisualStyle == .audioWaveform ? "Generating…" : "Rendering…")
-                                .font(CinefuseTokens.Typography.nano)
-                                .foregroundStyle(CinefuseTokens.ColorRole.textSecondary)
-                        }
-                    }
-                }
-                if let trimRange {
-                    Text("Trim \(trimRange.lowerBound.formatted(.number.precision(.fractionLength(0))))s-\(trimRange.upperBound.formatted(.number.precision(.fractionLength(0))))s")
-                        .font(CinefuseTokens.Typography.micro)
-                        .foregroundStyle(CinefuseTokens.ColorRole.textSecondary)
-                }
-                HStack(spacing: CinefuseTokens.Spacing.xxs) {
-                    IconCommandButton(
-                        systemName: "arrow.left",
-                        label: "Move clip left",
-                        action: onMoveLeft,
-                        tooltipEnabled: showTooltips
-                    )
-                    .disabled(!canMoveLeft)
-
-                    IconCommandButton(
-                        systemName: "arrow.right",
-                        label: "Move clip right",
-                        action: onMoveRight,
-                        tooltipEnabled: showTooltips
-                    )
-                    .disabled(!canMoveRight)
-                }
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
+    private var resolvedCardWidth: CGFloat {
+        if let cardWidth {
+            return cardWidth
         }
-        .padding(CinefuseTokens.Spacing.s)
-        .frame(
-            width: CinefuseTokens.Control.timelineCardWidth,
-            height: CinefuseTokens.Control.timelineCardHeight,
-            alignment: .topLeading
-        )
-        .background(
+        return isAudioTimelineCard ? min(CinefuseTokens.Control.timelineCardWidth, 208) : CinefuseTokens.Control.timelineCardWidth
+    }
+
+    private var resolvedCardHeight: CGFloat {
+        switch clipDensity {
+        case .thin:
+            return isAudioTimelineCard ? 44 : 52
+        case .medium:
+            return isAudioTimelineCard ? 78 : CinefuseTokens.Control.timelineCardHeight
+        case .large:
+            return isAudioTimelineCard ? 102 : CinefuseTokens.Control.timelineCardHeight
+        }
+    }
+
+    private var contentHorizontalPadding: CGFloat {
+        switch clipDensity {
+        case .thin: return CinefuseTokens.Spacing.xxs + 1
+        case .medium: return CinefuseTokens.Spacing.xs
+        case .large: return isAudioTimelineCard ? CinefuseTokens.Spacing.xs : CinefuseTokens.Spacing.s
+        }
+    }
+
+    private var promptFont: Font {
+        switch clipDensity {
+        case .thin: return CinefuseTokens.Typography.micro
+        case .medium: return isAudioTimelineCard ? CinefuseTokens.Typography.micro : CinefuseTokens.Typography.label
+        case .large: return isAudioTimelineCard ? CinefuseTokens.Typography.micro : CinefuseTokens.Typography.label
+        }
+    }
+
+    /// Compact strip: waveform/thumbnail at fixed width + single-line prompt (thin density).
+    @ViewBuilder
+    private var thinTimelineStripBody: some View {
+        let mediaH: CGFloat = isAudioTimelineCard ? 34 : 38
+        let mediaW: CGFloat = isAudioTimelineCard ? 36 : 42
+        HStack(alignment: .center, spacing: CinefuseTokens.Spacing.xs) {
             ZStack {
-                RoundedRectangle(cornerRadius: CinefuseTokens.Radius.medium)
-                    .fill(cardFillColor)
+                RoundedRectangle(cornerRadius: CinefuseTokens.Radius.small)
+                    .fill(CinefuseTokens.ColorRole.surfaceSecondary)
                 if clipVisualStyle == .audioWaveform {
-                    RoundedRectangle(cornerRadius: CinefuseTokens.Radius.medium)
-                        .fill(
-                            LinearGradient(
-                                colors: [
-                                    CinefuseTokens.ColorRole.accent.opacity(0.35),
-                                    CinefuseTokens.ColorRole.surfaceSecondary
-                                ],
-                                startPoint: .topLeading,
-                                endPoint: .bottomTrailing
-                            )
-                        )
-                        .overlay(
-                            Image(systemName: "waveform")
-                                .font(.system(size: 44, weight: .light))
-                                .foregroundStyle(CinefuseTokens.ColorRole.textSecondary.opacity(0.55))
-                        )
+                    LinearGradient(
+                        colors: [
+                            CinefuseTokens.ColorRole.accent.opacity(0.4),
+                            CinefuseTokens.ColorRole.surfaceSecondary
+                        ],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                    .clipShape(RoundedRectangle(cornerRadius: CinefuseTokens.Radius.small))
+                    Image(systemName: "waveform")
+                        .font(.system(size: 16, weight: .medium))
+                        .foregroundStyle(CinefuseTokens.ColorRole.textSecondary.opacity(0.65))
                 } else if let previewFrameURL {
                     AsyncImage(url: previewFrameURL) { phase in
                         switch phase {
@@ -5116,24 +5440,87 @@ struct TimelineClipCard: View {
                                 .scaledToFill()
                                 .overlay(
                                     LinearGradient(
-                                        colors: [.black.opacity(0.48), .black.opacity(0.82)],
+                                        colors: [.black.opacity(0.35), .black.opacity(0.65)],
                                         startPoint: .top,
                                         endPoint: .bottom
                                     )
                                 )
                         default:
-                            EmptyView()
+                            Color.clear
                         }
                     }
-                    .clipShape(RoundedRectangle(cornerRadius: CinefuseTokens.Radius.medium))
+                    .clipShape(RoundedRectangle(cornerRadius: CinefuseTokens.Radius.small))
                 }
-                RoundedRectangle(cornerRadius: CinefuseTokens.Radius.medium)
-                    .stroke(
-                        isSelected ? CinefuseTokens.ColorRole.accent : CinefuseTokens.ColorRole.borderSubtle,
-                        lineWidth: isSelected ? 2 : 1
-                    )
             }
+            .frame(width: mediaW, height: mediaH)
+            .clipped()
+
+            VStack(alignment: .leading, spacing: 1) {
+                HStack(spacing: 4) {
+                    Text("#\(index + 1)")
+                        .font(CinefuseTokens.Typography.nano.weight(.semibold))
+                        .foregroundStyle(CinefuseTokens.ColorRole.textSecondary)
+                    if shot.status.lowercased() != "ready" {
+                        StatusBadge(status: shot.status)
+                            .scaleEffect(0.78)
+                    }
+                    Spacer(minLength: 0)
+                }
+                Text(shot.prompt.isEmpty ? "Untitled clip" : shot.prompt)
+                    .font(CinefuseTokens.Typography.micro)
+                    .lineLimit(1)
+                    .foregroundStyle(CinefuseTokens.ColorRole.textPrimary)
+                Text("\(shot.modelTier.capitalized) · \(shot.durationSec ?? 0)s")
+                    .font(CinefuseTokens.Typography.nano)
+                    .foregroundStyle(CinefuseTokens.ColorRole.textSecondary)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(.horizontal, contentHorizontalPadding)
+        .padding(.vertical, CinefuseTokens.Spacing.xxs)
+        .frame(width: resolvedCardWidth, height: resolvedCardHeight, alignment: .center)
+        .background(
+            RoundedRectangle(cornerRadius: CinefuseTokens.Radius.medium)
+                .fill(cardFillColor)
         )
+        .overlay(
+            RoundedRectangle(cornerRadius: CinefuseTokens.Radius.medium)
+                .stroke(
+                    isSelected ? CinefuseTokens.ColorRole.accent : CinefuseTokens.ColorRole.borderSubtle,
+                    lineWidth: isSelected ? 2 : 1
+                )
+        )
+        .overlay(timelinePlaybackProgressOverlay)
+    }
+
+    @ViewBuilder
+    private var timelinePlaybackProgressOverlay: some View {
+        if let playbackProgressFraction, playbackProgressFraction > 0 {
+            GeometryReader { geo in
+                VStack {
+                    Spacer(minLength: 0)
+                    ZStack(alignment: .leading) {
+                        Capsule()
+                            .fill(CinefuseTokens.ColorRole.borderSubtle.opacity(0.45))
+                            .frame(height: clipDensity == .thin ? 3 : 4)
+                        Capsule()
+                            .fill(CinefuseTokens.ColorRole.accent)
+                            .frame(width: max(3, geo.size.width * CGFloat(min(1, playbackProgressFraction))), height: clipDensity == .thin ? 3 : 4)
+                    }
+                }
+            }
+            .allowsHitTesting(false)
+        }
+    }
+
+    var body: some View {
+        Group {
+            if clipDensity == .thin {
+                thinTimelineStripBody
+            } else {
+                standardTimelineClipBody
+            }
+        }
         .contentShape(Rectangle())
         .onTapGesture(count: 2, perform: onPreview)
         .onTapGesture(count: 1, perform: onSelect)
@@ -5175,6 +5562,144 @@ struct TimelineClipCard: View {
                 Label("Delete", systemImage: "trash")
             }
         }
+    }
+
+    @ViewBuilder
+    private var standardTimelineClipBody: some View {
+        VStack(alignment: .leading, spacing: isAudioTimelineCard ? 2 : CinefuseTokens.Spacing.xxs) {
+            HStack(spacing: isAudioTimelineCard ? 4 : CinefuseTokens.Spacing.xs) {
+                GenerationStatusDot(status: clipStatusPresentation)
+                    .scaleEffect(isAudioTimelineCard ? 0.62 : 1)
+                Text("#\(index + 1)")
+                    .font(isAudioTimelineCard ? CinefuseTokens.Typography.micro.weight(.semibold) : CinefuseTokens.Typography.caption.weight(.semibold))
+                Spacer()
+                if shot.status.lowercased() != "ready" {
+                    StatusBadge(status: shot.status)
+                        .scaleEffect(isAudioTimelineCard ? 0.88 : 1)
+                }
+            }
+
+            Text(shot.prompt.isEmpty ? "Untitled clip" : shot.prompt)
+                .font(promptFont)
+                .lineLimit(2)
+                .textSelection(.enabled)
+                .contextMenu {
+                    Button("Copy prompt") {
+                        copyTextToClipboard(shot.prompt.isEmpty ? "Untitled clip" : shot.prompt)
+                    }
+                }
+
+            Group {
+                Text("\(shot.modelTier.capitalized) · \(shot.durationSec ?? 0)s")
+                    .font(clipDensity == .medium ? CinefuseTokens.Typography.nano : (isAudioTimelineCard ? CinefuseTokens.Typography.micro : CinefuseTokens.Typography.caption))
+                    .foregroundStyle(CinefuseTokens.ColorRole.textSecondary)
+                if ["queued", "generating", "running", "processing"].contains(shot.status) {
+                    if let p = backendProgressPercent {
+                        HStack(spacing: CinefuseTokens.Spacing.xxs) {
+                            ProgressView(value: Double(p), total: 100)
+                                .controlSize(.mini)
+                                .tint(CinefuseTokens.ColorRole.accent)
+                                .animation(.easeInOut(duration: 0.28), value: p)
+                            Text("\(p)%")
+                                .font(CinefuseTokens.Typography.nano)
+                                .foregroundStyle(CinefuseTokens.ColorRole.textSecondary)
+                        }
+                    } else {
+                        HStack(spacing: CinefuseTokens.Spacing.xxs) {
+                            AnimatedIndeterminateProgressBar(height: 4)
+                                .frame(maxWidth: .infinity)
+                            Text(clipVisualStyle == .audioWaveform ? "Generating…" : "Rendering…")
+                                .font(CinefuseTokens.Typography.nano)
+                                .foregroundStyle(CinefuseTokens.ColorRole.textSecondary)
+                        }
+                    }
+                }
+                if let trimRange {
+                    Text("Trim \(trimRange.lowerBound.formatted(.number.precision(.fractionLength(0))))s-\(trimRange.upperBound.formatted(.number.precision(.fractionLength(0))))s")
+                        .font(CinefuseTokens.Typography.micro)
+                        .foregroundStyle(CinefuseTokens.ColorRole.textSecondary)
+                }
+                HStack(spacing: CinefuseTokens.Spacing.xxs) {
+                    IconCommandButton(
+                        systemName: "arrow.left",
+                        label: "Move clip left",
+                        action: onMoveLeft,
+                        tooltipEnabled: showTooltips
+                    )
+                    .disabled(!canMoveLeft)
+                    .scaleEffect(clipDensity == .medium ? 0.88 : 1)
+
+                    IconCommandButton(
+                        systemName: "arrow.right",
+                        label: "Move clip right",
+                        action: onMoveRight,
+                        tooltipEnabled: showTooltips
+                    )
+                    .disabled(!canMoveRight)
+                    .scaleEffect(clipDensity == .medium ? 0.88 : 1)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(contentHorizontalPadding)
+        .frame(
+            width: resolvedCardWidth,
+            height: resolvedCardHeight,
+            alignment: .topLeading
+        )
+        .background(
+            ZStack {
+                RoundedRectangle(cornerRadius: CinefuseTokens.Radius.medium)
+                    .fill(cardFillColor)
+                if clipVisualStyle == .audioWaveform {
+                    RoundedRectangle(cornerRadius: CinefuseTokens.Radius.medium)
+                        .fill(
+                            LinearGradient(
+                                colors: [
+                                    CinefuseTokens.ColorRole.accent.opacity(0.35),
+                                    CinefuseTokens.ColorRole.surfaceSecondary
+                                ],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            )
+                        )
+                        .overlay(
+                            Image(systemName: "waveform")
+                                .font(.system(
+                                    size: clipDensity == .medium ? 22 : (isAudioTimelineCard ? 30 : 44),
+                                    weight: .light
+                                ))
+                                .foregroundStyle(CinefuseTokens.ColorRole.textSecondary.opacity(0.5))
+                        )
+                } else if let previewFrameURL {
+                    AsyncImage(url: previewFrameURL) { phase in
+                        switch phase {
+                        case .success(let image):
+                            image
+                                .resizable()
+                                .scaledToFill()
+                                .overlay(
+                                    LinearGradient(
+                                        colors: [.black.opacity(0.48), .black.opacity(0.82)],
+                                        startPoint: .top,
+                                        endPoint: .bottom
+                                    )
+                                )
+                        default:
+                            EmptyView()
+                        }
+                    }
+                    .clipShape(RoundedRectangle(cornerRadius: CinefuseTokens.Radius.medium))
+                }
+                RoundedRectangle(cornerRadius: CinefuseTokens.Radius.medium)
+                    .stroke(
+                        isSelected ? CinefuseTokens.ColorRole.accent : CinefuseTokens.ColorRole.borderSubtle,
+                        lineWidth: isSelected ? 2 : 1
+                    )
+
+                timelinePlaybackProgressOverlay
+            }
+        )
     }
 }
 
@@ -5218,6 +5743,7 @@ struct EditorPreviewPanel: View {
     @Binding var isCollapsed: Bool
     let isPoppedOut: Bool
     let onTogglePopout: () -> Void
+    @EnvironmentObject private var editorPlaybackState: EditorPlaybackState
     @State private var queuePlayer = AVQueuePlayer()
     @AppStorage("cinefuse.editor.preview.loopEnabled") private var loopPreviewEnabled = true
     @AppStorage("cinefuse.editor.preview.playbackRate") private var previewPlaybackRate = 1.0
@@ -5254,6 +5780,10 @@ struct EditorPreviewPanel: View {
                     InlinePreviewPlayerSurface(player: queuePlayer)
                         .frame(minHeight: 280)
                         .clipShape(RoundedRectangle(cornerRadius: CinefuseTokens.Radius.medium))
+
+                    PlaybackTimelineScrubber(playback: editorPlaybackState) { fraction in
+                        editorPlaybackState.seek(fraction: fraction)
+                    }
 
                     HStack(spacing: CinefuseTokens.Spacing.s) {
                         IconCommandButton(
@@ -5327,6 +5857,7 @@ struct EditorPreviewPanel: View {
             }
             configureLoopObserver()
             playSelectedOnly()
+            attachPlaybackState()
         }
         .onDisappear {
             removeLoopObserver()
@@ -5339,13 +5870,22 @@ struct EditorPreviewPanel: View {
         }
         .onChange(of: playbackRequestToken) { _, _ in
             playSelectedOnly()
+            attachPlaybackState()
         }
         .onChange(of: shots.map { "\($0.id):\($0.clipUrl ?? "")" }.joined(separator: "|")) { _, _ in
             if selectedShotId == nil {
                 selectedShotId = playableShots.first?.id
             }
             playSelectedOnly()
+            attachPlaybackState()
         }
+        .onChange(of: selectedShotId) { _, _ in
+            attachPlaybackState()
+        }
+    }
+
+    private func attachPlaybackState() {
+        editorPlaybackState.attach(player: queuePlayer, shotId: selectedShot?.id)
     }
 
     private func playSequence(fromSelected: Bool) {
@@ -5365,6 +5905,7 @@ struct EditorPreviewPanel: View {
             queuePlayer.insert(item, after: nil)
         }
         startPlayback()
+        attachPlaybackState()
     }
 
     private func playSelectedOnly() {
@@ -5377,6 +5918,7 @@ struct EditorPreviewPanel: View {
         queuePlayer.removeAllItems()
         queuePlayer.insert(AVPlayerItem(url: url), after: nil)
         startPlayback()
+        attachPlaybackState()
     }
 
     private func configureLoopObserver() {
@@ -5434,6 +5976,8 @@ struct EditorAudioPreviewPanel: View {
     @Binding var isCollapsed: Bool
     let isPoppedOut: Bool
     let onTogglePopout: () -> Void
+    @EnvironmentObject private var editorPlaybackState: EditorPlaybackState
+    @State private var waveformPeaks: [Float] = []
     @State private var queuePlayer = AVQueuePlayer()
     @AppStorage("cinefuse.editor.preview.loopEnabled") private var loopPreviewEnabled = true
     @AppStorage("cinefuse.editor.preview.playbackRate") private var previewPlaybackRate = 1.0
@@ -5502,20 +6046,9 @@ struct EditorAudioPreviewPanel: View {
         audioTracks.map { "\($0.id):\($0.sourceUrl ?? "")" }.joined(separator: "|")
     }
 
-    private var spectrumChrome: some View {
-        HStack(alignment: .bottom, spacing: 3) {
-            ForEach(0..<28, id: \.self) { index in
-                RoundedRectangle(cornerRadius: 2)
-                    .fill(CinefuseTokens.ColorRole.accent.opacity(0.22 + Double(index % 6) * 0.09))
-                    .frame(width: 5, height: CGFloat(18 + (index * 5) % 52))
-            }
-        }
-        .frame(maxWidth: .infinity, minHeight: 72)
-        .padding(.vertical, CinefuseTokens.Spacing.s)
-        .background(
-            RoundedRectangle(cornerRadius: CinefuseTokens.Radius.medium)
-                .fill(CinefuseTokens.ColorRole.surfaceSecondary.opacity(0.55))
-        )
+    private var waveformProgressFraction: Double {
+        guard editorPlaybackState.durationSeconds > 0 else { return 0 }
+        return min(1, max(0, editorPlaybackState.currentTimeSeconds / editorPlaybackState.durationSeconds))
     }
 
     var body: some View {
@@ -5524,7 +6057,6 @@ struct EditorAudioPreviewPanel: View {
             isCollapsed: $isCollapsed
         ) {
             VStack(alignment: .leading, spacing: CinefuseTokens.Spacing.s) {
-                spectrumChrome
                 Group {
                     if primaryPreviewURL == nil {
                         EmptyStateCard(
@@ -5533,9 +6065,33 @@ struct EditorAudioPreviewPanel: View {
                         )
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
                     } else {
-                        InlinePreviewPlayerSurface(player: queuePlayer)
-                            .frame(minHeight: 140, maxHeight: .infinity)
-                            .clipShape(RoundedRectangle(cornerRadius: CinefuseTokens.Radius.medium))
+                        VStack(alignment: .leading, spacing: CinefuseTokens.Spacing.xs) {
+                            ZStack {
+                                RoundedRectangle(cornerRadius: CinefuseTokens.Radius.medium)
+                                    .fill(CinefuseTokens.ColorRole.surfaceSecondary.opacity(0.55))
+                                if waveformPeaks.isEmpty {
+                                    ProgressView()
+                                        .frame(maxWidth: .infinity)
+                                        .padding(.vertical, 48)
+                                } else {
+                                    AudioWaveformWithPlayhead(
+                                        peaks: waveformPeaks,
+                                        progressFraction: waveformProgressFraction,
+                                        onSeekFraction: { editorPlaybackState.seek(fraction: $0) }
+                                    )
+                                    .padding(.horizontal, CinefuseTokens.Spacing.s)
+                                    .padding(.vertical, CinefuseTokens.Spacing.s)
+                                }
+                            }
+                            .frame(minHeight: 112)
+                            PlaybackTimelineScrubber(playback: editorPlaybackState) { fraction in
+                                editorPlaybackState.seek(fraction: fraction)
+                            }
+                            InlinePreviewPlayerSurface(player: queuePlayer)
+                                .frame(height: 2)
+                                .opacity(0.02)
+                                .allowsHitTesting(false)
+                        }
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
@@ -5602,6 +6158,8 @@ struct EditorAudioPreviewPanel: View {
             ensureLoopDefaultEnabled()
             configureLoopObserver()
             playSelectedOnly()
+            attachPlaybackState()
+            Task { await reloadWaveformPeaks() }
         }
         .onDisappear {
             removeLoopObserver()
@@ -5616,12 +6174,37 @@ struct EditorAudioPreviewPanel: View {
         }
         .onChange(of: playbackRequestToken) { _, _ in
             playSelectedOnly()
+            attachPlaybackState()
         }
         .onChange(of: shotsClipSignature) { _, _ in
             playSelectedOnly()
+            attachPlaybackState()
+            Task { await reloadWaveformPeaks() }
         }
         .onChange(of: tracksSourceSignature) { _, _ in
             playSelectedOnly()
+            attachPlaybackState()
+            Task { await reloadWaveformPeaks() }
+        }
+        .onChange(of: selectedShotId) { _, _ in
+            playSelectedOnly()
+            attachPlaybackState()
+            Task { await reloadWaveformPeaks() }
+        }
+    }
+
+    private func attachPlaybackState() {
+        editorPlaybackState.attach(player: queuePlayer, shotId: selectedShotId)
+    }
+
+    private func reloadWaveformPeaks() async {
+        guard let url = primaryPreviewURL else {
+            await MainActor.run { waveformPeaks = [] }
+            return
+        }
+        let peaks = (try? await WaveformPeakLoader.loadPeaks(from: url)) ?? []
+        await MainActor.run {
+            waveformPeaks = peaks
         }
     }
 
@@ -5634,6 +6217,7 @@ struct EditorAudioPreviewPanel: View {
         }
         queuePlayer.play()
         queuePlayer.rate = Float(previewPlaybackRate)
+        attachPlaybackState()
     }
 
     private func playSelectedOnly() {
@@ -5643,6 +6227,7 @@ struct EditorAudioPreviewPanel: View {
         queuePlayer.insert(AVPlayerItem(url: url), after: nil)
         queuePlayer.play()
         queuePlayer.rate = Float(previewPlaybackRate)
+        attachPlaybackState()
     }
 
     private func configureLoopObserver() {
@@ -7365,6 +7950,7 @@ struct JobsPanel: View {
     let showTooltips: Bool
     @Binding var isCollapsed: Bool
     let onRefreshStatusDetails: () async -> Void
+    @Environment(\.editorMobileInspectorSheet) private var editorMobileInspectorSheet
     @AppStorage("cinefuse.editor.jobs.showCompleted") private var showCompletedJobs = false
     @State private var pendingDeleteJobId: String?
     @State private var selectedDiagnostics: ArtifactStatusPresentation?
@@ -7568,7 +8154,11 @@ struct JobsPanel: View {
                         }
                         .animation(CinefuseTokens.Motion.standard, value: visibleJobs.map(\.id))
                     }
-                    .frame(maxHeight: .infinity, alignment: .top)
+                    .scrollDisabled(editorMobileInspectorSheet)
+                    .frame(
+                        maxHeight: editorMobileInspectorSheet ? nil : .infinity,
+                        alignment: .top
+                    )
                 }
             }
         }
