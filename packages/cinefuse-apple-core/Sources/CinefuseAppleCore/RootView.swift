@@ -7888,6 +7888,98 @@ private func copyTextToClipboard(_ value: String) {
 #endif
 }
 
+#if canImport(AVFoundation)
+private func fileHeaderHexPrefix(path: String, maxBytes: Int) -> String? {
+    guard let fh = FileHandle(forReadingAtPath: path) else { return nil }
+    defer { try? fh.close() }
+    guard let data = try? fh.read(upToCount: maxBytes), !data.isEmpty else { return nil }
+    return data.map { String(format: "%02X", $0) }.joined(separator: " ")
+}
+
+private func mediaPlayableDurationSecondsIfAvailable(fileURL: URL) -> Double? {
+    guard let player = try? AVAudioPlayer(contentsOf: fileURL) else { return nil }
+    let d = player.duration
+    return d > 0.05 ? d : nil
+}
+
+/// Lines for status sheets / copy diagnostics when debugging playback (extension vs bytes, duration, magic header).
+private func playbackMediaFileDiagnosticLines(
+    remoteURLString: String?,
+    localPath: String?,
+    artifactKind: String
+) -> [String] {
+    var lines: [String] = ["--- Artifact file (\(artifactKind)) ---"]
+    if let raw = remoteURLString?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty {
+        if let u = URL(string: raw) {
+            let ext = u.pathExtension.lowercased()
+            lines.append("Remote path extension: \(ext.isEmpty ? "(none — API path may omit extension)" : ext)")
+            lines.append("Remote last path component: \(u.lastPathComponent)")
+            if !ext.isEmpty, let ut = UTType(filenameExtension: ext) {
+                lines.append("Remote UTType (from path extension): \(ut.identifier)")
+            }
+        } else {
+            lines.append("Remote URL: not parseable as URL")
+        }
+    }
+    guard let lp = localPath?.trimmingCharacters(in: .whitespacesAndNewlines), !lp.isEmpty else {
+        lines.append("Local file: not on disk yet (sync pending or failed)")
+        return lines
+    }
+    var isDir: ObjCBool = false
+    guard FileManager.default.fileExists(atPath: lp, isDirectory: &isDir), !isDir.boolValue else {
+        lines.append("Local path: missing or not a file")
+        return lines
+    }
+    let fileURL = URL(fileURLWithPath: lp)
+    let localExt = fileURL.pathExtension.lowercased()
+    lines.append("Local file name: \(fileURL.lastPathComponent)")
+    lines.append("Local extension: \(localExt.isEmpty ? "(none)" : localExt)")
+    if !localExt.isEmpty {
+        if let ut = UTType(filenameExtension: localExt) {
+            lines.append("Local UTType (from extension): \(ut.identifier)")
+        }
+    }
+    if let attrs = try? FileManager.default.attributesOfItem(atPath: lp) {
+        if let size = attrs[.size] as? Int64 {
+            let formatted = ByteCountFormatter.string(fromByteCount: size, countStyle: .file)
+            lines.append("Local size: \(formatted) (\(size) bytes)")
+        }
+        if let mod = attrs[.modificationDate] as? Date {
+            lines.append("Local modified: \(mod.formatted(date: .abbreviated, time: .shortened))")
+        }
+    }
+    if let hex = fileHeaderHexPrefix(path: lp, maxBytes: 12) {
+        lines.append("Local header (hex, first bytes): \(hex)")
+        if hex.hasPrefix("49 44 33") {
+            lines.append("Header hint: ID3 — typical of MP3")
+        }
+        if hex.count >= 8 {
+            let parts = hex.split(separator: " ")
+            if parts.count >= 2, parts[0] == "FF", parts[1].hasPrefix("F") || parts[1].hasPrefix("E") || parts[1].hasPrefix("FB") {
+                lines.append("Header hint: MPEG audio sync — likely MP3 frame")
+            }
+        }
+        if hex.contains("66 74 79 70") {
+            lines.append("Header hint: ftyp — ISO base media (often MP4/M4A); audio-only MP4 is common")
+        }
+    }
+    if let dur = mediaPlayableDurationSecondsIfAvailable(fileURL: fileURL) {
+        lines.append(String(format: "Playable duration (AVFoundation): %.2f s", dur))
+    } else {
+        lines.append("Playable duration: unavailable (wrong extension vs bytes, corrupt file, or unsupported format)")
+    }
+    return lines
+}
+#else
+private func playbackMediaFileDiagnosticLines(
+    remoteURLString: String?,
+    localPath: String?,
+    artifactKind: String
+) -> [String] {
+    ["--- Artifact file (\(artifactKind)) ---", "Build without AVFoundation — file details omitted"]
+}
+#endif
+
 private func artifactStatusPresentation(
     job: Job,
     localRecord: LocalFileRecord?,
@@ -7919,7 +8011,11 @@ private func artifactStatusPresentation(
             "Output file created: \(job.outputCreated == true ? "yes" : (job.outputCreated == false ? "no" : "unknown"))",
             "Remote URL: \(displayValue(remoteURLForDetails, missing: "not produced"))",
             "Local file: \(displayValue(localRecord?.localPath, missing: "not applicable"))"
-        ] + jobPipelineDebugLines(job: job, shotStatus: nil) + requestLines
+        ] + playbackMediaFileDiagnosticLines(
+            remoteURLString: remoteURLForDetails,
+            localPath: localRecord?.localPath,
+            artifactKind: job.kind
+        ) + jobPipelineDebugLines(job: job, shotStatus: nil) + requestLines
         return ArtifactStatusPresentation(
             level: .warning,
             summary: "Audio feature skipped (non-blocking)",
@@ -7951,7 +8047,11 @@ private func artifactStatusPresentation(
             "Remote URL: \(displayValue(remoteURLForDetails, missing: "not produced"))",
             "Local file: \(displayValue(localRecord?.localPath, missing: "not available"))",
             "Error: \(primaryArtifactFailureMessage(job: job, requestState: requestState, localRecord: localRecord, fallback: "request timed out or failed"))"
-        ] + apiEvidence + jobPipelineDebugLines(job: job, shotStatus: nil) + requestLines
+        ] + playbackMediaFileDiagnosticLines(
+            remoteURLString: remoteURLForDetails,
+            localPath: localRecord?.localPath,
+            artifactKind: job.kind
+        ) + apiEvidence + jobPipelineDebugLines(job: job, shotStatus: nil) + requestLines
         return ArtifactStatusPresentation(
             level: .error,
             summary: "Request timed out or failed",
@@ -7966,7 +8066,11 @@ private func artifactStatusPresentation(
             "Remote URL: \(displayValue(remoteURLForDetails, missing: "not produced"))",
             "Local file: \(displayValue(localRecord?.localPath, missing: "not available"))",
             "Error: \(primaryArtifactFailureMessage(job: job, requestState: requestState, localRecord: localRecord, fallback: "unknown"))"
-        ] + apiEvidence + jobPipelineDebugLines(job: job, shotStatus: nil) + requestLines
+        ] + playbackMediaFileDiagnosticLines(
+            remoteURLString: remoteURLForDetails,
+            localPath: localRecord?.localPath,
+            artifactKind: job.kind
+        ) + apiEvidence + jobPipelineDebugLines(job: job, shotStatus: nil) + requestLines
         let detailText = details.joined(separator: "\n")
         return ArtifactStatusPresentation(
             level: .error,
@@ -7983,7 +8087,11 @@ private func artifactStatusPresentation(
             "Remote URL: \(displayValue(remoteURLForDetails, missing: "not produced"))",
             "Local file: \(displayValue(localRecord?.localPath, missing: "not available"))",
             "File sync: \(displayValue(localRecord?.status.rawValue, missing: "unknown"))"
-        ] + apiEvidence + requestLines
+        ] + playbackMediaFileDiagnosticLines(
+            remoteURLString: remoteURLForDetails,
+            localPath: localRecord?.localPath,
+            artifactKind: job.kind
+        ) + apiEvidence + requestLines
         let detailText = details.joined(separator: "\n")
         return ArtifactStatusPresentation(
             level: .success,
@@ -7998,7 +8106,11 @@ private func artifactStatusPresentation(
         "Prompt: \(displayValue(job.promptText, missing: "not captured"))",
         "Remote URL: \(displayValue(remoteURLForDetails, missing: "pending"))",
         "Local file: pending"
-    ] + apiEvidence + jobPipelineDebugLines(job: job, shotStatus: nil) + requestLines
+    ] + playbackMediaFileDiagnosticLines(
+        remoteURLString: remoteURLForDetails,
+        localPath: localRecord?.localPath,
+        artifactKind: job.kind
+    ) + apiEvidence + jobPipelineDebugLines(job: job, shotStatus: nil) + requestLines
     let waitingSummary: String
     if requestState?.stage == .responseReceived {
         waitingSummary = "API called and accepted; waiting for worker updates"
@@ -8042,6 +8154,7 @@ private func shotArtifactStatusPresentation(
 
     let requestLines = requestTimelineLines(requestState, job: job)
     let artifactNoun = job?.kind == "audio" ? "Sound" : "Shot"
+    let artifactKindTag = job?.kind ?? (artifactNoun == "Sound" ? "audio" : "clip")
     let isStubFailure = (job?.providerAdapter == "stub")
         || ((job?.providerEndpoint ?? "").hasPrefix("stub://"))
     let stubGuidance = isStubFailure
@@ -8057,7 +8170,11 @@ private func shotArtifactStatusPresentation(
             "Request ID: \(job?.requestId ?? "n/a")",
             "Idempotency key: \(job?.idempotencyKey ?? "n/a")",
             "Error: \(retryConflict)"
-        ] + requestLines
+        ] + playbackMediaFileDiagnosticLines(
+            remoteURLString: shot.clipUrl,
+            localPath: localRecord?.localPath,
+            artifactKind: artifactKindTag
+        ) + requestLines
         return ArtifactStatusPresentation(
             level: .warning,
             summary: "Retry skipped because backend status changed",
@@ -8101,7 +8218,11 @@ private func shotArtifactStatusPresentation(
             "Provider status URL: \(displayValue(job?.falStatusUrl, missing: "not available"))",
             "Provider status code: \(displayCode(job?.providerStatusCode, missing: "not available"))",
             "Error: \(primaryArtifactFailureMessage(job: job, requestState: requestState, localRecord: localRecord, fallback: "request timed out or failed"))"
-        ] + (stubGuidance.map { ["Hint: \($0)"] } ?? []) + queueStuckHint
+        ] + playbackMediaFileDiagnosticLines(
+            remoteURLString: shot.clipUrl,
+            localPath: localRecord?.localPath,
+            artifactKind: artifactKindTag
+        ) + (stubGuidance.map { ["Hint: \($0)"] } ?? []) + queueStuckHint
             + (job.map { jobPipelineDebugLines(job: $0, shotStatus: shot.status) } ?? []) + requestLines
         return ArtifactStatusPresentation(
             level: .error,
@@ -8125,7 +8246,11 @@ private func shotArtifactStatusPresentation(
             "Provider status URL: \(displayValue(job?.falStatusUrl, missing: "not available"))",
             "Provider status code: \(displayCode(job?.providerStatusCode, missing: "not available"))",
             "Error: \(primaryArtifactFailureMessage(job: job, requestState: requestState, localRecord: localRecord, fallback: "unknown"))"
-        ] + (stubGuidance.map { ["Hint: \($0)"] } ?? [])
+        ] + playbackMediaFileDiagnosticLines(
+            remoteURLString: shot.clipUrl,
+            localPath: localRecord?.localPath,
+            artifactKind: artifactKindTag
+        ) + (stubGuidance.map { ["Hint: \($0)"] } ?? [])
             + (job.map { jobPipelineDebugLines(job: $0, shotStatus: shot.status) } ?? []) + requestLines
         return ArtifactStatusPresentation(level: .error, summary: "\(artifactNoun) generation failed", details: details.joined(separator: "\n"))
     }
@@ -8145,7 +8270,11 @@ private func shotArtifactStatusPresentation(
             "Provider endpoint: \(displayValue(job?.providerEndpoint ?? job?.falEndpoint, missing: "provider not started yet"))",
             "Provider status URL: \(displayValue(job?.falStatusUrl, missing: "not available"))",
             "Provider status code: \(displayCode(job?.providerStatusCode, missing: "not available"))"
-        ] + requestLines
+        ] + playbackMediaFileDiagnosticLines(
+            remoteURLString: shot.clipUrl,
+            localPath: localRecord?.localPath,
+            artifactKind: artifactKindTag
+        ) + requestLines
         return ArtifactStatusPresentation(level: .success, summary: "\(artifactNoun) file is available locally", details: details.joined(separator: "\n"))
     }
 
@@ -8163,7 +8292,11 @@ private func shotArtifactStatusPresentation(
             "Provider status URL: \(displayValue(job?.falStatusUrl, missing: "not available"))",
             "Provider status code: \(displayCode(job?.providerStatusCode, missing: "not available"))",
             "Error: \(localRecord?.errorMessage ?? "file sync failed")"
-        ] + requestLines
+        ] + playbackMediaFileDiagnosticLines(
+            remoteURLString: shot.clipUrl,
+            localPath: localRecord?.localPath,
+            artifactKind: artifactKindTag
+        ) + requestLines
         return ArtifactStatusPresentation(level: .error, summary: "\(artifactNoun) rendered but local file sync failed", details: details.joined(separator: "\n"))
     }
 
@@ -8184,7 +8317,11 @@ private func shotArtifactStatusPresentation(
             "Provider endpoint: \(displayValue(job?.providerEndpoint ?? job?.falEndpoint, missing: "not reported"))",
             "Provider status URL: \(displayValue(job?.falStatusUrl, missing: "not available"))",
             "Provider status code: \(displayCode(job?.providerStatusCode, missing: "not available"))"
-        ] + (job.map { jobPipelineDebugLines(job: $0, shotStatus: shot.status) } ?? []) + requestLines
+        ] + playbackMediaFileDiagnosticLines(
+            remoteURLString: shot.clipUrl,
+            localPath: localRecord?.localPath,
+            artifactKind: artifactKindTag
+        ) + (job.map { jobPipelineDebugLines(job: $0, shotStatus: shot.status) } ?? []) + requestLines
         return ArtifactStatusPresentation(
             level: .success,
             summary: "\(artifactNoun) is ready",
@@ -8204,7 +8341,11 @@ private func shotArtifactStatusPresentation(
             "Idempotency key: \(displayValue(job?.idempotencyKey, missing: "not set"))",
             "Provider adapter: \(displayValue(job?.providerAdapter, missing: "not reported"))",
             "Provider endpoint: \(displayValue(job?.providerEndpoint ?? job?.falEndpoint, missing: "unknown"))"
-        ] + requestLines
+        ] + playbackMediaFileDiagnosticLines(
+            remoteURLString: shot.clipUrl,
+            localPath: localRecord?.localPath,
+            artifactKind: artifactKindTag
+        ) + requestLines
         return ArtifactStatusPresentation(
             level: .warning,
             summary: "\(artifactNoun) finished on server — refreshing timeline",
@@ -8224,7 +8365,11 @@ private func shotArtifactStatusPresentation(
         "Provider endpoint: \(displayValue(job?.providerEndpoint ?? job?.falEndpoint, missing: "provider not started yet"))",
         "Provider status URL: \(displayValue(job?.falStatusUrl, missing: "not available"))",
         "Provider status code: \(displayCode(job?.providerStatusCode, missing: "not available"))"
-    ] + (job.map { jobPipelineDebugLines(job: $0, shotStatus: shot.status) } ?? []) + requestLines
+    ] + playbackMediaFileDiagnosticLines(
+        remoteURLString: shot.clipUrl,
+        localPath: localRecord?.localPath,
+        artifactKind: artifactKindTag
+    ) + (job.map { jobPipelineDebugLines(job: $0, shotStatus: shot.status) } ?? []) + requestLines
     let providerNotStarted: Bool
     if job?.kind == "audio" {
         let pe = (job?.providerEndpoint ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
