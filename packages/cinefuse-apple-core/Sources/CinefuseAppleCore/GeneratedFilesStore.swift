@@ -86,7 +86,7 @@ public actor GeneratedFilesStore {
             let manifestURL = projectFolder.appendingPathComponent(".manifest.json", isDirectory: false)
             var manifest = try loadManifest(at: manifestURL)
             let cleanBaseName = sanitizeFileName(preferredBaseName)
-            let fileExtension = inferredExtension(from: remoteURL)
+            let initialExtension = inferredExtension(from: remoteURL)
 
             if let existingRelativePath = manifest.remoteToLocalRelativePath[remoteURLString] {
                 let existingURL = projectFolder.appendingPathComponent(existingRelativePath, isDirectory: false)
@@ -102,13 +102,7 @@ public actor GeneratedFilesStore {
                 }
             }
 
-            let destinationURL = uniqueDestinationURL(
-                in: projectFolder,
-                baseName: cleanBaseName,
-                fileExtension: fileExtension
-            )
-
-            DiagnosticsLogger.fileSyncStart(remoteURL: remoteURLString, destination: destinationURL.path)
+            DiagnosticsLogger.fileSyncStart(remoteURL: remoteURLString, destination: "(pending)")
             let (data, response): (Data, URLResponse)
             if let authToken = Self.bearerTokenForProjectFileFetch(
                 url: fetchURLResolved,
@@ -124,7 +118,7 @@ public actor GeneratedFilesStore {
             }
             if let http = response as? HTTPURLResponse, !(200...299).contains(http.statusCode) {
                 let message = "HTTP \(http.statusCode)"
-                DiagnosticsLogger.fileSyncFailure(remoteURL: remoteURLString, destination: destinationURL.path, message: message)
+                DiagnosticsLogger.fileSyncFailure(remoteURL: remoteURLString, destination: "unknown", message: message)
                 return LocalFileRecord(
                     id: remoteURLString,
                     remoteURL: remoteURLString,
@@ -133,6 +127,18 @@ public actor GeneratedFilesStore {
                     errorMessage: message
                 )
             }
+
+            let fileExtension = refinedFileExtension(
+                remoteURL: remoteURL,
+                httpResponse: response as? HTTPURLResponse,
+                data: data,
+                initialExtension: initialExtension
+            )
+            let destinationURL = uniqueDestinationURL(
+                in: projectFolder,
+                baseName: cleanBaseName,
+                fileExtension: fileExtension
+            )
 
             do {
                 try data.write(to: destinationURL, options: .atomic)
@@ -277,6 +283,55 @@ public actor GeneratedFilesStore {
             return "m4a"
         }
         return "mp4"
+    }
+
+    /// Gateway ``…/files/{uuid}`` URLs have no path extension; prefer MIME then magic bytes so MP3 is not saved as ``.mp4``.
+    private func refinedFileExtension(
+        remoteURL: URL,
+        httpResponse: HTTPURLResponse?,
+        data: Data,
+        initialExtension: String
+    ) -> String {
+        if let mime = httpResponse?.mimeType?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(), !mime.isEmpty {
+            switch mime {
+            case "audio/mpeg", "audio/mp3":
+                return "mp3"
+            case "audio/wav", "audio/x-wav", "audio/wave":
+                return "wav"
+            case "audio/mp4", "audio/x-m4a":
+                return "m4a"
+            case "video/mp4":
+                return "mp4"
+            default:
+                if mime.hasPrefix("audio/"), initialExtension == "mp4", mime != "audio/mp4" {
+                    return "mp3"
+                }
+            }
+        }
+        if initialExtension != "mp4" {
+            return initialExtension
+        }
+        if data.count >= 3 {
+            let prefix = data.prefix(3)
+            if prefix.elementsEqual(Data([0x49, 0x44, 0x33])) {
+                return "mp3"
+            }
+        }
+        if data.count >= 2 {
+            let b0 = data[data.startIndex]
+            let b1 = data[data.index(data.startIndex, offsetBy: 1)]
+            if b0 == 0xFF, (b1 & 0xE0) == 0xE0 {
+                return "mp3"
+            }
+        }
+        if data.count >= 12 {
+            let idx = data.index(data.startIndex, offsetBy: 4)
+            let end = data.index(idx, offsetBy: 4)
+            if String(data: data[idx..<end], encoding: .ascii) == "ftyp" {
+                return "mp4"
+            }
+        }
+        return initialExtension
     }
 
     private func uniqueDestinationURL(in directory: URL, baseName: String, fileExtension: String) -> URL {
