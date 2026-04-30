@@ -7423,7 +7423,13 @@ private func jobPipelineDebugLines(job: Job, shotStatus: String?) -> [String] {
         let age = Int(Date().timeIntervalSince(u))
         lines.append("Job server clock: updated \(age)s ago (updatedAt)")
     } else {
-        lines.append("Job server clock: updatedAt missing")
+        let shotReady = shotStatus?.lowercased() == "ready"
+        let jobTerminal = statusLower == "done" || statusLower == "failed"
+        if shotReady || jobTerminal {
+            lines.append("Job server clock: updatedAt omitted in snapshot (common once generation finishes).")
+        } else {
+            lines.append("Job server clock: updatedAt missing")
+        }
     }
     if let mid = job.modelId?.trimmingCharacters(in: .whitespacesAndNewlines), !mid.isEmpty {
         lines.append("Model id: \(mid)")
@@ -7819,6 +7825,31 @@ private func shotArtifactStatusPresentation(
             "Error: \(localRecord?.errorMessage ?? "file sync failed")"
         ] + requestLines
         return ArtifactStatusPresentation(level: .error, summary: "\(artifactNoun) rendered but local file sync failed", details: details.joined(separator: "\n"))
+    }
+
+    /// Shot is ready on the server but local file row may still be syncing — do not fall through to "still in progress".
+    if shot.status.lowercased() == "ready" {
+        let details = [
+            "\(artifactNoun): \(shot.id)",
+            "Status: \(shot.status)",
+            "Prompt: \(shot.prompt)",
+            "Model tier: \(shot.modelTier)",
+            "Progress: \(job?.progressPct.map { "\($0)%" } ?? "100%")",
+            "Remote URL: \(displayValue(shot.clipUrl, missing: "not linked yet"))",
+            "Local file: \(localRecord.flatMap { displayValue($0.localPath, missing: $0.status.rawValue) } ?? "syncing or pending")",
+            "Job ID: \(displayValue(job?.id, missing: "unknown"))",
+            "Request ID: \(displayValue(job?.requestId, missing: "not provided by provider"))",
+            "Idempotency key: \(displayValue(job?.idempotencyKey, missing: "not set"))",
+            "Provider adapter: \(displayValue(job?.providerAdapter, missing: "not reported"))",
+            "Provider endpoint: \(displayValue(job?.providerEndpoint ?? job?.falEndpoint, missing: "not reported"))",
+            "Provider status URL: \(displayValue(job?.falStatusUrl, missing: "not available"))",
+            "Provider status code: \(displayCode(job?.providerStatusCode, missing: "not available"))"
+        ] + (job.map { jobPipelineDebugLines(job: $0, shotStatus: shot.status) } ?? []) + requestLines
+        return ArtifactStatusPresentation(
+            level: .success,
+            summary: "\(artifactNoun) is ready",
+            details: details.joined(separator: "\n")
+        )
     }
 
     if shotJobCompleted, shot.status != "ready", shot.status != "failed" {
