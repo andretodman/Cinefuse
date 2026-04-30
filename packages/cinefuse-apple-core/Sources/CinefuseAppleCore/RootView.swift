@@ -81,57 +81,56 @@ struct TimelineRulerStrip: View {
     }
 
     private var minorTickStride: Int {
-        secondsTotal <= 180 ? 1 : majorLabelStride / max(1, majorLabelStride / 5)
+        if secondsTotal <= 180 { return 1 }
+        let step = majorLabelStride / max(1, majorLabelStride / 5)
+        return max(1, step)
     }
 
     var body: some View {
         let W = max(contentWidth, 1)
         let T = CGFloat(secondsTotal)
-        ZStack(alignment: .bottomLeading) {
-            Rectangle()
-                .fill(palette.timelineRuler.opacity(0.12))
-            Canvas { context, size in
-                let majorH = CinefuseTokens.Control.timelineNotchMajor
-                let minorH = CinefuseTokens.Control.timelineNotchMinor
-                var s = 0
-                while s <= secondsTotal {
-                    let x = CGFloat(s) / T * size.width
-                    let isMajor = s % majorLabelStride == 0 || s == secondsTotal
-                    let h = isMajor ? majorH : minorH
-                    let opacity = isMajor ? 0.85 : 0.45
-                    let rect = CGRect(x: x - 0.25, y: size.height - h - 10, width: 1, height: h)
-                    context.fill(Path(rect), with: .color(palette.timelineRuler.opacity(opacity)))
-                    s += minorTickStride
+        let labelReserve: CGFloat = 11
+        GeometryReader { geo in
+            let size = geo.size
+            ZStack(alignment: .topLeading) {
+                Rectangle()
+                    .fill(palette.timelineRuler.opacity(0.12))
+                Canvas { context, canvasSize in
+                    let majorH = CinefuseTokens.Control.timelineNotchMajor
+                    let minorH = CinefuseTokens.Control.timelineNotchMinor
+                    let baseY = canvasSize.height - labelReserve
+                    var s = 0
+                    while s <= secondsTotal {
+                        let x = CGFloat(s) / T * canvasSize.width
+                        let isMajor = s % majorLabelStride == 0 || s == secondsTotal
+                        let h = isMajor ? majorH : minorH
+                        let opacity = isMajor ? 0.85 : 0.45
+                        let rect = CGRect(x: x - 0.25, y: baseY - h, width: 1, height: h)
+                        context.fill(Path(rect), with: .color(palette.timelineRuler.opacity(opacity)))
+                        s += minorTickStride
+                    }
+                }
+                .allowsHitTesting(false)
+                .frame(width: size.width, height: size.height)
+
+                ForEach(Array(stride(from: 0, through: secondsTotal, by: majorLabelStride)), id: \.self) { sec in
+                    Text("\(sec)s")
+                        .font(CinefuseTokens.Typography.nano)
+                        .foregroundStyle(CinefuseTokens.ColorRole.textSecondary.opacity(0.95))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.75)
+                        .position(x: CGFloat(sec) / T * size.width + 14, y: size.height - 6)
+                }
+                if secondsTotal > 0, secondsTotal % majorLabelStride != 0 {
+                    Text("\(secondsTotal)s")
+                        .font(CinefuseTokens.Typography.nano)
+                        .foregroundStyle(CinefuseTokens.ColorRole.textSecondary.opacity(0.95))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.75)
+                        .position(x: CGFloat(secondsTotal) / T * size.width + 14, y: size.height - 6)
                 }
             }
-            .allowsHitTesting(false)
-            .padding(.bottom, 10)
-
-            ForEach(Array(stride(from: 0, through: secondsTotal, by: majorLabelStride)), id: \.self) { sec in
-                let x = CGFloat(sec) / T * W
-                Text("\(sec)s")
-                    .font(CinefuseTokens.Typography.nano)
-                    .foregroundStyle(CinefuseTokens.ColorRole.textSecondary.opacity(0.95))
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.75)
-                    .frame(width: 36, alignment: .leading)
-                    .offset(x: x)
-                    .frame(maxHeight: .infinity, alignment: .bottom)
-                    .padding(.bottom, 1)
-            }
-            if secondsTotal > 0, secondsTotal % majorLabelStride != 0 {
-                let sec = secondsTotal
-                let x = CGFloat(sec) / T * W
-                Text("\(sec)s")
-                    .font(CinefuseTokens.Typography.nano)
-                    .foregroundStyle(CinefuseTokens.ColorRole.textSecondary.opacity(0.95))
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.75)
-                    .frame(width: 36, alignment: .leading)
-                    .offset(x: x)
-                    .frame(maxHeight: .infinity, alignment: .bottom)
-                    .padding(.bottom, 1)
-            }
+            .frame(width: size.width, height: size.height, alignment: .topLeading)
         }
         .frame(width: W, height: CinefuseTokens.Control.timelineRulerHeight)
         .clipShape(RoundedRectangle(cornerRadius: CinefuseTokens.Radius.small))
@@ -5062,7 +5061,8 @@ struct ProjectDetailScreen: View {
     }
 
     private func clampedTimelineStripHeight(_ height: Double) -> Double {
-        min(max(height, 132), 560)
+        // Floor fits ruler + synchronized clip row (see `HorizontalTimelineTrack.timelineTrackScrollableHeight`).
+        min(max(height, 148), 560)
     }
 
     private func header(project: Project) -> some View {
@@ -5230,6 +5230,8 @@ struct HorizontalTimelineTrack: View {
     var clipVisualStyle: TimelineClipVisualStyle = .videoThumbnail
     @Binding var isTimelineFullscreen: Bool
     @AppStorage("cinefuse.editor.timeline.clipDensity") private var clipDensityRaw = TimelineClipDensity.large.rawValue
+    /// 0 = zoomed out … 4 = zoomed in (`pixelsPerSecond` ladder below).
+    @AppStorage("cinefuse.editor.timeline.zoomStep") private var timelineZoomStep = 2
     @EnvironmentObject private var editorPlaybackState: EditorPlaybackState
     @State private var orderedShots: [Shot] = []
     @State private var draggingShotId: String?
@@ -5240,6 +5242,22 @@ struct HorizontalTimelineTrack: View {
 
     private var clipDensity: TimelineClipDensity {
         TimelineClipDensity(rawValue: clipDensityRaw) ?? .large
+    }
+
+    private static let timelineZoomPixelsPerSecond: [CGFloat] = [6, 9, 12, 18, 24]
+
+    private var timelinePixelsPerSecond: CGFloat {
+        let idx = min(max(timelineZoomStep, 0), Self.timelineZoomPixelsPerSecond.count - 1)
+        return Self.timelineZoomPixelsPerSecond[idx]
+    }
+
+    private var rulerAndCardsSpacing: CGFloat {
+        clipVisualStyle == .audioWaveform ? 2 : CinefuseTokens.Spacing.xs
+    }
+
+    /// Ruler + gap + clip row — single scroll column height.
+    private var timelineTrackScrollableHeight: CGFloat {
+        CinefuseTokens.Control.timelineRulerHeight + rulerAndCardsSpacing + timelineCardsStripHeight
     }
 
     /// Vertical space for the scrolling strip of clip cards (cards + padding inside the inner timeline tray).
@@ -5277,6 +5295,36 @@ struct HorizontalTimelineTrack: View {
                     : "Expand the timeline; hide the preview workspace",
                 enabled: showTooltips
             )
+            Button {
+                timelineZoomStep = max(0, timelineZoomStep - 1)
+            } label: {
+                Image(systemName: "minus.magnifyingglass")
+                    .font(.system(size: CinefuseTokens.Control.iconSymbolSize * 0.88, weight: .medium))
+                    .foregroundStyle(
+                        timelineZoomStep <= 0
+                            ? CinefuseTokens.ColorRole.textSecondary.opacity(0.35)
+                            : CinefuseTokens.ColorRole.textSecondary.opacity(0.92)
+                    )
+            }
+            .buttonStyle(.plain)
+            .disabled(timelineZoomStep <= 0)
+            .accessibilityLabel(Text("Zoom timeline out"))
+            .tooltip("Show more timeline in view", enabled: showTooltips)
+            Button {
+                timelineZoomStep = min(Self.timelineZoomPixelsPerSecond.count - 1, timelineZoomStep + 1)
+            } label: {
+                Image(systemName: "plus.magnifyingglass")
+                    .font(.system(size: CinefuseTokens.Control.iconSymbolSize * 0.88, weight: .medium))
+                    .foregroundStyle(
+                        timelineZoomStep >= Self.timelineZoomPixelsPerSecond.count - 1
+                            ? CinefuseTokens.ColorRole.textSecondary.opacity(0.35)
+                            : CinefuseTokens.ColorRole.textSecondary.opacity(0.92)
+                    )
+            }
+            .buttonStyle(.plain)
+            .disabled(timelineZoomStep >= Self.timelineZoomPixelsPerSecond.count - 1)
+            .accessibilityLabel(Text("Zoom timeline in"))
+            .tooltip("Magnify clip widths on the timeline", enabled: showTooltips)
             ForEach(TimelineClipDensity.allCases) { density in
                 Button {
                     clipDensityRaw = density.rawValue
@@ -5293,6 +5341,104 @@ struct HorizontalTimelineTrack: View {
                 .accessibilityLabel(Text(density.accessibilityLabel))
             }
         }
+    }
+
+    private func totalTimelineDurationSeconds(for shots: [Shot]) -> Int {
+        shots.reduce(0) { $0 + max($1.durationSec ?? 5, 1) }
+    }
+
+    /// Ruler and clip row share one horizontal scroll width so the playhead aligns with time marks.
+    @ViewBuilder
+    private var timelineTrackWithSyncedRuler: some View {
+        if clipVisualStyle == .audioWaveform {
+            ScrollView(.vertical, showsIndicators: true) {
+                timelineHorizontalStripGeometry
+            }
+        } else {
+            timelineHorizontalStripGeometry
+        }
+    }
+
+    private var timelineHorizontalStripGeometry: some View {
+        GeometryReader { geo in
+            let spacing = clipVisualStyle == .audioWaveform ? CinefuseTokens.Spacing.xs : CinefuseTokens.Spacing.s
+            let totalSec = totalTimelineDurationSeconds(for: visibleShots)
+            let widths = proportionalCardWidths(
+                for: visibleShots,
+                viewportWidth: geo.size.width,
+                spacing: spacing,
+                clipDensity: clipDensity,
+                pixelsPerSecond: timelinePixelsPerSecond
+            )
+            let contentWidth = widths.reduce(0, +) + spacing * CGFloat(max(0, visibleShots.count - 1))
+            let stripW = max(geo.size.width, contentWidth)
+            ScrollView(.horizontal, showsIndicators: true) {
+                VStack(alignment: .leading, spacing: rulerAndCardsSpacing) {
+                    TimelineRulerStrip(
+                        totalSeconds: totalSec,
+                        contentWidth: stripW,
+                        palette: themePalette
+                    )
+                    HStack(spacing: spacing) {
+                        ForEach(Array(visibleShots.enumerated()), id: \.element.id) { index, shot in
+                            TimelineClipCard(
+                                shot: shot,
+                                localThumbnailURL: localThumbnailURLByShotId[shot.id],
+                                clipStatusPresentation: clipArtifactStatus(for: shot),
+                                index: index,
+                                backendProgressPercent: latestBackendProgressPercent(for: shot.id),
+                                trimRange: trimByShotId[shot.id],
+                                isSelected: selectedShotId == shot.id,
+                                canMoveLeft: index > 0,
+                                canMoveRight: index < (visibleShots.count - 1),
+                                onSelect: { selectedShotId = shot.id },
+                                onPreview: { onPreviewShot(shot.id) },
+                                onMoveLeft: {
+                                    commitMove(from: index, to: index - 1)
+                                    selectedShotId = shot.id
+                                },
+                                onMoveRight: {
+                                    commitMove(from: index, to: index + 1)
+                                    selectedShotId = shot.id
+                                },
+                                onDuplicate: { duplicateShot(shot.id) },
+                                onDelete: { deleteShot(shot.id) },
+                                onToggleHidden: { toggleHidden(shot.id) },
+                                onTrimLeading: { adjustTrimLeading(for: shot.id, amount: 1) },
+                                onTrimTrailing: { adjustTrimTrailing(for: shot.id, amount: 1) },
+                                showTooltips: showTooltips,
+                                isDragging: draggingShotId == shot.id,
+                                onDragStarted: {
+                                    draggingShotId = shot.id
+                                    dragSourceIndex = index
+                                },
+                                clipVisualStyle: clipVisualStyle,
+                                clipDensity: clipDensity,
+                                cardWidth: widths.indices.contains(index) ? widths[index] : nil,
+                                playbackProgressFraction: playbackFraction(for: shot),
+                                playbackFileURL: shot.playbackURL(localRecords: localFileRecordsByRemoteURL)
+                            )
+                            .onDrop(
+                                of: [UTType.text],
+                                delegate: TimelineClipDropDelegate(
+                                    destinationShot: shot,
+                                    shots: visibleShots,
+                                    draggingShotId: $draggingShotId,
+                                    selectedShotId: $selectedShotId,
+                                    onPreviewMove: previewMove(from:to:),
+                                    onDropTarget: { dragTargetIndex = $0 },
+                                    onDropCompleted: commitDraggedMove
+                                )
+                            )
+                        }
+                    }
+                    .frame(width: stripW, alignment: .leading)
+                }
+                .frame(width: stripW, alignment: .leading)
+                .padding(.vertical, clipVisualStyle == .audioWaveform ? 2 : CinefuseTokens.Spacing.xxs)
+            }
+        }
+        .frame(height: timelineTrackScrollableHeight)
     }
 
     var body: some View {
@@ -5320,78 +5466,7 @@ struct HorizontalTimelineTrack: View {
                 }
             } else {
                 VStack(alignment: .leading, spacing: clipVisualStyle == .audioWaveform ? CinefuseTokens.Spacing.xxs : CinefuseTokens.Spacing.xs) {
-                    TimelineRulerView(
-                        shots: visibleShots,
-                        trimByShotId: trimByShotId,
-                        palette: themePalette
-                    )
-                    GeometryReader { geo in
-                        let spacing = clipVisualStyle == .audioWaveform ? CinefuseTokens.Spacing.xs : CinefuseTokens.Spacing.s
-                        let widths = proportionalCardWidths(
-                            for: visibleShots,
-                            viewportWidth: geo.size.width,
-                            spacing: spacing,
-                            clipDensity: clipDensity
-                        )
-                        let contentWidth = widths.reduce(0, +) + spacing * CGFloat(max(0, visibleShots.count - 1))
-                        ScrollView(.horizontal, showsIndicators: true) {
-                            HStack(spacing: spacing) {
-                                ForEach(Array(visibleShots.enumerated()), id: \.element.id) { index, shot in
-                                    TimelineClipCard(
-                                        shot: shot,
-                                        localThumbnailURL: localThumbnailURLByShotId[shot.id],
-                                        clipStatusPresentation: clipArtifactStatus(for: shot),
-                                        index: index,
-                                        backendProgressPercent: latestBackendProgressPercent(for: shot.id),
-                                        trimRange: trimByShotId[shot.id],
-                                        isSelected: selectedShotId == shot.id,
-                                        canMoveLeft: index > 0,
-                                        canMoveRight: index < (visibleShots.count - 1),
-                                        onSelect: { selectedShotId = shot.id },
-                                        onPreview: { onPreviewShot(shot.id) },
-                                        onMoveLeft: {
-                                            commitMove(from: index, to: index - 1)
-                                            selectedShotId = shot.id
-                                        },
-                                        onMoveRight: {
-                                            commitMove(from: index, to: index + 1)
-                                            selectedShotId = shot.id
-                                        },
-                                        onDuplicate: { duplicateShot(shot.id) },
-                                        onDelete: { deleteShot(shot.id) },
-                                        onToggleHidden: { toggleHidden(shot.id) },
-                                        onTrimLeading: { adjustTrimLeading(for: shot.id, amount: 1) },
-                                        onTrimTrailing: { adjustTrimTrailing(for: shot.id, amount: 1) },
-                                        showTooltips: showTooltips,
-                                        isDragging: draggingShotId == shot.id,
-                                        onDragStarted: {
-                                            draggingShotId = shot.id
-                                            dragSourceIndex = index
-                                        },
-                                        clipVisualStyle: clipVisualStyle,
-                                        clipDensity: clipDensity,
-                                        cardWidth: widths.indices.contains(index) ? widths[index] : nil,
-                                        playbackProgressFraction: playbackFraction(for: shot)
-                                    )
-                                    .onDrop(
-                                    of: [UTType.text],
-                                    delegate: TimelineClipDropDelegate(
-                                        destinationShot: shot,
-                                        shots: visibleShots,
-                                        draggingShotId: $draggingShotId,
-                                        selectedShotId: $selectedShotId,
-                                        onPreviewMove: previewMove(from:to:),
-                                        onDropTarget: { dragTargetIndex = $0 },
-                                        onDropCompleted: commitDraggedMove
-                                    )
-                                )
-                            }
-                            }
-                            .frame(width: max(geo.size.width, contentWidth))
-                            .padding(.vertical, clipVisualStyle == .audioWaveform ? 2 : CinefuseTokens.Spacing.xxs)
-                        }
-                    }
-                    .frame(height: timelineCardsStripHeight)
+                    timelineTrackWithSyncedRuler
                     if !hiddenShots.isEmpty {
                         hiddenShotsControls
                     }
@@ -5631,7 +5706,8 @@ struct HorizontalTimelineTrack: View {
         for shots: [Shot],
         viewportWidth: CGFloat,
         spacing: CGFloat,
-        clipDensity: TimelineClipDensity
+        clipDensity: TimelineClipDensity,
+        pixelsPerSecond: CGFloat
     ) -> [CGFloat] {
         let fallback = CinefuseTokens.Control.timelineCardWidth
         guard !shots.isEmpty else { return [] }
@@ -5654,7 +5730,6 @@ struct HorizontalTimelineTrack: View {
         guard totalDur > 0 else {
             return shots.map { _ in fallback }
         }
-        let pixelsPerSecond: CGFloat = 12
         let spacingTotal = spacing * CGFloat(max(0, shots.count - 1))
         var widths = durations.map { dur -> CGFloat in
             max(minW, min(maxW, CGFloat(dur) * pixelsPerSecond))
@@ -5702,6 +5777,10 @@ struct TimelineClipCard: View {
     var cardWidth: CGFloat?
     /// Playhead position within this clip when it matches active preview (`0...1`).
     var playbackProgressFraction: Double?
+    /// Resolved local/network URL for waveform rendering on audio timeline clips.
+    var playbackFileURL: URL? = nil
+
+    @State private var waveformPeaks: [Float] = []
 
     private var previewFrameURL: URL? {
         if let localThumbnailURL {
@@ -5742,6 +5821,29 @@ struct TimelineClipCard: View {
         }
     }
 
+    /// Waveform view includes fill + line; hide the legacy vertical overlay to avoid double playheads.
+    private var shouldUseTimelineWaveformPlayhead: Bool {
+        guard isAudioTimelineCard else { return false }
+        guard shot.status.lowercased() == "ready" else { return false }
+        return !waveformPeaks.isEmpty
+    }
+
+    private var waveformBucketCount: Int {
+        let w = max(Int(resolvedCardWidth), 40)
+        switch clipDensity {
+        case .thin:
+            return 40
+        case .medium:
+            return min(140, max(48, w / 3))
+        case .large:
+            return min(180, max(64, w / 2))
+        }
+    }
+
+    private var waveformTaskIdentity: String {
+        "\(shot.id)|\(playbackFileURL?.absoluteString ?? "")|\(clipDensity.rawValue)|\(Int(resolvedCardWidth))"
+    }
+
     private var contentHorizontalPadding: CGFloat {
         switch clipDensity {
         case .thin: return CinefuseTokens.Spacing.xxs + 1
@@ -5768,18 +5870,28 @@ struct TimelineClipCard: View {
                 RoundedRectangle(cornerRadius: CinefuseTokens.Radius.small)
                     .fill(CinefuseTokens.ColorRole.surfaceSecondary)
                 if clipVisualStyle == .audioWaveform {
-                    LinearGradient(
-                        colors: [
-                            CinefuseTokens.ColorRole.accent.opacity(0.4),
-                            CinefuseTokens.ColorRole.surfaceSecondary
-                        ],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    )
-                    .clipShape(RoundedRectangle(cornerRadius: CinefuseTokens.Radius.small))
-                    Image(systemName: "waveform")
-                        .font(.system(size: 16, weight: .medium))
-                        .foregroundStyle(CinefuseTokens.ColorRole.textSecondary.opacity(0.65))
+                    if shouldUseTimelineWaveformPlayhead {
+                        AudioWaveformWithPlayhead(
+                            peaks: waveformPeaks,
+                            progressFraction: playbackProgressFraction ?? 0,
+                            onSeekFraction: { _ in },
+                            interactive: false
+                        )
+                        .clipShape(RoundedRectangle(cornerRadius: CinefuseTokens.Radius.small))
+                    } else {
+                        LinearGradient(
+                            colors: [
+                                CinefuseTokens.ColorRole.accent.opacity(0.4),
+                                CinefuseTokens.ColorRole.surfaceSecondary
+                            ],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        )
+                        .clipShape(RoundedRectangle(cornerRadius: CinefuseTokens.Radius.small))
+                        Image(systemName: "waveform")
+                            .font(.system(size: 16, weight: .medium))
+                            .foregroundStyle(CinefuseTokens.ColorRole.textSecondary.opacity(0.65))
+                    }
                 } else if let previewFrameURL {
                     AsyncImage(url: previewFrameURL) { phase in
                         switch phase {
@@ -5839,7 +5951,16 @@ struct TimelineClipCard: View {
                     lineWidth: isSelected ? 2 : 1
                 )
         )
-        .overlay(timelineVerticalPlayheadOverlay)
+        .overlay(thinTimelinePlayheadOverlay)
+    }
+
+    @ViewBuilder
+    private var thinTimelinePlayheadOverlay: some View {
+        if shouldUseTimelineWaveformPlayhead {
+            EmptyView()
+        } else {
+            timelineVerticalPlayheadOverlay
+        }
     }
 
     @ViewBuilder
@@ -5909,6 +6030,17 @@ struct TimelineClipCard: View {
             } label: {
                 Label("Delete", systemImage: "trash")
             }
+        }
+        .task(id: waveformTaskIdentity) {
+            guard isAudioTimelineCard,
+                  shot.status.lowercased() == "ready",
+                  let url = playbackFileURL
+            else {
+                waveformPeaks = []
+                return
+            }
+            let peaks = (try? await WaveformPeakLoader.loadPeaks(from: url, bucketCount: waveformBucketCount)) ?? []
+            waveformPeaks = peaks
         }
     }
 
@@ -6000,25 +6132,45 @@ struct TimelineClipCard: View {
                 RoundedRectangle(cornerRadius: CinefuseTokens.Radius.medium)
                     .fill(cardFillColor)
                 if clipVisualStyle == .audioWaveform {
-                    RoundedRectangle(cornerRadius: CinefuseTokens.Radius.medium)
-                        .fill(
-                            LinearGradient(
-                                colors: [
-                                    CinefuseTokens.ColorRole.accent.opacity(0.35),
-                                    CinefuseTokens.ColorRole.surfaceSecondary
-                                ],
-                                startPoint: .topLeading,
-                                endPoint: .bottomTrailing
+                    Group {
+                        if shouldUseTimelineWaveformPlayhead {
+                            AudioWaveformWithPlayhead(
+                                peaks: waveformPeaks,
+                                progressFraction: playbackProgressFraction ?? 0,
+                                onSeekFraction: { _ in },
+                                interactive: false
                             )
-                        )
-                        .overlay(
-                            Image(systemName: "waveform")
-                                .font(.system(
-                                    size: clipDensity == .medium ? 22 : (isAudioTimelineCard ? 30 : 44),
-                                    weight: .light
-                                ))
-                                .foregroundStyle(CinefuseTokens.ColorRole.textSecondary.opacity(0.5))
-                        )
+                            .padding(.horizontal, contentHorizontalPadding)
+                            .padding(.vertical, clipDensity == .large ? CinefuseTokens.Spacing.xs : CinefuseTokens.Spacing.xxs)
+                        } else {
+                            RoundedRectangle(cornerRadius: CinefuseTokens.Radius.medium)
+                                .fill(
+                                    LinearGradient(
+                                        colors: [
+                                            CinefuseTokens.ColorRole.accent.opacity(0.35),
+                                            CinefuseTokens.ColorRole.surfaceSecondary
+                                        ],
+                                        startPoint: .topLeading,
+                                        endPoint: .bottomTrailing
+                                    )
+                                )
+                                .overlay(
+                                    Group {
+                                        if shot.status.lowercased() == "ready", playbackFileURL != nil, waveformPeaks.isEmpty {
+                                            ProgressView()
+                                                .scaleEffect(0.85)
+                                        } else {
+                                            Image(systemName: "waveform")
+                                                .font(.system(
+                                                    size: clipDensity == .medium ? 22 : (isAudioTimelineCard ? 30 : 44),
+                                                    weight: .light
+                                                ))
+                                                .foregroundStyle(CinefuseTokens.ColorRole.textSecondary.opacity(0.5))
+                                        }
+                                    }
+                                )
+                        }
+                    }
                 } else if let previewFrameURL {
                     AsyncImage(url: previewFrameURL) { phase in
                         switch phase {
@@ -6045,7 +6197,11 @@ struct TimelineClipCard: View {
                         lineWidth: isSelected ? 2 : 1
                     )
 
-                timelineVerticalPlayheadOverlay
+                if shouldUseTimelineWaveformPlayhead {
+                    EmptyView()
+                } else {
+                    timelineVerticalPlayheadOverlay
+                }
             }
         )
     }
