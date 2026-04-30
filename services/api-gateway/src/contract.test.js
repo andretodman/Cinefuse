@@ -110,6 +110,11 @@ test("api contract: create/list projects and get spark balance", async () => {
   );
   const generatedClipJob = jobsBody.jobs.find((job) => job.kind === "clip" && job.shotId === shotId);
   assert.ok(generatedClipJob);
+  for (const job of jobsBody.jobs) {
+    assert.equal(typeof job.updatedAt, "string", "GET /jobs must include ISO updatedAt for clients");
+    assert.ok(job.updatedAt.length > 4);
+    assert.equal(typeof job.createdAt, "string");
+  }
   assert.equal(typeof generatedClipJob.progressPct === "number", true);
   if (generatedClipJob.status === "done") {
     assert.equal(generatedClipJob.costToUsCents > 0, true);

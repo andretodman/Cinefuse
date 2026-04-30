@@ -321,6 +321,18 @@ function memoryJobToRow(job) {
   };
 }
 
+/** Ensures JSON serialization always includes stable ISO-8601 strings (undefined omits keys). */
+function coerceIsoTimestamp(value, fallback = null) {
+  if (value === null || value === undefined) {
+    return fallback;
+  }
+  if (value instanceof Date) {
+    return value.toISOString();
+  }
+  const s = String(value).trim();
+  return s.length > 0 ? s : fallback;
+}
+
 function mapJobRow(row) {
   const inputPayload = row.input_payload ?? {};
   const outputPayload = row.output_payload ?? {};
@@ -376,9 +388,19 @@ function mapJobRow(row) {
     providerResponseSnippet: typeof outputPayload.providerResponseSnippet === "string"
       ? outputPayload.providerResponseSnippet
       : null,
-    createdAt: row.created_at,
-    updatedAt: row.updated_at
+    createdAt:
+      coerceIsoTimestamp(row.created_at)
+      ?? new Date().toISOString(),
+    updatedAt:
+      coerceIsoTimestamp(row.updated_at, coerceIsoTimestamp(row.created_at))
+      ?? coerceIsoTimestamp(row.created_at)
+      ?? new Date().toISOString()
   };
+}
+
+/** Public API shape for any job row or in-memory job (flattened fields + stable timestamps). */
+function formatJobForApi(internalJob) {
+  return mapJobRow(memoryJobToRow(internalJob));
 }
 
 function normalizeProgressPct(value) {
@@ -1069,10 +1091,10 @@ export async function saveJob(input) {
         job.updatedAt
       ]
     );
-    return job;
+    return formatJobForApi(job);
   }
   jobs.set(job.id, job);
-  return job;
+  return formatJobForApi(job);
 }
 
 export async function getJob(jobId, projectId) {
