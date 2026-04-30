@@ -270,6 +270,8 @@ function mapShotRow(row) {
     audioRefs: row.audio_refs ?? [],
     characterLocks: row.character_locks ?? [],
     soundGeneration: row.sound_generation && typeof row.sound_generation === "object" ? row.sound_generation : {},
+    previewTrimInMs: row.preview_trim_in_ms ?? null,
+    previewTrimOutMs: row.preview_trim_out_ms ?? null,
     createdAt: row.created_at,
     updatedAt: row.updated_at
   };
@@ -733,6 +735,10 @@ export async function saveShot(input) {
     input.soundGeneration !== undefined
       ? input.soundGeneration ?? {}
       : existing?.soundGeneration ?? {};
+  const previewTrimInMs =
+    input.previewTrimInMs !== undefined ? input.previewTrimInMs : existing?.previewTrimInMs ?? null;
+  const previewTrimOutMs =
+    input.previewTrimOutMs !== undefined ? input.previewTrimOutMs : existing?.previewTrimOutMs ?? null;
   const shot = {
     id: input.id,
     projectId: input.projectId,
@@ -746,6 +752,8 @@ export async function saveShot(input) {
     audioRefs: input.audioRefs ?? existing?.audioRefs ?? [],
     characterLocks: input.characterLocks ?? existing?.characterLocks ?? [],
     soundGeneration,
+    previewTrimInMs,
+    previewTrimOutMs,
     createdAt: existing?.createdAt ?? input.createdAt ?? now,
     updatedAt: now
   };
@@ -753,8 +761,8 @@ export async function saveShot(input) {
   if (db) {
     await db.query(
       `INSERT INTO cinefuse_shots
-        (id, project_id, prompt, model_tier, status, clip_url, order_index, duration_sec, thumbnail_url, audio_refs, character_locks, sound_generation, created_at, updated_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11::jsonb,$12::jsonb,$13,$14)
+        (id, project_id, prompt, model_tier, status, clip_url, order_index, duration_sec, thumbnail_url, audio_refs, character_locks, sound_generation, preview_trim_in_ms, preview_trim_out_ms, created_at, updated_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11::jsonb,$12::jsonb,$13,$14,$15,$16)
        ON CONFLICT (id)
        DO UPDATE SET
         project_id = EXCLUDED.project_id,
@@ -768,6 +776,8 @@ export async function saveShot(input) {
         audio_refs = EXCLUDED.audio_refs,
         character_locks = EXCLUDED.character_locks,
         sound_generation = EXCLUDED.sound_generation,
+        preview_trim_in_ms = EXCLUDED.preview_trim_in_ms,
+        preview_trim_out_ms = EXCLUDED.preview_trim_out_ms,
         updated_at = EXCLUDED.updated_at`,
       [
         shot.id,
@@ -782,6 +792,8 @@ export async function saveShot(input) {
         JSON.stringify(shot.audioRefs ?? []),
         JSON.stringify(shot.characterLocks ?? []),
         JSON.stringify(shot.soundGeneration ?? {}),
+        shot.previewTrimInMs,
+        shot.previewTrimOutMs,
         shot.createdAt,
         shot.updatedAt
       ]

@@ -924,6 +924,29 @@ struct ProjectWorkspaceScreen: View {
 #endif
     }
 
+    private func persistShotPreviewTrim(shotId: String, previewTrimInMs: Int?, previewTrimOutMs: Int?) async {
+        guard let selectedProjectId else { return }
+        model.errorMessage = nil
+        do {
+            let shot = try await api.patchShot(
+                token: model.bearerToken,
+                projectId: selectedProjectId,
+                shotId: shotId,
+                previewTrimInMs: previewTrimInMs,
+                previewTrimOutMs: previewTrimOutMs
+            )
+            await MainActor.run {
+                if let idx = shots.firstIndex(where: { $0.id == shotId }) {
+                    shots[idx] = shot
+                }
+            }
+        } catch {
+            await MainActor.run {
+                model.errorMessage = error.localizedDescription
+            }
+        }
+    }
+
     private var shotsForEditorDisplay: [Shot] {
         shots.map { shot in
             if let clipUrl = shot.clipUrl,
@@ -1030,6 +1053,9 @@ struct ProjectWorkspaceScreen: View {
             onAddAudioTrack: { Task { await addEmptyAudioLane() } },
             onEnsureVideoLaneSlot: { lane in await ensureVideoLaneSlot(laneIndex: lane) },
             onRefreshStatusDetails: { await refreshGenerationStatusSnapshot() },
+            onPersistShotPreviewTrim: { shotId, inMs, outMs in
+                await persistShotPreviewTrim(shotId: shotId, previewTrimInMs: inMs, previewTrimOutMs: outMs)
+            },
             isPreviewFullscreen: $isPreviewFullscreen,
             mobileEditorPresentedPanel: mobileEditorPresentedPanelBinding
         )
@@ -2624,7 +2650,9 @@ struct ProjectWorkspaceScreen: View {
                     thumbnailUrl: shot.thumbnailUrl,
                     audioRefs: shot.audioRefs,
                     characterLocks: shot.characterLocks,
-                    soundGeneration: shot.soundGeneration
+                    soundGeneration: shot.soundGeneration,
+                    previewTrimInMs: shot.previewTrimInMs,
+                    previewTrimOutMs: shot.previewTrimOutMs
                 )
             }
             if event.status == "ready" {
@@ -3777,6 +3805,8 @@ struct ProjectDetailScreen: View {
     /// Video mode: create empty audio lane at index 0 or 1 for timeline layering.
     let onEnsureVideoLaneSlot: (Int) async -> Void
     let onRefreshStatusDetails: () async -> Void
+    /// Saves preview trim (ms) for a shot after handle edits.
+    let onPersistShotPreviewTrim: (String, Int?, Int?) async -> Void
     /// When true, center preview fills the top workspace (side columns hidden).
     @Binding var isPreviewFullscreen: Bool
     @Binding var mobileEditorPresentedPanel: MobileEditorPresentedPanel?
@@ -4577,7 +4607,8 @@ struct ProjectDetailScreen: View {
                 showTooltips: showTooltips,
                 isCollapsed: $collapsePreviewPanel,
                 isPoppedOut: false,
-                onTogglePopout: { isPreviewPoppedOut.toggle() }
+                onTogglePopout: { isPreviewPoppedOut.toggle() },
+                onPersistShotPreviewTrim: onPersistShotPreviewTrim
             )
         }
     }
@@ -4606,7 +4637,8 @@ struct ProjectDetailScreen: View {
                 showTooltips: showTooltips,
                 isCollapsed: .constant(false),
                 isPoppedOut: true,
-                onTogglePopout: { isPreviewPoppedOut = false }
+                onTogglePopout: { isPreviewPoppedOut = false },
+                onPersistShotPreviewTrim: onPersistShotPreviewTrim
             )
         }
     }
@@ -5325,6 +5357,8 @@ struct HorizontalTimelineTrack: View {
     @State private var dragTargetIndex: Int?
     @State private var hiddenShotIds: Set<String> = []
     @State private var trimByShotId: [String: ClosedRange<Double>] = [:]
+    /// Measured media duration (seconds) per shot when `playbackURL` resolves; overrides `durationSec` for card width + ruler.
+    @State private var measuredDurationSecondsByShotId: [String: Double] = [:]
 
     private var clipDensity: TimelineClipDensity {
         TimelineClipDensity(rawValue: clipDensityRaw) ?? .large
@@ -5429,8 +5463,41 @@ struct HorizontalTimelineTrack: View {
         }
     }
 
+    private func effectiveDurationSeconds(for shot: Shot) -> Double {
+        if let m = measuredDurationSecondsByShotId[shot.id], m > 0.25 {
+            return m
+        }
+        return Double(max(shot.durationSec ?? 5, 1))
+    }
+
     private func totalTimelineDurationSeconds(for shots: [Shot]) -> Int {
-        shots.reduce(0) { $0 + max($1.durationSec ?? 5, 1) }
+        let sum = shots.reduce(0.0) { $0 + effectiveDurationSeconds(for: $1) }
+        return max(1, Int(ceil(sum)))
+    }
+
+#if canImport(AVFoundation)
+    private func refreshMeasuredDurations() async {
+        var next: [String: Double] = [:]
+        for shot in visibleShots {
+            guard let url = shot.playbackURL(localRecords: localFileRecordsByRemoteURL) else { continue }
+            let asset = AVURLAsset(url: url)
+            do {
+                let seconds = try await asset.load(.duration).seconds
+                if seconds.isFinite, seconds > 0.25 {
+                    next[shot.id] = seconds
+                }
+            } catch {
+                continue
+            }
+        }
+        await MainActor.run {
+            measuredDurationSecondsByShotId = next
+        }
+    }
+#endif
+
+    private var measurementSignature: String {
+        visibleShots.map { "\($0.id):\($0.clipUrl ?? "")" }.joined(separator: "|")
     }
 
     /// Ruler and clip row share one horizontal scroll width so the playhead aligns with time marks.
@@ -5523,6 +5590,11 @@ struct HorizontalTimelineTrack: View {
                 .frame(width: stripW, alignment: .leading)
                 .padding(.vertical, clipVisualStyle == .audioWaveform ? 2 : CinefuseTokens.Spacing.xxs)
             }
+#if canImport(AVFoundation)
+            .task(id: measurementSignature) {
+                await refreshMeasuredDurations()
+            }
+#endif
         }
         .frame(height: timelineTrackScrollableHeight)
     }
@@ -5699,7 +5771,9 @@ struct HorizontalTimelineTrack: View {
             thumbnailUrl: source.thumbnailUrl,
             audioRefs: source.audioRefs,
             characterLocks: source.characterLocks,
-            soundGeneration: source.soundGeneration
+            soundGeneration: source.soundGeneration,
+            previewTrimInMs: source.previewTrimInMs,
+            previewTrimOutMs: source.previewTrimOutMs
         )
         var updated = displayedShots
         updated.insert(duplicate, at: min(index + 1, updated.count))
@@ -5811,7 +5885,7 @@ struct HorizontalTimelineTrack: View {
             return clipVisualStyle == .audioWaveform ? audioMin : videoMin
         }()
         let maxW: CGFloat = clipVisualStyle == .audioWaveform ? 440 : 560
-        let durations = shots.map { Double(max($0.durationSec ?? 5, 1)) }
+        let durations = shots.map { effectiveDurationSeconds(for: $0) }
         let totalDur = durations.reduce(0, +)
         guard totalDur > 0 else {
             return shots.map { _ in fallback }
@@ -5907,11 +5981,19 @@ struct TimelineClipCard: View {
         }
     }
 
+    /// Video timeline: show waveform instead of thumbnail when `clipUrl` looks like an audio artifact.
+    private var showsWaveformOnVideoTimeline: Bool {
+        clipVisualStyle == .videoThumbnail
+            && shot.isLikelyAudioClipArtifact()
+            && shot.status.lowercased() == "ready"
+            && playbackFileURL != nil
+    }
+
     /// Waveform view includes fill + line; hide the legacy vertical overlay to avoid double playheads.
     private var shouldUseTimelineWaveformPlayhead: Bool {
-        guard isAudioTimelineCard else { return false }
         guard shot.status.lowercased() == "ready" else { return false }
-        return !waveformPeaks.isEmpty
+        guard !waveformPeaks.isEmpty else { return false }
+        return isAudioTimelineCard || showsWaveformOnVideoTimeline
     }
 
     private var waveformBucketCount: Int {
@@ -5927,7 +6009,7 @@ struct TimelineClipCard: View {
     }
 
     private var waveformTaskIdentity: String {
-        "\(shot.id)|\(playbackFileURL?.absoluteString ?? "")|\(clipDensity.rawValue)|\(Int(resolvedCardWidth))"
+        "\(shot.id)|\(playbackFileURL?.absoluteString ?? "")|\(clipDensity.rawValue)|\(Int(resolvedCardWidth))|\(clipVisualStyle == .audioWaveform ? "a" : "v")|\(shot.isLikelyAudioClipArtifact())"
     }
 
     private var contentHorizontalPadding: CGFloat {
@@ -5955,7 +6037,7 @@ struct TimelineClipCard: View {
             ZStack {
                 RoundedRectangle(cornerRadius: CinefuseTokens.Radius.small)
                     .fill(CinefuseTokens.ColorRole.surfaceSecondary)
-                if clipVisualStyle == .audioWaveform {
+                if clipVisualStyle == .audioWaveform || showsWaveformOnVideoTimeline {
                     if shouldUseTimelineWaveformPlayhead {
                         AudioWaveformWithPlayhead(
                             peaks: waveformPeaks,
@@ -6118,9 +6200,9 @@ struct TimelineClipCard: View {
             }
         }
         .task(id: waveformTaskIdentity) {
-            guard isAudioTimelineCard,
-                  shot.status.lowercased() == "ready",
-                  let url = playbackFileURL
+            guard shot.status.lowercased() == "ready",
+                  let url = playbackFileURL,
+                  isAudioTimelineCard || showsWaveformOnVideoTimeline
             else {
                 waveformPeaks = []
                 return
@@ -6217,7 +6299,7 @@ struct TimelineClipCard: View {
             ZStack {
                 RoundedRectangle(cornerRadius: CinefuseTokens.Radius.medium)
                     .fill(cardFillColor)
-                if clipVisualStyle == .audioWaveform {
+                if clipVisualStyle == .audioWaveform || showsWaveformOnVideoTimeline {
                     Group {
                         if shouldUseTimelineWaveformPlayhead {
                             AudioWaveformWithPlayhead(
@@ -6333,6 +6415,8 @@ struct EditorPreviewPanel: View {
     @Binding var isCollapsed: Bool
     let isPoppedOut: Bool
     let onTogglePopout: () -> Void
+    /// Persist preview trim to the API (`nil` clears stored trim = full length).
+    let onPersistShotPreviewTrim: (String, Int?, Int?) async -> Void
     @EnvironmentObject private var editorPlaybackState: EditorPlaybackState
     @State private var queuePlayer = AVQueuePlayer()
     @AppStorage("cinefuse.editor.preview.loopEnabled") private var loopPreviewEnabled = true
@@ -6343,6 +6427,20 @@ struct EditorPreviewPanel: View {
     /// `nil` while classifying the selected clip (audio-only vs video).
     @State private var assetIsAudioOnly: Bool?
     @State private var waveformPeaks: [Float] = []
+    /// Matches `queuePlayer` item order for applying per-shot trim while sequencing.
+    @State private var playbackQueueShots: [Shot] = []
+    @State private var lastSequenceStartedFromSelection = false
+    @State private var trimStartFraction: Double = 0
+    @State private var trimEndFraction: Double = 1
+    @State private var previewAssetDurationSeconds: Double = 0
+    @State private var currentItemObservation: NSKeyValueObservation?
+    @State private var persistTrimTask: Task<Void, Never>?
+    @State private var lastPlaybackWasSequence = false
+
+    /// Trim handles edit the selection and are hidden while a multi-item queue is playing (trim differs per shot).
+    private var trimHandlesVisible: Bool {
+        queuePlayer.items().count <= 1
+    }
 
     private var waveformProgressFraction: Double {
         guard editorPlaybackState.durationSeconds > 0 else { return 0 }
@@ -6362,6 +6460,96 @@ struct EditorPreviewPanel: View {
         }
         return playableShots.first
     }
+
+    private func syncTrimFractionsFromSelectedShot() {
+        guard let shot = selectedShot, previewAssetDurationSeconds > 0.25 else { return }
+        let durMs = previewAssetDurationSeconds * 1000
+        let inMs = shot.previewTrimInMs.map(Double.init) ?? 0
+        let outMs = shot.previewTrimOutMs.map(Double.init) ?? durMs
+        trimStartFraction = max(0, min(1, inMs / durMs))
+        trimEndFraction = max(trimStartFraction + 0.0001, min(1, outMs / durMs))
+        editorPlaybackState.setPreviewTrim(startFraction: trimStartFraction, endFraction: trimEndFraction)
+    }
+
+    private func previewTrimMsFromFractions() -> (Int?, Int?) {
+        guard previewAssetDurationSeconds > 0.25 else { return (nil, nil) }
+        let durMs = previewAssetDurationSeconds * 1000
+        let fullRange = trimStartFraction <= 0.002 && trimEndFraction >= 0.998
+        if fullRange {
+            return (nil, nil)
+        }
+        let inMs = Int((trimStartFraction * durMs).rounded())
+        let outMs = Int((trimEndFraction * durMs).rounded())
+        guard outMs > inMs else { return (nil, nil) }
+        return (inMs, outMs)
+    }
+
+    private func schedulePersistPreviewTrim() {
+        guard let shotId = selectedShot?.id else { return }
+        persistTrimTask?.cancel()
+        persistTrimTask = Task {
+            try? await Task.sleep(nanoseconds: 450_000_000)
+            guard !Task.isCancelled else { return }
+            let pair = previewTrimMsFromFractions()
+            await onPersistShotPreviewTrim(shotId, pair.0, pair.1)
+        }
+    }
+
+#if canImport(AVFoundation)
+    /// Applies editor trim sliders to the current item (selected-shot preview).
+    private func applyPlaybackTrimFromEditorState() {
+        guard let item = queuePlayer.currentItem else { return }
+        let seconds = previewAssetDurationSeconds > 0.25
+            ? previewAssetDurationSeconds
+            : item.duration.seconds
+        guard seconds.isFinite, seconds > 0.25 else { return }
+        previewAssetDurationSeconds = seconds
+        let startAbs = trimStartFraction * seconds
+        let endAbs = trimEndFraction * seconds
+        editorPlaybackState.setPreviewTrim(startFraction: trimStartFraction, endFraction: trimEndFraction)
+        item.forwardPlaybackEndTime = CMTime(seconds: endAbs, preferredTimescale: 600)
+        item.seek(
+            to: CMTime(seconds: startAbs, preferredTimescale: 600),
+            toleranceBefore: CMTime(seconds: 0.05, preferredTimescale: 600),
+            toleranceAfter: CMTime(seconds: 0.05, preferredTimescale: 600)
+        )
+    }
+
+    /// Applies persisted shot trim while advancing the queue (does not move the on-screen handles).
+    private func applyPlaybackTrim(for shot: Shot, item: AVPlayerItem, assetSeconds: Double) {
+        guard assetSeconds.isFinite, assetSeconds > 0.25 else { return }
+        let durMs = assetSeconds * 1000
+        let inMs = shot.previewTrimInMs.map(Double.init) ?? 0
+        let outMs = shot.previewTrimOutMs.map(Double.init) ?? durMs
+        let ts = max(0, min(1, inMs / durMs))
+        let te = max(ts + 0.0001, min(1, outMs / durMs))
+        editorPlaybackState.setPreviewTrim(startFraction: ts, endFraction: te)
+        item.forwardPlaybackEndTime = CMTime(seconds: te * assetSeconds, preferredTimescale: 600)
+        item.seek(
+            to: CMTime(seconds: ts * assetSeconds, preferredTimescale: 600),
+            toleranceBefore: CMTime(seconds: 0.05, preferredTimescale: 600),
+            toleranceAfter: CMTime(seconds: 0.05, preferredTimescale: 600)
+        )
+    }
+
+    private func observeQueueCurrentItem() {
+        currentItemObservation?.invalidate()
+        currentItemObservation = queuePlayer.observe(\.currentItem, options: [.initial, .new]) { _, _ in
+            Task { @MainActor in
+                guard let item = queuePlayer.currentItem else { return }
+                let loaded = try? await item.asset.load(.duration)
+                let sec = loaded?.seconds ?? item.duration.seconds
+                guard sec.isFinite, sec > 0.25 else { return }
+                if let idx = queuePlayer.items().firstIndex(where: { $0 === item }),
+                   idx < playbackQueueShots.count {
+                    let shot = playbackQueueShots[idx]
+                    applyPlaybackTrim(for: shot, item: item, assetSeconds: sec)
+                }
+                attachPlaybackState()
+            }
+        }
+    }
+#endif
 
     var body: some View {
         SectionCard(
@@ -6397,6 +6585,25 @@ struct EditorPreviewPanel: View {
                                         .padding(.horizontal, CinefuseTokens.Spacing.s)
                                         .padding(.vertical, CinefuseTokens.Spacing.s)
                                     }
+                                    if trimHandlesVisible {
+                                        PreviewTrimHandlesOverlay(
+                                            trimStartFraction: $trimStartFraction,
+                                            trimEndFraction: $trimEndFraction,
+                                            onDragEnded: {
+                                                editorPlaybackState.setPreviewTrim(
+                                                    startFraction: trimStartFraction,
+                                                    endFraction: trimEndFraction
+                                                )
+#if canImport(AVFoundation)
+                                                applyPlaybackTrimFromEditorState()
+#endif
+                                                schedulePersistPreviewTrim()
+                                            }
+                                        )
+                                        .padding(.horizontal, CinefuseTokens.Spacing.s)
+                                        .padding(.vertical, CinefuseTokens.Spacing.s)
+                                        .allowsHitTesting(true)
+                                    }
                                 }
                                 .frame(minHeight: 112)
                                 PlaybackTimeLabels(playback: editorPlaybackState)
@@ -6406,9 +6613,28 @@ struct EditorPreviewPanel: View {
                                     .allowsHitTesting(false)
                             }
                         } else {
-                            InlinePreviewPlayerSurface(player: queuePlayer)
-                                .frame(minHeight: 280)
-                                .clipShape(RoundedRectangle(cornerRadius: CinefuseTokens.Radius.medium))
+                            ZStack {
+                                InlinePreviewPlayerSurface(player: queuePlayer)
+                                    .frame(minHeight: 280)
+                                    .clipShape(RoundedRectangle(cornerRadius: CinefuseTokens.Radius.medium))
+                                if trimHandlesVisible {
+                                    PreviewTrimHandlesOverlay(
+                                        trimStartFraction: $trimStartFraction,
+                                        trimEndFraction: $trimEndFraction,
+                                        onDragEnded: {
+                                            editorPlaybackState.setPreviewTrim(
+                                                startFraction: trimStartFraction,
+                                                endFraction: trimEndFraction
+                                            )
+#if canImport(AVFoundation)
+                                            applyPlaybackTrimFromEditorState()
+#endif
+                                            schedulePersistPreviewTrim()
+                                        }
+                                    )
+                                    .padding(CinefuseTokens.Spacing.s)
+                                }
+                            }
 
                             PlaybackTimeLabels(playback: editorPlaybackState)
                         }
@@ -6416,14 +6642,20 @@ struct EditorPreviewPanel: View {
 
                     HStack(spacing: CinefuseTokens.Spacing.s) {
                         IconCommandButton(
+                            systemName: "arrowtriangle.forward.circle",
+                            label: "Play all clips from the start",
+                            action: { playSequence(fromSelected: false) },
+                            tooltipEnabled: showTooltips
+                        )
+                        IconCommandButton(
                             systemName: "play.fill",
-                            label: "Play sequence",
+                            label: "Play from selection through end",
                             action: { playSequence(fromSelected: true) },
                             tooltipEnabled: showTooltips
                         )
                         IconCommandButton(
                             systemName: "play.square.fill",
-                            label: "Play selected clip",
+                            label: "Play selected clip only",
                             action: { playSelectedOnly() },
                             tooltipEnabled: showTooltips
                         )
@@ -6485,11 +6717,19 @@ struct EditorPreviewPanel: View {
                 selectedShotId = playableShots.first?.id
             }
             configureLoopObserver()
+#if canImport(AVFoundation)
+            observeQueueCurrentItem()
+#endif
             playSelectedOnly()
             attachPlaybackState()
         }
         .onDisappear {
             removeLoopObserver()
+            persistTrimTask?.cancel()
+#if canImport(AVFoundation)
+            currentItemObservation?.invalidate()
+            currentItemObservation = nil
+#endif
         }
         .onChange(of: loopPreviewEnabled) { _, _ in
             configureLoopObserver()
@@ -6541,13 +6781,26 @@ struct EditorPreviewPanel: View {
             await MainActor.run {
                 assetIsAudioOnly = nil
                 waveformPeaks = []
+                previewAssetDurationSeconds = 0
             }
             return
         }
+        let asset = AVURLAsset(url: url)
+        let dur = try? await asset.load(.duration)
+        let sec = dur?.seconds ?? 0
         if Self.urlLooksAudioOnly(url) {
             await MainActor.run { assetIsAudioOnly = true }
             let peaks = (try? await WaveformPeakLoader.loadPeaks(from: url)) ?? []
-            await MainActor.run { waveformPeaks = peaks }
+            await MainActor.run {
+                waveformPeaks = peaks
+                if sec.isFinite, sec > 0.25 {
+                    previewAssetDurationSeconds = sec
+                }
+                syncTrimFractionsFromSelectedShot()
+                if queuePlayer.items().count <= 1 {
+                    applyPlaybackTrimFromEditorState()
+                }
+            }
             return
         }
         await MainActor.run { assetIsAudioOnly = nil }
@@ -6561,12 +6814,20 @@ struct EditorPreviewPanel: View {
         await MainActor.run {
             assetIsAudioOnly = audioOnly
             waveformPeaks = peaks
+            if sec.isFinite, sec > 0.25 {
+                previewAssetDurationSeconds = sec
+            }
+            syncTrimFractionsFromSelectedShot()
+            if queuePlayer.items().count <= 1 {
+                applyPlaybackTrimFromEditorState()
+            }
         }
     }
 #endif
 
     private func attachPlaybackState() {
         editorPlaybackState.attach(player: queuePlayer, shotId: selectedShot?.id)
+        editorPlaybackState.setPreviewTrim(startFraction: trimStartFraction, endFraction: trimEndFraction)
     }
 
     private func playSequence(fromSelected: Bool) {
@@ -6582,6 +6843,9 @@ struct EditorPreviewPanel: View {
         }
         queuePlayer.pause()
         queuePlayer.removeAllItems()
+        playbackQueueShots = sequence
+        lastPlaybackWasSequence = true
+        lastSequenceStartedFromSelection = fromSelected
         for item in items {
             queuePlayer.insert(item, after: nil)
         }
@@ -6600,6 +6864,8 @@ struct EditorPreviewPanel: View {
         }
         queuePlayer.pause()
         queuePlayer.removeAllItems()
+        playbackQueueShots = [selected]
+        lastPlaybackWasSequence = false
         queuePlayer.insert(AVPlayerItem(url: url), after: nil)
         startPlayback()
         attachPlaybackState()
@@ -6616,7 +6882,12 @@ struct EditorPreviewPanel: View {
             object: nil,
             queue: .main
         ) { _ in
-            playSelectedOnly()
+            guard queuePlayer.items().isEmpty else { return }
+            if lastPlaybackWasSequence {
+                playSequence(fromSelected: lastSequenceStartedFromSelection)
+            } else {
+                playSelectedOnly()
+            }
         }
     }
 

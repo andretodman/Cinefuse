@@ -833,6 +833,27 @@ public struct APIClient {
         try validate(response: response, data: data)
     }
 
+    /// Partial update (e.g. preview trim). Sends JSON null when optional is nil to clear stored trim.
+    public func patchShot(
+        token: String,
+        projectId: String,
+        shotId: String,
+        previewTrimInMs: Int?,
+        previewTrimOutMs: Int?
+    ) async throws -> Shot {
+        var request = URLRequest(url: buildURL(path: "\(Self.cinefusePrefix)/projects/\(projectId)/shots/\(shotId)"))
+        request.httpMethod = "PATCH"
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        var body: [String: Any] = [:]
+        body["previewTrimInMs"] = previewTrimInMs as Any
+        body["previewTrimOutMs"] = previewTrimOutMs as Any
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        let (data, response) = try await URLSession.shared.data(for: request)
+        try validate(response: response, data: data)
+        return try JSONDecoder().decode(CreateShotResponse.self, from: data).shot
+    }
+
     public func listJobs(token: String, projectId: String) async throws -> [Job] {
         var request = URLRequest(url: buildURL(path: "\(Self.cinefusePrefix)/projects/\(projectId)/jobs"))
         request.httpMethod = "GET"

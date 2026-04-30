@@ -2041,6 +2041,31 @@ export function createHttpServer() {
       });
       return json(response, 201, { shot });
     }
+    if (shotDetailMatch && method === "PATCH") {
+      const projectId = decodeURIComponent(shotDetailMatch[1]);
+      const shotId = decodeURIComponent(shotDetailMatch[2]);
+      const project = await getProject(projectId, auth.userId);
+      if (!project) {
+        return writeError(response, 404, "project not found", "PROJECT_NOT_FOUND");
+      }
+      const existing = await getShot(shotId, projectId);
+      if (!existing) {
+        return writeError(response, 404, "shot not found", "SHOT_NOT_FOUND");
+      }
+      const payload = await readBody(request);
+      const merged = await saveShot({
+        ...existing,
+        previewTrimInMs:
+          payload.previewTrimInMs !== undefined ? payload.previewTrimInMs : existing.previewTrimInMs,
+        previewTrimOutMs:
+          payload.previewTrimOutMs !== undefined ? payload.previewTrimOutMs : existing.previewTrimOutMs
+      });
+      publishProjectEvent(projectId, {
+        type: "shot_updated",
+        shotId
+      });
+      return json(response, 200, { shot: merged });
+    }
     if (shotDetailMatch && method === "DELETE") {
       const projectId = decodeURIComponent(shotDetailMatch[1]);
       const shotId = decodeURIComponent(shotDetailMatch[2]);

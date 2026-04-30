@@ -58,6 +58,10 @@ public struct Shot: Codable, Identifiable {
     public let audioRefs: [String]?
     public let characterLocks: [String]?
     public let soundGeneration: ShotSoundGeneration?
+    /// Preview trim start in milliseconds from file start (nil = 0).
+    public let previewTrimInMs: Int?
+    /// Preview trim end in milliseconds from file start (nil = play to natural end).
+    public let previewTrimOutMs: Int?
 }
 
 public struct StoryScene: Codable, Identifiable {
@@ -179,8 +183,17 @@ extension Shot {
             thumbnailUrl: thumbnailUrl,
             audioRefs: audioRefs,
             characterLocks: characterLocks,
-            soundGeneration: soundGeneration
+            soundGeneration: soundGeneration,
+            previewTrimInMs: previewTrimInMs,
+            previewTrimOutMs: previewTrimOutMs
         )
+    }
+
+    /// True when `clipUrl` looks like a generated audio artifact (timeline waveform in video mode).
+    public func isLikelyAudioClipArtifact() -> Bool {
+        let clip = clipUrl?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !clip.isEmpty else { return false }
+        return Self.clipUrlLikelyAudioArtifact(clip)
     }
 
     /// Shots that participate in the sound timeline and audio preview: linked `audioRefs`, an audio lane with a source URL scoped to this shot, **or** a generated audio artifact on `clipUrl` (score/dialogue/SFX with no lane row yet).

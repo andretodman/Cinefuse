@@ -215,14 +215,14 @@ struct PlaybackTimeLabels: View {
 
     var body: some View {
         HStack(spacing: CinefuseTokens.Spacing.xxs) {
-            Text(Self.formatClock(playback.currentTimeSeconds))
+            Text(Self.formatClock(playback.labelCurrentSeconds))
                 .font(CinefuseTokens.Typography.nano)
                 .foregroundStyle(CinefuseTokens.ColorRole.textSecondary)
                 .monospacedDigit()
             Text("/")
                 .font(CinefuseTokens.Typography.nano)
                 .foregroundStyle(CinefuseTokens.ColorRole.textSecondary.opacity(0.75))
-            Text(Self.formatClock(playback.durationSeconds))
+            Text(Self.formatClock(playback.labelDurationSeconds))
                 .font(CinefuseTokens.Typography.nano)
                 .foregroundStyle(CinefuseTokens.ColorRole.textSecondary)
                 .monospacedDigit()
@@ -245,5 +245,67 @@ enum CinefuseDurationFormatting {
         let m = s / 60
         let r = s % 60
         return String(format: "%d:%02d", m, r)
+    }
+}
+
+/// Yellow in/out trim handles (normalized `0...1` along media width).
+struct PreviewTrimHandlesOverlay: View {
+    @Binding var trimStartFraction: Double
+    @Binding var trimEndFraction: Double
+    var onDragEnded: () -> Void = {}
+
+    private let minGap: Double = 0.02
+
+    var body: some View {
+        GeometryReader { geo in
+            let w = max(geo.size.width, 1)
+            let h = geo.size.height
+            let x0 = CGFloat(trimStartFraction) * w
+            let x1 = CGFloat(trimEndFraction) * w
+            ZStack(alignment: .leading) {
+                Rectangle()
+                    .fill(Color.black.opacity(0.2))
+                    .frame(width: max(0, x0))
+                Rectangle()
+                    .fill(Color.black.opacity(0.2))
+                    .frame(width: max(0, w - x1))
+                    .offset(x: x1)
+                RoundedRectangle(cornerRadius: 2, style: .continuous)
+                    .fill(Color.yellow.opacity(0.95))
+                    .frame(width: 11, height: min(h, 132))
+                    .shadow(color: .black.opacity(0.35), radius: 2, x: 0, y: 1)
+                    .offset(x: x0 - 5.5, y: (h - min(h, 132)) / 2)
+                    .contentShape(Rectangle())
+                    .highPriorityGesture(
+                        DragGesture(minimumDistance: 0)
+                            .onChanged { value in
+                                let f = Double(value.location.x / w)
+                                let c = min(1, max(0, f))
+                                trimStartFraction = min(c, trimEndFraction - minGap)
+                            }
+                            .onEnded { _ in
+                                onDragEnded()
+                            }
+                    )
+                RoundedRectangle(cornerRadius: 2, style: .continuous)
+                    .fill(Color.yellow.opacity(0.95))
+                    .frame(width: 11, height: min(h, 132))
+                    .shadow(color: .black.opacity(0.35), radius: 2, x: 0, y: 1)
+                    .offset(x: x1 - 5.5, y: (h - min(h, 132)) / 2)
+                    .contentShape(Rectangle())
+                    .highPriorityGesture(
+                        DragGesture(minimumDistance: 0)
+                            .onChanged { value in
+                                let f = Double(value.location.x / w)
+                                let c = min(1, max(0, f))
+                                trimEndFraction = max(c, trimStartFraction + minGap)
+                            }
+                            .onEnded { _ in
+                                onDragEnded()
+                            }
+                    )
+            }
+        }
+        .allowsHitTesting(true)
     }
 }
