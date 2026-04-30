@@ -188,8 +188,16 @@ extension Shot {
     }
 
     /// Same as ``hasSoundContent`` plus: synced local file under `clipUrl` looks like audio (covers API URL quirks and manifest-only proof).
-    public func qualifiesForAudioModeLists(audioTracks: [AudioTrack], syncedLocalRecords: [String: LocalFileRecord]) -> Bool {
+    /// Pass ``audioJobs`` so sound-generation rows stay visible when ``clipUrl`` is a gateway `/files/{id}` URL with no extension (``clipUrlLikelyAudioArtifact`` false) and before sync completes.
+    public func qualifiesForAudioModeLists(
+        audioTracks: [AudioTrack],
+        syncedLocalRecords: [String: LocalFileRecord],
+        audioJobs: [Job] = []
+    ) -> Bool {
         if hasSoundContent(audioTracks: audioTracks) {
+            return true
+        }
+        if Self.shotHasEligibleAudioPipelineJob(jobs: audioJobs, shotId: id) {
             return true
         }
         guard let clip = clipUrl?.trimmingCharacters(in: .whitespacesAndNewlines), !clip.isEmpty else {
@@ -204,6 +212,15 @@ extension Shot {
         }
         let lower = path.lowercased()
         return [".wav", ".mp3", ".m4a", ".aac", ".flac", ".ogg"].contains { lower.hasSuffix($0) }
+    }
+
+    /// Non-failed ``kind == "audio"`` jobs for this shot keep the sound row on the timeline while URLs lack audio-looking paths.
+    private static func shotHasEligibleAudioPipelineJob(jobs: [Job], shotId: String) -> Bool {
+        jobs.contains { job in
+            guard job.shotId == shotId, job.kind == "audio" else { return false }
+            let s = job.status.lowercased()
+            return s != "failed" && s != "cancelled"
+        }
     }
 
     /// True when `clipUrl` points at an audio file (generated sound pipeline) vs video.

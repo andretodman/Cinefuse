@@ -2844,12 +2844,20 @@ struct ProjectWorkspaceScreen: View {
             return leftIndex < rightIndex
         }
         var audible = sorted.filter {
-            $0.qualifiesForAudioModeLists(audioTracks: audioTracks, syncedLocalRecords: localFileRecordsByRemoteURL)
+            $0.qualifiesForAudioModeLists(
+                audioTracks: audioTracks,
+                syncedLocalRecords: localFileRecordsByRemoteURL,
+                audioJobs: jobs
+            )
         }
         audible.move(fromOffsets: from, toOffset: to)
         var qi = 0
         let merged = sorted.map { shot -> Shot in
-            if shot.qualifiesForAudioModeLists(audioTracks: audioTracks, syncedLocalRecords: localFileRecordsByRemoteURL) {
+            if shot.qualifiesForAudioModeLists(
+                audioTracks: audioTracks,
+                syncedLocalRecords: localFileRecordsByRemoteURL,
+                audioJobs: jobs
+            ) {
                 let next = audible[qi]
                 qi += 1
                 return next
@@ -3631,7 +3639,11 @@ struct ProjectDetailScreen: View {
 
     /// Timeline + preview: shot has API/audio linkage **or** synced local audio on disk for `clipUrl`.
     private func shotQualifiesForAudioTimeline(_ shot: Shot) -> Bool {
-        shot.qualifiesForAudioModeLists(audioTracks: audioTracks, syncedLocalRecords: localFileRecordsByRemoteURL)
+        shot.qualifiesForAudioModeLists(
+            audioTracks: audioTracks,
+            syncedLocalRecords: localFileRecordsByRemoteURL,
+            audioJobs: jobs
+        )
     }
 
     /// Sounds panel: include timeline-qualified shots **or** drafts / queued rows with no `clipUrl` yet.
@@ -3693,6 +3705,7 @@ struct ProjectDetailScreen: View {
             EditorAudioPreviewPanel(
                 shots: shotsForSoundOrVideoTimeline,
                 audioTracks: audioTracks,
+                audioJobs: jobs,
                 localFileRecordsByRemoteURL: localFileRecordsByRemoteURL,
                 selectedShotId: $selectedTimelineShotId,
                 playbackRequestToken: previewPlaybackRequestToken,
@@ -3721,6 +3734,7 @@ struct ProjectDetailScreen: View {
             EditorAudioPreviewPanel(
                 shots: shotsForSoundOrVideoTimeline,
                 audioTracks: audioTracks,
+                audioJobs: jobs,
                 localFileRecordsByRemoteURL: localFileRecordsByRemoteURL,
                 selectedShotId: $selectedTimelineShotId,
                 playbackRequestToken: previewPlaybackRequestToken,
@@ -5091,6 +5105,7 @@ struct EditorPreviewPanel: View {
 struct EditorAudioPreviewPanel: View {
     let shots: [Shot]
     let audioTracks: [AudioTrack]
+    let audioJobs: [Job]
     let localFileRecordsByRemoteURL: [String: LocalFileRecord]
     @Binding var selectedShotId: String?
     let playbackRequestToken: Int
@@ -5106,7 +5121,11 @@ struct EditorAudioPreviewPanel: View {
     private static let playbackRates: [Double] = [0.5, 0.75, 1.0, 1.25, 1.5, 2.0]
 
     private func shotMayPlayClipUrl(_ shot: Shot) -> Bool {
-        shot.qualifiesForAudioModeLists(audioTracks: audioTracks, syncedLocalRecords: localFileRecordsByRemoteURL)
+        shot.qualifiesForAudioModeLists(
+            audioTracks: audioTracks,
+            syncedLocalRecords: localFileRecordsByRemoteURL,
+            audioJobs: audioJobs
+        )
     }
 
     private var playableMediaURLs: [URL] {
