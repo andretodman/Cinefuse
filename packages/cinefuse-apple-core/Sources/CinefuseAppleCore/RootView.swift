@@ -987,60 +987,32 @@ struct ProjectWorkspaceScreen: View {
     }
 
     private var header: some View {
-        HStack(alignment: .top, spacing: CinefuseTokens.Spacing.s) {
+        HStack(alignment: .center, spacing: CinefuseTokens.Spacing.s) {
             PubfuseLogoBadge()
             Spacer(minLength: CinefuseTokens.Spacing.s)
-            ViewThatFits(in: .horizontal) {
-                HStack(spacing: CinefuseTokens.Spacing.s) {
-                    globalWorkspaceControls
-                    serverStatusBadge
-                    Label("Sparks: \(model.balance)", systemImage: "sparkles")
-                        .font(CinefuseTokens.Typography.label)
-                        .foregroundStyle(CinefuseTokens.ColorRole.textSecondary)
-                    if selectedProject == nil {
-                        Button {
-                            openCreateProjectSheet()
-                        } label: {
-                            Label("New Project", systemImage: "plus.square.on.square")
-                        }
-                        .buttonStyle(PrimaryActionButtonStyle())
-                        .keyboardShortcut("n", modifiers: [.command])
-                    }
+            HStack(alignment: .center, spacing: CinefuseTokens.Spacing.xs) {
+                serverStatusBadge
+                headerSparksLabel
+                globalWorkspaceControls
+                if selectedProject == nil {
                     Button {
+                        openCreateProjectSheet()
+                    } label: {
+                        Label("New Project", systemImage: "plus.square.on.square")
+                    }
+                    .buttonStyle(PrimaryActionButtonStyle())
+                    .keyboardShortcut("n", modifiers: [.command])
+                }
+                IconCommandButton(
+                    systemName: "door.left.hand.open",
+                    label: "Sign Out",
+                    action: {
                         closeProject()
                         model.signOut()
                         lastProjectId = ""
-                    } label: {
-                        Label("Sign Out", systemImage: "rectangle.portrait.and.arrow.right")
-                    }
-                    .buttonStyle(SecondaryActionButtonStyle())
-                }
-                VStack(alignment: .trailing, spacing: CinefuseTokens.Spacing.xs) {
-                    globalWorkspaceControls
-                    serverStatusBadge
-                    Label("Sparks: \(model.balance)", systemImage: "sparkles")
-                        .font(CinefuseTokens.Typography.label)
-                        .foregroundStyle(CinefuseTokens.ColorRole.textSecondary)
-                    HStack(spacing: CinefuseTokens.Spacing.s) {
-                        if selectedProject == nil {
-                            Button {
-                                openCreateProjectSheet()
-                            } label: {
-                                Label("New", systemImage: "plus.square.on.square")
-                            }
-                            .buttonStyle(PrimaryActionButtonStyle())
-                            .keyboardShortcut("n", modifiers: [.command])
-                        }
-                        Button {
-                            closeProject()
-                            model.signOut()
-                            lastProjectId = ""
-                        } label: {
-                            Label("Sign Out", systemImage: "rectangle.portrait.and.arrow.right")
-                        }
-                        .buttonStyle(SecondaryActionButtonStyle())
-                    }
-                }
+                    },
+                    tooltipEnabled: editorSettings.showTooltips
+                )
             }
             .padding(.horizontal, CinefuseTokens.Spacing.s)
             .padding(.vertical, CinefuseTokens.Spacing.xxs)
@@ -1055,28 +1027,44 @@ struct ProjectWorkspaceScreen: View {
         }
     }
 
+    private var headerSparksLabel: some View {
+        Label {
+            Text("Sparks: \(model.balance)")
+                .font(CinefuseTokens.Typography.caption)
+                .foregroundStyle(CinefuseTokens.ColorRole.textSecondary)
+        } icon: {
+            Image(systemName: "sparkles")
+                .font(CinefuseTokens.Typography.caption.weight(.medium))
+                .foregroundStyle(CinefuseTokens.ColorRole.textSecondary)
+        }
+        .labelStyle(.titleAndIcon)
+        .fixedSize(horizontal: true, vertical: false)
+    }
+
     private var globalWorkspaceControls: some View {
         HStack(spacing: CinefuseTokens.Spacing.xs) {
-            Picker("Creation", selection: $creationModeRaw) {
-                ForEach(CreationMode.allCases) { mode in
-                    Text(mode.label).tag(mode.rawValue)
+            HStack(spacing: CinefuseTokens.Spacing.xxs) {
+                Picker("Creation", selection: $creationModeRaw) {
+                    ForEach(CreationMode.allCases) { mode in
+                        Text(mode.label).tag(mode.rawValue)
+                    }
                 }
-            }
-            .pickerStyle(.menu)
-            .frame(minWidth: 120)
-            .tooltip("Video Creation or Audio Creation mode", enabled: editorSettings.showTooltips)
+                .pickerStyle(.menu)
+                .frame(minWidth: 100)
+                .tooltip("Video Creation or Audio Creation mode", enabled: editorSettings.showTooltips)
 
-            Picker("Workspace", selection: $workspacePresetRaw) {
-                ForEach(EditorWorkspacePreset.allCases) { preset in
-                    Text(preset.label).tag(preset.rawValue)
+                Picker("Workspace", selection: $workspacePresetRaw) {
+                    ForEach(EditorWorkspacePreset.allCases) { preset in
+                        Text(preset.label).tag(preset.rawValue)
+                    }
                 }
+                .pickerStyle(.menu)
+                .frame(minWidth: 124)
+                .onChange(of: workspacePresetRaw) { _, newValue in
+                    applyWorkspacePreset(newValue)
+                }
+                .tooltip("Choose workspace layout preset", enabled: editorSettings.showTooltips)
             }
-            .pickerStyle(.menu)
-            .frame(minWidth: CinefuseTokens.Control.jobPickerWidth)
-            .onChange(of: workspacePresetRaw) { _, newValue in
-                applyWorkspacePreset(newValue)
-            }
-            .tooltip("Choose workspace layout preset", enabled: editorSettings.showTooltips)
 
             IconCommandButton(
                 systemName: showLeftPane ? "sidebar.left" : "sidebar.left",
