@@ -237,3 +237,13 @@ struct PlaybackTimeLabels: View {
         return String(format: "%d:%02d", m, s)
     }
 }
+
+/// Whole-second duration as `m:ss` (matches preview clock labels).
+enum CinefuseDurationFormatting {
+    static func minutesSeconds(totalWholeSeconds: Int) -> String {
+        let s = max(0, totalWholeSeconds)
+        let m = s / 60
+        let r = s % 60
+        return String(format: "%d:%02d", m, r)
+    }
+}

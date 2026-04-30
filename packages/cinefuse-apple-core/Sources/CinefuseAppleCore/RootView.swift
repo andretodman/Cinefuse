@@ -8192,10 +8192,10 @@ struct ShotsPanel: View {
                     .font(CinefuseTokens.Typography.caption)
                     .foregroundStyle(CinefuseTokens.ColorRole.textSecondary)
                 Slider(value: $scoreDurationSeconds, in: 3...600, step: 1)
-                Text("\(Int(scoreDurationSeconds))s")
+                Text(CinefuseDurationFormatting.minutesSeconds(totalWholeSeconds: Int(scoreDurationSeconds)))
                     .font(CinefuseTokens.Typography.caption.monospacedDigit())
                     .foregroundStyle(CinefuseTokens.ColorRole.textSecondary)
-                    .frame(minWidth: 40, alignment: .trailing)
+                    .frame(minWidth: 44, alignment: .trailing)
             }
             Picker("Lyrics mode", selection: $scoreLyricsModeSelection) {
                 ForEach(ScoreGenerationLyricsMode.allCases) { mode in
