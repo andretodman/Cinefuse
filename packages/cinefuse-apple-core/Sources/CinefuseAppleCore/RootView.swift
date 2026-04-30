@@ -139,7 +139,7 @@ struct TimelineRulerStrip: View {
 
 struct LoginScreen: View {
     @Environment(AppModel.self) private var model
-    @AppStorage("cinefuse.server.mode") private var apiServerModeRaw = APIServerMode.local.rawValue
+    @AppStorage("cinefuse.server.mode") private var apiServerModeRaw = APIServerMode.production.rawValue
     @AppStorage("cinefuse.server.customBaseURL") private var customServerBaseURL = ""
     @AppStorage("cinefuse.auth.demoEmail") private var demoEmail = "tester@pubfuse.com"
     @AppStorage("cinefuse.auth.demoPassword") private var demoPassword = "pubfuseguest"
@@ -180,7 +180,7 @@ struct LoginScreen: View {
     }
 
     private var selectedCinefuseBaseURL: String {
-        switch APIServerMode(rawValue: apiServerModeRaw) ?? .local {
+        switch APIServerMode(rawValue: apiServerModeRaw) ?? .production {
         case .local:
             return localCinefuseBaseURL
         case .production:
@@ -768,7 +768,7 @@ struct ProjectWorkspaceScreen: View {
     /// Tracks clip-job progress per shot so long-running `generating` work doesn’t false-timeout when only `progressPct` moves.
     @State private var lastSyncedClipJobProgressByShotId: [String: Int] = [:]
     @State private var lastSyncedProgressByJobId: [String: Int] = [:]
-    @AppStorage("cinefuse.server.mode") private var apiServerModeRaw = APIServerMode.local.rawValue
+    @AppStorage("cinefuse.server.mode") private var apiServerModeRaw = APIServerMode.production.rawValue
     @AppStorage("cinefuse.server.customBaseURL") private var customServerBaseURL = ""
     @AppStorage("cinefuse.onboarding.completed") private var onboardingCompleted = false
 #if os(iOS)
@@ -787,7 +787,7 @@ struct ProjectWorkspaceScreen: View {
         ProcessInfo.processInfo.environment["CINEFUSE_API_PROD_BASE_URL"] ?? "https://cinefuse.pubfuse.com"
     }
     private var activeServerBaseURL: String {
-        switch APIServerMode(rawValue: apiServerModeRaw) ?? .local {
+        switch APIServerMode(rawValue: apiServerModeRaw) ?? .production {
         case .local:
             return localServerBaseURL
         case .production:
@@ -800,10 +800,10 @@ struct ProjectWorkspaceScreen: View {
         APIClient(baseURLString: activeServerBaseURL)
     }
     private var serverModeLabel: String {
-        (APIServerMode(rawValue: apiServerModeRaw) ?? .local).label
+        (APIServerMode(rawValue: apiServerModeRaw) ?? .production).label
     }
     private var requiresPubfuseJWTForActiveServer: Bool {
-        switch APIServerMode(rawValue: apiServerModeRaw) ?? .local {
+        switch APIServerMode(rawValue: apiServerModeRaw) ?? .production {
         case .local:
             return false
         case .production:
@@ -1279,7 +1279,7 @@ struct ProjectWorkspaceScreen: View {
             }
         }
         .onChange(of: customServerBaseURL) { _, _ in
-            guard (APIServerMode(rawValue: apiServerModeRaw) ?? .local) == .custom else { return }
+            guard (APIServerMode(rawValue: apiServerModeRaw) ?? .production) == .custom else { return }
             Task { await refreshServerHealth() }
         }
         .tint(timelineThemeMode.palette.accent)
@@ -1715,7 +1715,7 @@ struct ProjectWorkspaceScreen: View {
                         }
                     }
                     .pickerStyle(.menu)
-                    if (APIServerMode(rawValue: apiServerModeRaw) ?? .local) == .custom {
+                    if (APIServerMode(rawValue: apiServerModeRaw) ?? .production) == .custom {
                         TextField("https://your-server.example.com", text: $customServerBaseURL)
                             .textFieldStyle(.roundedBorder)
                             .transition(.opacity.combined(with: .move(edge: .top)))

@@ -555,7 +555,7 @@ public final class AppModel {
     }
 
     private var shouldUsePubfuseAccessTokenForSelectedServer: Bool {
-        let selectedServerMode = (userDefaults.string(forKey: "cinefuse.server.mode") ?? "local")
+        let selectedServerMode = (userDefaults.string(forKey: "cinefuse.server.mode") ?? "production")
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .lowercased()
         switch selectedServerMode {
