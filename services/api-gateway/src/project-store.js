@@ -269,6 +269,7 @@ function mapShotRow(row) {
     thumbnailUrl: row.thumbnail_url ?? null,
     audioRefs: row.audio_refs ?? [],
     characterLocks: row.character_locks ?? [],
+    soundGeneration: row.sound_generation && typeof row.sound_generation === "object" ? row.sound_generation : {},
     createdAt: row.created_at,
     updatedAt: row.updated_at
   };
@@ -728,6 +729,10 @@ export async function listShots(projectId) {
 export async function saveShot(input) {
   const existing = await getShot(input.id);
   const now = new Date().toISOString();
+  const soundGeneration =
+    input.soundGeneration !== undefined
+      ? input.soundGeneration ?? {}
+      : existing?.soundGeneration ?? {};
   const shot = {
     id: input.id,
     projectId: input.projectId,
@@ -740,6 +745,7 @@ export async function saveShot(input) {
     thumbnailUrl: input.thumbnailUrl ?? existing?.thumbnailUrl ?? null,
     audioRefs: input.audioRefs ?? existing?.audioRefs ?? [],
     characterLocks: input.characterLocks ?? existing?.characterLocks ?? [],
+    soundGeneration,
     createdAt: existing?.createdAt ?? input.createdAt ?? now,
     updatedAt: now
   };
@@ -747,8 +753,8 @@ export async function saveShot(input) {
   if (db) {
     await db.query(
       `INSERT INTO cinefuse_shots
-        (id, project_id, prompt, model_tier, status, clip_url, order_index, duration_sec, thumbnail_url, audio_refs, character_locks, created_at, updated_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11::jsonb,$12,$13)
+        (id, project_id, prompt, model_tier, status, clip_url, order_index, duration_sec, thumbnail_url, audio_refs, character_locks, sound_generation, created_at, updated_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11::jsonb,$12::jsonb,$13,$14)
        ON CONFLICT (id)
        DO UPDATE SET
         project_id = EXCLUDED.project_id,
@@ -761,6 +767,7 @@ export async function saveShot(input) {
         thumbnail_url = EXCLUDED.thumbnail_url,
         audio_refs = EXCLUDED.audio_refs,
         character_locks = EXCLUDED.character_locks,
+        sound_generation = EXCLUDED.sound_generation,
         updated_at = EXCLUDED.updated_at`,
       [
         shot.id,
@@ -774,6 +781,7 @@ export async function saveShot(input) {
         shot.thumbnailUrl,
         JSON.stringify(shot.audioRefs ?? []),
         JSON.stringify(shot.characterLocks ?? []),
+        JSON.stringify(shot.soundGeneration ?? {}),
         shot.createdAt,
         shot.updatedAt
       ]

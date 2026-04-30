@@ -677,6 +677,17 @@ export function createHttpServer() {
           soundUploadMode: uploadMode
         });
         const uploadCtx = resolveSoundGenerationUploadContext(task.projectId, task.userId);
+        const sg = currentShot.soundGeneration && typeof currentShot.soundGeneration === "object"
+          ? currentShot.soundGeneration
+          : {};
+        const lyricsMode =
+          typeof sg.lyricsMode === "string" && sg.lyricsMode.trim().length > 0
+            ? sg.lyricsMode.trim()
+            : undefined;
+        const lyricsText =
+          typeof sg.lyricsText === "string" && sg.lyricsText.trim().length > 0
+            ? sg.lyricsText.trim()
+            : undefined;
         const audioGeneration = await mcpHost.invoke("audio", "generate_score", {
           projectId: task.projectId,
           prompt: currentShot.prompt,
@@ -685,6 +696,8 @@ export function createHttpServer() {
           durationMs: Math.max(3000, Math.round((currentShot.durationSec ?? 5) * 1000)),
           shotId: task.shotId,
           userId: task.userId,
+          ...(lyricsMode ? { lyricsMode } : {}),
+          ...(lyricsText ? { lyricsText } : {}),
           ...uploadCtx
         });
         soundMcpInvokeResult = audioGeneration;
@@ -2020,7 +2033,11 @@ export function createHttpServer() {
         durationSec: payload.durationSec ?? null,
         audioRefs: payload.audioRefs ?? [],
         orderIndex: Number(payload.orderIndex ?? existingShots.length),
-        characterLocks: payload.characterLocks ?? []
+        characterLocks: payload.characterLocks ?? [],
+        soundGeneration:
+          payload.soundGeneration && typeof payload.soundGeneration === "object"
+            ? payload.soundGeneration
+            : {}
       });
       return json(response, 201, { shot });
     }

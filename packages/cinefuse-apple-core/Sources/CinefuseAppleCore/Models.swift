@@ -34,6 +34,17 @@ public enum CreationMode: String, CaseIterable, Identifiable, Sendable {
     }
 }
 
+/// Stored on draft shots created in Audio workspace; forwarded to `generate_score` when the shot is generated.
+public struct ShotSoundGeneration: Codable, Equatable, Sendable {
+    public let lyricsMode: String?
+    public let lyricsText: String?
+
+    public init(lyricsMode: String?, lyricsText: String?) {
+        self.lyricsMode = lyricsMode
+        self.lyricsText = lyricsText
+    }
+}
+
 public struct Shot: Codable, Identifiable {
     public let id: String
     public let projectId: String
@@ -46,6 +57,7 @@ public struct Shot: Codable, Identifiable {
     public let thumbnailUrl: String?
     public let audioRefs: [String]?
     public let characterLocks: [String]?
+    public let soundGeneration: ShotSoundGeneration?
 }
 
 public struct StoryScene: Codable, Identifiable {
@@ -166,7 +178,8 @@ extension Shot {
             durationSec: durationSec,
             thumbnailUrl: thumbnailUrl,
             audioRefs: audioRefs,
-            characterLocks: characterLocks
+            characterLocks: characterLocks,
+            soundGeneration: soundGeneration
         )
     }
 

@@ -2589,7 +2589,8 @@ struct ProjectWorkspaceScreen: View {
                     durationSec: shot.durationSec,
                     thumbnailUrl: shot.thumbnailUrl,
                     audioRefs: shot.audioRefs,
-                    characterLocks: shot.characterLocks
+                    characterLocks: shot.characterLocks,
+                    soundGeneration: shot.soundGeneration
                 )
             }
             if event.status == "ready" {
@@ -2734,14 +2735,23 @@ struct ProjectWorkspaceScreen: View {
     private func createShot() async {
         guard let selectedProjectId else { return }
         model.errorMessage = nil
+        if isAudioCreationWorkspace {
+            guard validateSoundCreationDraftForWorkspace() else { return }
+        }
         appendDebugEvent("create shot requested project=\(selectedProjectId)")
         do {
+            let durationSec: Int? = isAudioCreationWorkspace
+                ? Int(min(600, max(3, scoreDurationSeconds.rounded())))
+                : nil
+            let soundGeneration: ShotSoundGeneration? = soundGenerationPayloadForCreate()
             let createdShot = try await api.createShot(
                 token: model.bearerToken,
                 projectId: selectedProjectId,
                 prompt: shotPromptDraft,
                 modelTier: shotModelTierDraft,
-                characterLocks: selectedCharacterLockId.isEmpty ? [] : [selectedCharacterLockId]
+                characterLocks: selectedCharacterLockId.isEmpty ? [] : [selectedCharacterLockId],
+                durationSec: durationSec,
+                soundGeneration: soundGeneration
             )
             if !shots.contains(where: { $0.id == createdShot.id }) {
                 var updatedShots = shots
@@ -3315,6 +3325,44 @@ struct ProjectWorkspaceScreen: View {
             return draft
         }
         return audioTrackTitleDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// Same rules as the former standalone score action: style prompt required (except custom lyrics still need a style line).
+    private func validateSoundCreationDraftForWorkspace() -> Bool {
+        let style = scoreStylePromptForGeneration().trimmingCharacters(in: .whitespacesAndNewlines)
+        switch scoreLyricsModeSelection {
+        case .custom:
+            let lyrics = scoreCustomLyricsDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+            if lyrics.isEmpty {
+                model.errorMessage =
+                    "Add lyrics for custom mode, or switch to Instrumental or Lyrics (auto)."
+                return false
+            }
+            if style.isEmpty {
+                model.errorMessage = "Add a style prompt (shot or draft) for custom lyrics."
+                return false
+            }
+        case .instrumental, .auto:
+            if style.isEmpty {
+                model.errorMessage =
+                    "Add a prompt on the selected sound or in the draft so the score has a style."
+                return false
+            }
+        }
+        return true
+    }
+
+    private func soundGenerationPayloadForCreate() -> ShotSoundGeneration? {
+        guard isAudioCreationWorkspace else { return nil }
+        switch scoreLyricsModeSelection {
+        case .instrumental:
+            return ShotSoundGeneration(lyricsMode: "instrumental", lyricsText: nil)
+        case .auto:
+            return ShotSoundGeneration(lyricsMode: "auto", lyricsText: nil)
+        case .custom:
+            let lyrics = scoreCustomLyricsDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+            return ShotSoundGeneration(lyricsMode: "custom", lyricsText: lyrics)
+        }
     }
 
     private func generateScoreTrack() async {
@@ -4613,8 +4661,7 @@ struct ProjectDetailScreen: View {
                     showScoreGenerationControls: isAudioCreationWorkspace,
                     scoreDurationSeconds: $scoreDurationSeconds,
                     scoreLyricsModeSelection: $scoreLyricsModeSelection,
-                    scoreCustomLyricsDraft: $scoreCustomLyricsDraft,
-                    onGenerateScore: onGenerateScore
+                    scoreCustomLyricsDraft: $scoreCustomLyricsDraft
                 )
                 if isAudioCreationMode {
                     SectionCard(
@@ -5463,7 +5510,8 @@ struct HorizontalTimelineTrack: View {
             durationSec: source.durationSec,
             thumbnailUrl: source.thumbnailUrl,
             audioRefs: source.audioRefs,
-            characterLocks: source.characterLocks
+            characterLocks: source.characterLocks,
+            soundGeneration: source.soundGeneration
         )
         var updated = displayedShots
         updated.insert(duplicate, at: min(index + 1, updated.count))
@@ -7704,7 +7752,6 @@ struct ShotsPanel: View {
     @Binding var scoreDurationSeconds: Double
     @Binding var scoreLyricsModeSelection: ScoreGenerationLyricsMode
     @Binding var scoreCustomLyricsDraft: String
-    let onGenerateScore: () -> Void
     @State private var pendingDeleteShotId: String?
     @State private var selectedDiagnostics: ArtifactStatusPresentation?
     @State private var diagnosticsSheetShotId: String?
@@ -7954,17 +8001,9 @@ struct ShotsPanel: View {
         }
     }
 
-    /// Inline card above Quote / Create Sound: ElevenLabs Music score duration and lyrics mode.
+    /// Above Quote / Create Sound: duration and lyrics mode used when Create Sound is pressed (stored on the draft shot).
     private var scoreGenerationSoundCard: some View {
         VStack(alignment: .leading, spacing: CinefuseTokens.Spacing.s) {
-            Text("Score generation")
-                .font(CinefuseTokens.Typography.cardTitle)
-            Text(
-                "ElevenLabs Music. Style follows the selected sound or prompt draft. Lyrics (auto) may add vocals."
-            )
-            .font(CinefuseTokens.Typography.micro)
-            .foregroundStyle(CinefuseTokens.ColorRole.textSecondary)
-            .fixedSize(horizontal: false, vertical: true)
             HStack(spacing: CinefuseTokens.Spacing.s) {
                 Text("Duration")
                     .font(CinefuseTokens.Typography.caption)
@@ -7995,13 +8034,6 @@ struct ShotsPanel: View {
                 .textFieldStyle(.roundedBorder)
                 .font(CinefuseTokens.Typography.body)
             }
-            Button {
-                onGenerateScore()
-            } label: {
-                Label("Generate score", systemImage: "music.note")
-            }
-            .buttonStyle(PrimaryActionButtonStyle())
-            .tooltip("Generate background score with current settings", enabled: showTooltips)
         }
         .padding(CinefuseTokens.Spacing.s)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -8016,7 +8048,7 @@ struct ShotsPanel: View {
             title: panelMode == .audioSounds ? "Sounds" : "Shots",
             subtitle: panelMode == .audioSounds
                 ? (showScoreGenerationControls
-                    ? "Score card first: duration and instrumental vs lyrics. Then prompt, tier, Sound blueprints, Quote, Create Sound."
+                    ? "Duration and lyrics mode apply when you tap Create Sound. Then prompt, tier, Sound blueprints, Quote."
                     : "Tier row includes Sound blueprints (menu). Add reference files on the left panel only. Timeline selection scopes which sound’s blueprint set you edit.")
                 : "1: Draft shot 2: Quote cost 3: Generate 4: Review",
             isCollapsed: $isCollapsed

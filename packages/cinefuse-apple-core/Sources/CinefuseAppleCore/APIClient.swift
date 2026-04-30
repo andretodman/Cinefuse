@@ -686,7 +686,8 @@ public struct APIClient {
         status: String? = nil,
         clipUrl: String? = nil,
         audioRefs: [String]? = nil,
-        durationSec: Int? = nil
+        durationSec: Int? = nil,
+        soundGeneration: ShotSoundGeneration? = nil
     ) async throws -> Shot {
         var body: [String: Any] = [
             "prompt": prompt,
@@ -704,6 +705,10 @@ public struct APIClient {
         }
         if let durationSec {
             body["durationSec"] = durationSec
+        }
+        if let soundGeneration {
+            let enc = try JSONEncoder().encode(soundGeneration)
+            body["soundGeneration"] = try JSONSerialization.jsonObject(with: enc)
         }
         var request = URLRequest(url: buildURL(path: "\(Self.cinefusePrefix)/projects/\(projectId)/shots"))
         request.httpMethod = "POST"
