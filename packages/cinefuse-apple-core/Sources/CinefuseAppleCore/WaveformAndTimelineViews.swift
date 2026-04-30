@@ -85,11 +85,13 @@ struct AudioWaveformWithPlayhead: View {
     let peaks: [Float]
     let progressFraction: Double
     let onSeekFraction: (Double) -> Void
+    /// When false, waveform is display-only (e.g. timeline clip cards).
+    var interactive: Bool = true
 
     var body: some View {
         GeometryReader { geo in
             let w = geo.size.width
-            ZStack(alignment: .leading) {
+            let stack = ZStack(alignment: .leading) {
                 Canvas { context, size in
                     guard !peaks.isEmpty else { return }
                     let barW = max(1, size.width / CGFloat(peaks.count) - 1)
@@ -121,19 +123,24 @@ struct AudioWaveformWithPlayhead: View {
                     .offset(x: max(0, min(w - 2, w * CGFloat(progressFraction) - 1)))
             }
             .contentShape(Rectangle())
-            .gesture(
-                DragGesture(minimumDistance: 0)
-                    .onChanged { value in
-                        let x = value.location.x
-                        guard w > 0 else { return }
-                        onSeekFraction(Double(x / w))
-                    }
-                    .onEnded { value in
-                        let x = value.location.x
-                        guard w > 0 else { return }
-                        onSeekFraction(Double(x / w))
-                    }
-            )
+
+            if interactive {
+                stack.gesture(
+                    DragGesture(minimumDistance: 0)
+                        .onChanged { value in
+                            let x = value.location.x
+                            guard w > 0 else { return }
+                            onSeekFraction(Double(x / w))
+                        }
+                        .onEnded { value in
+                            let x = value.location.x
+                            guard w > 0 else { return }
+                            onSeekFraction(Double(x / w))
+                        }
+                )
+            } else {
+                stack
+            }
         }
     }
 }

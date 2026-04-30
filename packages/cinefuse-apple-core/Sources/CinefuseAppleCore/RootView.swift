@@ -61,53 +61,80 @@ public struct CinefuseRootView: View {
 #endif
 }
 
-struct TimelineRulerView: View {
-    let shots: [Shot]
-    let trimByShotId: [String: ClosedRange<Double>]
+/// Time ruler drawn at **exactly** `contentWidth` so it scrolls and aligns with proportional clip cards below.
+struct TimelineRulerStrip: View {
+    let totalSeconds: Int
+    let contentWidth: CGFloat
     let palette: CinefuseTokens.ThemePalette
 
-    private var totalDuration: Int {
-        shots.reduce(0) { $0 + max($1.durationSec ?? 5, 1) }
+    private var secondsTotal: Int {
+        max(totalSeconds, 1)
+    }
+
+    /// Avoid hundreds of tick views on very long timelines.
+    private var majorLabelStride: Int {
+        let T = secondsTotal
+        if T <= 120 { return 5 }
+        if T <= 600 { return 15 }
+        if T <= 3600 { return 60 }
+        return max(60, T / 14)
+    }
+
+    private var minorTickStride: Int {
+        secondsTotal <= 180 ? 1 : majorLabelStride / max(1, majorLabelStride / 5)
     }
 
     var body: some View {
-        GeometryReader { geometry in
-            let width = max(geometry.size.width, 1)
-            let seconds = max(totalDuration, 1)
-            let step = width / CGFloat(seconds)
-            ZStack(alignment: .bottomLeading) {
-                Rectangle()
-                    .fill(palette.timelineRuler.opacity(0.12))
-                HStack(alignment: .bottom, spacing: 0) {
-                    ForEach(0...seconds, id: \.self) { second in
-                        VStack(spacing: 0) {
-                            Rectangle()
-                                .fill(palette.timelineRuler.opacity(second % 5 == 0 ? 0.85 : 0.45))
-                                .frame(
-                                    width: 1,
-                                    height: second % 5 == 0
-                                        ? CinefuseTokens.Control.timelineNotchMajor
-                                        : CinefuseTokens.Control.timelineNotchMinor
-                                )
-                            if second % 5 == 0 {
-                                Text("\(second)s")
-                                    .font(CinefuseTokens.Typography.nano)
-                                    .foregroundStyle(CinefuseTokens.ColorRole.textSecondary.opacity(0.95))
-                                    .lineLimit(1)
-                                    .minimumScaleFactor(0.85)
-                            } else {
-                                Spacer(minLength: 0)
-                            }
-                        }
-                        .frame(width: step, alignment: .leading)
-                    }
+        let W = max(contentWidth, 1)
+        let T = CGFloat(secondsTotal)
+        ZStack(alignment: .bottomLeading) {
+            Rectangle()
+                .fill(palette.timelineRuler.opacity(0.12))
+            Canvas { context, size in
+                let majorH = CinefuseTokens.Control.timelineNotchMajor
+                let minorH = CinefuseTokens.Control.timelineNotchMinor
+                var s = 0
+                while s <= secondsTotal {
+                    let x = CGFloat(s) / T * size.width
+                    let isMajor = s % majorLabelStride == 0 || s == secondsTotal
+                    let h = isMajor ? majorH : minorH
+                    let opacity = isMajor ? 0.85 : 0.45
+                    let rect = CGRect(x: x - 0.25, y: size.height - h - 10, width: 1, height: h)
+                    context.fill(Path(rect), with: .color(palette.timelineRuler.opacity(opacity)))
+                    s += minorTickStride
                 }
-                .padding(.horizontal, CinefuseTokens.Spacing.xs)
-                .padding(.vertical, 2)
             }
-            .clipShape(RoundedRectangle(cornerRadius: CinefuseTokens.Radius.small))
+            .allowsHitTesting(false)
+            .padding(.bottom, 10)
+
+            ForEach(Array(stride(from: 0, through: secondsTotal, by: majorLabelStride)), id: \.self) { sec in
+                let x = CGFloat(sec) / T * W
+                Text("\(sec)s")
+                    .font(CinefuseTokens.Typography.nano)
+                    .foregroundStyle(CinefuseTokens.ColorRole.textSecondary.opacity(0.95))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.75)
+                    .frame(width: 36, alignment: .leading)
+                    .offset(x: x)
+                    .frame(maxHeight: .infinity, alignment: .bottom)
+                    .padding(.bottom, 1)
+            }
+            if secondsTotal > 0, secondsTotal % majorLabelStride != 0 {
+                let sec = secondsTotal
+                let x = CGFloat(sec) / T * W
+                Text("\(sec)s")
+                    .font(CinefuseTokens.Typography.nano)
+                    .foregroundStyle(CinefuseTokens.ColorRole.textSecondary.opacity(0.95))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.75)
+                    .frame(width: 36, alignment: .leading)
+                    .offset(x: x)
+                    .frame(maxHeight: .infinity, alignment: .bottom)
+                    .padding(.bottom, 1)
+            }
         }
-        .frame(height: CinefuseTokens.Control.timelineRulerHeight)
+        .frame(width: W, height: CinefuseTokens.Control.timelineRulerHeight)
+        .clipShape(RoundedRectangle(cornerRadius: CinefuseTokens.Radius.small))
     }
 }
 
