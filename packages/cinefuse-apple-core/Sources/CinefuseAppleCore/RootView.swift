@@ -6545,7 +6545,6 @@ struct EditorPreviewPanel: View {
                     let shot = playbackQueueShots[idx]
                     applyPlaybackTrim(for: shot, item: item, assetSeconds: sec)
                 }
-                attachPlaybackState()
             }
         }
     }
@@ -6751,6 +6750,12 @@ struct EditorPreviewPanel: View {
         .onChange(of: selectedShotId) { _, _ in
             playSelectedOnly()
             attachPlaybackState()
+        }
+        .onChange(of: selectedShot?.previewTrimInMs) { _, _ in
+            syncTrimFractionsFromSelectedShot()
+        }
+        .onChange(of: selectedShot?.previewTrimOutMs) { _, _ in
+            syncTrimFractionsFromSelectedShot()
         }
     }
 
