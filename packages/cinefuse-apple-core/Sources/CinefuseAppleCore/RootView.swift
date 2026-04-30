@@ -559,6 +559,9 @@ private struct ResetPasswordSheet: View {
 struct ProjectWorkspaceScreen: View {
     @Environment(AppModel.self) private var model
     @Environment(\.scenePhase) private var scenePhase
+#if os(iOS)
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+#endif
 
     @State private var titleDraft = ""
     @State private var isCreateProjectSheetPresented = false
@@ -622,6 +625,9 @@ struct ProjectWorkspaceScreen: View {
     @State private var localThumbnailURLByShotId: [String: URL] = [:]
     @State private var localThumbnailURLByJobId: [String: URL] = [:]
     @State private var debugEventLog: [String] = []
+#if os(iOS)
+    @State private var mobileEditorPresentedPanel: MobileEditorPresentedPanel?
+#endif
     @State private var shotRequestStateById: [String: RenderRequestState] = [:]
     @State private var jobRequestStateById: [String: RenderRequestState] = [:]
     /// Tracks clip-job progress per shot so long-running `generating` work doesn’t false-timeout when only `progressPct` moves.
@@ -691,6 +697,90 @@ struct ProjectWorkspaceScreen: View {
 
     private var isAudioCreationWorkspace: Bool {
         CreationMode(rawValue: creationModeRaw) == .audio
+    }
+
+#if os(iOS)
+    private var workspaceEditorLayoutTraits: EditorLayoutTraits {
+        EditorLayoutTraits.iOS(horizontalSizeClass: horizontalSizeClass)
+    }
+
+    private func leftPanelChromeAction() {
+        let traits = workspaceEditorLayoutTraits
+        if traits.useSheetBasedSidePanels {
+            if mobileEditorPresentedPanel == .leftInspector {
+                mobileEditorPresentedPanel = nil
+            } else {
+                showLeftPane = true
+                mobileEditorPresentedPanel = .leftInspector
+            }
+        } else {
+            withAnimation(CinefuseTokens.Motion.panel) {
+                showLeftPane.toggle()
+            }
+        }
+    }
+
+    private func rightPanelChromeAction() {
+        let traits = workspaceEditorLayoutTraits
+        if traits.useSheetBasedSidePanels {
+            if mobileEditorPresentedPanel == .rightInspector {
+                mobileEditorPresentedPanel = nil
+            } else {
+                showRightPane = true
+                mobileEditorPresentedPanel = .rightInspector
+            }
+        } else {
+            withAnimation(CinefuseTokens.Motion.panel) {
+                showRightPane.toggle()
+            }
+        }
+    }
+
+    private func audioLanesChromeAction() {
+        let traits = workspaceEditorLayoutTraits
+        if !traits.useInlineBottomRegion {
+            if mobileEditorPresentedPanel == .audioLanes {
+                mobileEditorPresentedPanel = nil
+            } else {
+                showAudioPanel = true
+                mobileEditorPresentedPanel = .audioLanes
+            }
+            return
+        }
+        withAnimation(CinefuseTokens.Motion.panel) {
+            showAudioPanel.toggle()
+            if showAudioPanel {
+                showBottomPane = true
+            }
+        }
+    }
+
+    private func jobsChromeAction() {
+        let traits = workspaceEditorLayoutTraits
+        if !traits.useInlineBottomRegion {
+            if mobileEditorPresentedPanel == .jobs {
+                mobileEditorPresentedPanel = nil
+            } else {
+                showJobsPanel = true
+                mobileEditorPresentedPanel = .jobs
+            }
+            return
+        }
+        withAnimation(CinefuseTokens.Motion.panel) {
+            showJobsPanel.toggle()
+            if showJobsPanel {
+                showBottomPane = true
+            }
+        }
+    }
+#endif
+
+    private var mobileEditorPresentedPanelBinding: Binding<MobileEditorPresentedPanel?> {
+#if os(iOS)
+        $mobileEditorPresentedPanel
+#else
+        .constant(nil)
+#endif
     }
 
     private var shotsForEditorDisplay: [Shot] {
@@ -794,7 +884,8 @@ struct ProjectWorkspaceScreen: View {
             },
             onExportAudioMix: { Task { await exportLayeredAudioMix() } },
             onAddAudioTrack: { Task { await addEmptyAudioLane() } },
-            onRefreshStatusDetails: { await refreshGenerationStatusSnapshot() }
+            onRefreshStatusDetails: { await refreshGenerationStatusSnapshot() },
+            mobileEditorPresentedPanel: mobileEditorPresentedPanelBinding
         )
     }
 
@@ -930,6 +1021,9 @@ struct ProjectWorkspaceScreen: View {
                 projectDetailView
             }
             .onChange(of: selectedProjectId) { _, _ in
+#if os(iOS)
+                mobileEditorPresentedPanel = nil
+#endif
                 shotPlaybackClipURLByShotId = [:]
                 if let selectedProjectId {
                     lastProjectId = selectedProjectId
@@ -953,6 +1047,9 @@ struct ProjectWorkspaceScreen: View {
             onboardingSheet
         }
         .task {
+#if os(iOS)
+            EditorMobileDefaultsMigration.applyIfNeeded()
+#endif
             await refreshServerHealth()
             if editorSettings.restoreLastOpenWorkspace, !lastProjectId.isEmpty {
                 await refresh(selectProjectId: lastProjectId)
@@ -1042,6 +1139,125 @@ struct ProjectWorkspaceScreen: View {
     }
 
     private var globalWorkspaceControls: some View {
+#if os(iOS)
+        iOSGlobalWorkspaceControls
+#else
+        macOSGlobalWorkspaceControls
+#endif
+    }
+
+#if os(iOS)
+    private var iOSGlobalWorkspaceControls: some View {
+        HStack(spacing: CinefuseTokens.Spacing.xs) {
+            if workspaceEditorLayoutTraits.useCompactWorkspaceChrome {
+                Menu {
+                    Section("Creation") {
+                        ForEach(CreationMode.allCases) { mode in
+                            Button(mode.label) {
+                                creationModeRaw = mode.rawValue
+                            }
+                        }
+                    }
+                    Section("Workspace") {
+                        ForEach(EditorWorkspacePreset.allCases) { preset in
+                            Button(preset.label) {
+                                workspacePresetRaw = preset.rawValue
+                                applyWorkspacePreset(preset.rawValue)
+                            }
+                        }
+                    }
+                    Divider()
+                    Button {
+                        withAnimation(CinefuseTokens.Motion.panel) {
+                            swapSidePanes.toggle()
+                        }
+                    } label: {
+                        Label("Swap side panels", systemImage: "arrow.left.arrow.right.square")
+                    }
+                } label: {
+                    Label("Mode & preset", systemImage: "square.grid.2x2")
+                }
+                .tooltip("Creation mode and workspace layout", enabled: editorSettings.showTooltips)
+            } else {
+                HStack(spacing: CinefuseTokens.Spacing.xxs) {
+                    Picker("Creation", selection: $creationModeRaw) {
+                        ForEach(CreationMode.allCases) { mode in
+                            Text(mode.label).tag(mode.rawValue)
+                        }
+                    }
+                    .pickerStyle(.menu)
+                    .frame(minWidth: 100)
+                    .tooltip("Video Creation or Audio Creation mode", enabled: editorSettings.showTooltips)
+
+                    Picker("Workspace", selection: $workspacePresetRaw) {
+                        ForEach(EditorWorkspacePreset.allCases) { preset in
+                            Text(preset.label).tag(preset.rawValue)
+                        }
+                    }
+                    .pickerStyle(.menu)
+                    .frame(minWidth: 124)
+                    .onChange(of: workspacePresetRaw) { _, newValue in
+                        applyWorkspacePreset(newValue)
+                    }
+                    .tooltip("Choose workspace layout preset", enabled: editorSettings.showTooltips)
+                }
+            }
+
+            IconCommandButton(
+                systemName: "sidebar.left",
+                label: "Story & characters",
+                action: { leftPanelChromeAction() },
+                tooltipEnabled: editorSettings.showTooltips
+            )
+
+            IconCommandButton(
+                systemName: "sidebar.right",
+                label: "Shots & export",
+                action: { rightPanelChromeAction() },
+                tooltipEnabled: editorSettings.showTooltips
+            )
+
+            if !isAudioCreationWorkspace {
+                IconCommandButton(
+                    systemName: showAudioPanel ? "waveform" : "waveform.slash",
+                    label: "Audio lanes",
+                    action: { audioLanesChromeAction() },
+                    tooltipEnabled: editorSettings.showTooltips
+                )
+            }
+
+            IconCommandButton(
+                systemName: showJobsPanel ? "list.bullet.clipboard.fill" : "list.bullet.clipboard",
+                label: "Jobs",
+                action: { jobsChromeAction() },
+                tooltipEnabled: editorSettings.showTooltips
+            )
+
+            if !workspaceEditorLayoutTraits.useCompactWorkspaceChrome {
+                IconCommandButton(
+                    systemName: "arrow.left.arrow.right.square",
+                    label: "Swap side panels",
+                    action: {
+                        withAnimation(CinefuseTokens.Motion.panel) {
+                            swapSidePanes.toggle()
+                        }
+                    },
+                    tooltipEnabled: editorSettings.showTooltips
+                )
+            }
+
+            settingsPresentationTrigger
+            IconCommandButton(
+                systemName: "info.circle",
+                label: "Help",
+                action: { showHelpCenter = true },
+                tooltipEnabled: editorSettings.showTooltips
+            )
+        }
+    }
+#endif
+
+    private var macOSGlobalWorkspaceControls: some View {
         HStack(spacing: CinefuseTokens.Spacing.xs) {
             HStack(spacing: CinefuseTokens.Spacing.xxs) {
                 Picker("Creation", selection: $creationModeRaw) {
@@ -1076,7 +1292,7 @@ struct ProjectWorkspaceScreen: View {
                 },
                 tooltipEnabled: editorSettings.showTooltips
             )
-            
+
             IconCommandButton(
                 systemName: showRightPane ? "sidebar.right" : "sidebar.right",
                 label: "Toggle right panel",
@@ -3223,6 +3439,7 @@ struct ProjectDetailScreen: View {
     let onExportAudioMix: () -> Void
     let onAddAudioTrack: () -> Void
     let onRefreshStatusDetails: () async -> Void
+    @Binding var mobileEditorPresentedPanel: MobileEditorPresentedPanel?
     @AppStorage("cinefuse.editor.leftPaneWidth") private var leftPaneWidth: Double = 460
     @AppStorage("cinefuse.editor.rightPaneWidth") private var rightPaneWidth: Double = 460
     @AppStorage("cinefuse.editor.bottomPaneHeight") private var bottomPaneHeight: Double = 240
@@ -3252,9 +3469,29 @@ struct ProjectDetailScreen: View {
     @State private var projectTitleDraft = ""
     @State private var previewPlaybackRequestToken = 0
     @State private var isPreviewPoppedOut = false
+#if os(iOS)
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+#endif
 #if canImport(AppKit) && !targetEnvironment(macCatalyst)
     @State private var previewPopoutWindowController: PreviewPopoutWindowController?
 #endif
+
+    private var editorLayoutTraits: EditorLayoutTraits {
+#if os(iOS)
+        EditorLayoutTraits.iOS(horizontalSizeClass: horizontalSizeClass)
+#else
+        .desktopLike
+#endif
+    }
+
+    /// When sheet-based side chrome is active, inline columns are hidden so width stays with the preview.
+    private var effectiveShowLeftPane: Bool {
+        !editorLayoutTraits.useSheetBasedSidePanels && showLeftPane
+    }
+
+    private var effectiveShowRightPane: Bool {
+        !editorLayoutTraits.useSheetBasedSidePanels && showRightPane
+    }
 
     private var isRenderWorkspace: Bool {
         (EditorWorkspacePreset(rawValue: workspacePresetRaw) ?? .editing) == .render
@@ -3271,6 +3508,15 @@ struct ProjectDetailScreen: View {
     /// Layered audio lanes (dialogue/score/SFX/mix) attach to the video timeline — not shown in Audio Creation mode.
     private var showVideoAudioLanesPanel: Bool {
         showAudioPanel && !isAudioCreationMode
+    }
+
+    /// Inline render preset lanes (desktop / iPad when bottom strip is allowed); iPhone uses sheet launchpad only.
+    private var shouldShowInlineRenderWorkspacePanels: Bool {
+#if os(iOS)
+        editorLayoutTraits.useInlineBottomRegion
+#else
+        true
+#endif
     }
 
     private var latestExportArtifactStatus: ArtifactStatusPresentation? {
@@ -3291,6 +3537,53 @@ struct ProjectDetailScreen: View {
         guard let value else { return .distantPast }
         return ISO8601DateFormatter().date(from: value) ?? .distantPast
     }
+
+#if os(iOS)
+    /// When the render preset is used without inline bottom panels, surface the same tools via sheets.
+    private var renderWorkspaceMobileLaunchpad: some View {
+        VStack(alignment: .leading, spacing: CinefuseTokens.Spacing.m) {
+            Text("Render workspace")
+                .font(CinefuseTokens.Typography.sectionTitle)
+            Text("Open audio lanes and jobs as full-screen panels.")
+                .font(CinefuseTokens.Typography.caption)
+                .foregroundStyle(CinefuseTokens.ColorRole.textSecondary)
+            HStack(spacing: CinefuseTokens.Spacing.s) {
+                if !isAudioCreationMode {
+                    Button {
+                        showAudioPanel = true
+                        mobileEditorPresentedPanel = .audioLanes
+                    } label: {
+                        Label("Audio lanes", systemImage: "waveform")
+                    }
+                    .buttonStyle(PrimaryActionButtonStyle())
+                }
+                Button {
+                    showJobsPanel = true
+                    mobileEditorPresentedPanel = .jobs
+                } label: {
+                    Label("Jobs", systemImage: "list.bullet.clipboard")
+                }
+                .buttonStyle(PrimaryActionButtonStyle())
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .padding(CinefuseTokens.Spacing.s)
+    }
+
+    @ViewBuilder
+    private func mobileInspectorSheetContents(for panel: MobileEditorPresentedPanel) -> some View {
+        switch panel {
+        case .leftInspector:
+            leftPaneContent
+        case .rightInspector:
+            rightPaneContent
+        case .audioLanes:
+            audioLanesPanelCard
+        case .jobs:
+            jobsPanelCard
+        }
+    }
+#endif
 
     var body: some View {
         Group {
@@ -3353,7 +3646,9 @@ struct ProjectDetailScreen: View {
                     GeometryReader { geometry in
                         let totalWidth = Double(max(geometry.size.width, 320))
                         let totalHeight = Double(max(geometry.size.height, 280))
-                        let showsBottomRegion = showBottomPane && (showVideoAudioLanesPanel || showJobsPanel)
+                        let showsBottomRegion = editorLayoutTraits.useInlineBottomRegion
+                            && showBottomPane
+                            && (showVideoAudioLanesPanel || showJobsPanel)
                         let bottomHandleHeight = Double(CinefuseTokens.Control.splitterHitArea)
                         let minTopWorkspaceHeight = Double(CinefuseTokens.Control.minTopWorkspaceHeight)
                         let maxBottomByAvailableSpace = max(
@@ -3382,30 +3677,39 @@ struct ProjectDetailScreen: View {
                             totalHeight - effectiveBottomHeight - (showsBottomRegion ? bottomHandleHeight : 0)
                         )
                         let sideFrame = paneLayout(totalWidth: totalWidth)
-                        let showsLeftPanel = showLeftPane && sideFrame.left > 1
-                        let showsRightPanel = showRightPane && sideFrame.right > 1
+                        let showsLeftPanel = effectiveShowLeftPane && sideFrame.left > 1
+                        let showsRightPanel = effectiveShowRightPane && sideFrame.right > 1
 
                         VStack(spacing: 0) {
                             if isRenderWorkspace {
-                                HStack(alignment: .top, spacing: CinefuseTokens.Spacing.s) {
-                                    if showVideoAudioLanesPanel {
-                                        audioLanesPanelCard
-                                            .frame(minWidth: 0, maxWidth: .infinity, alignment: .topLeading)
+                                if shouldShowInlineRenderWorkspacePanels {
+                                    HStack(alignment: .top, spacing: CinefuseTokens.Spacing.s) {
+                                        if showVideoAudioLanesPanel {
+                                            audioLanesPanelCard
+                                                .frame(minWidth: 0, maxWidth: .infinity, alignment: .topLeading)
+                                        }
+                                        if showJobsPanel {
+                                            jobsPanelCard
+                                                .frame(minWidth: 0, maxWidth: .infinity, alignment: .topLeading)
+                                        }
+                                        if !showVideoAudioLanesPanel && !showJobsPanel {
+                                            EmptyStateCard(
+                                                title: "Render panels hidden",
+                                                message: "Enable Audio Lanes or Jobs from the top menu to continue."
+                                            )
+                                            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                                        }
                                     }
-                                    if showJobsPanel {
-                                        jobsPanelCard
-                                            .frame(minWidth: 0, maxWidth: .infinity, alignment: .topLeading)
-                                    }
-                                    if !showVideoAudioLanesPanel && !showJobsPanel {
-                                        EmptyStateCard(
-                                            title: "Render panels hidden",
-                                            message: "Enable Audio Lanes or Jobs from the top menu to continue."
-                                        )
-                                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-                                    }
+                                    .padding(.top, CinefuseTokens.Spacing.s)
+                                    .frame(maxHeight: .infinity, alignment: .top)
+                                } else {
+#if os(iOS)
+                                    renderWorkspaceMobileLaunchpad
+                                        .frame(maxHeight: .infinity, alignment: .top)
+#else
+                                    EmptyView()
+#endif
                                 }
-                                .padding(.top, CinefuseTokens.Spacing.s)
-                                .frame(maxHeight: .infinity, alignment: .top)
                             } else {
                                 if shouldUseEmbeddedPopoutPreview {
                                     embeddedPopoutPreviewPanel
@@ -3508,6 +3812,23 @@ struct ProjectDetailScreen: View {
                 )
             }
         }
+#if os(iOS)
+        .sheet(item: $mobileEditorPresentedPanel) { panel in
+            NavigationStack {
+                mobileInspectorSheetContents(for: panel)
+                    .navigationTitle(panel.navigationTitle(isAudioCreationMode: isAudioCreationMode))
+                    .navigationBarTitleDisplayMode(.inline)
+                    .toolbar {
+                        ToolbarItem(placement: .cancellationAction) {
+                            Button("Done") {
+                                mobileEditorPresentedPanel = nil
+                            }
+                        }
+                    }
+            }
+            .presentationDragIndicator(.visible)
+        }
+#endif
         .onAppear {
             sanitizePersistedLayout()
         }
@@ -4088,23 +4409,23 @@ struct ProjectDetailScreen: View {
 
     private func paneLayout(totalWidth: Double) -> (left: Double, right: Double) {
         let minCenter = Double(CinefuseTokens.Control.minCenterPreviewWidth)
-        let left = showLeftPane
+        let left = effectiveShowLeftPane
             ? min(max(leftPaneWidth, Double(CinefuseTokens.Control.minSidePanelWidth)), Double(CinefuseTokens.Control.maxSidePanelWidth))
             : 0
-        let right = showRightPane
+        let right = effectiveShowRightPane
             ? min(max(rightPaneWidth, Double(CinefuseTokens.Control.minSidePanelWidth)), Double(CinefuseTokens.Control.maxSidePanelWidth))
             : 0
-        let handles = (showLeftPane ? Double(CinefuseTokens.Control.splitterHitArea) : 0)
-            + (showRightPane ? Double(CinefuseTokens.Control.splitterHitArea) : 0)
+        let handles = (effectiveShowLeftPane ? Double(CinefuseTokens.Control.splitterHitArea) : 0)
+            + (effectiveShowRightPane ? Double(CinefuseTokens.Control.splitterHitArea) : 0)
             + Double(CinefuseTokens.Control.layoutHandleReserve)
         let availableForSides = max(totalWidth - minCenter - handles, 0)
-        if !showLeftPane && !showRightPane {
+        if !effectiveShowLeftPane && !effectiveShowRightPane {
             return (0, 0)
         }
-        if !showLeftPane {
+        if !effectiveShowLeftPane {
             return (0, min(right, availableForSides))
         }
-        if !showRightPane {
+        if !effectiveShowRightPane {
             return (min(left, availableForSides), 0)
         }
 
@@ -4128,8 +4449,8 @@ struct ProjectDetailScreen: View {
         let minPane = Double(CinefuseTokens.Control.minSidePanelWidth)
         let maxPane = Double(CinefuseTokens.Control.maxSidePanelWidth)
         let minCenter = Double(CinefuseTokens.Control.minCenterPreviewWidth)
-        let reservedHandles = (showLeftPane ? Double(CinefuseTokens.Control.splitterHitArea) : 0)
-            + (showRightPane ? Double(CinefuseTokens.Control.splitterHitArea) : 0)
+        let reservedHandles = (effectiveShowLeftPane ? Double(CinefuseTokens.Control.splitterHitArea) : 0)
+            + (effectiveShowRightPane ? Double(CinefuseTokens.Control.splitterHitArea) : 0)
             + Double(CinefuseTokens.Control.layoutHandleReserve)
         let maxByCenter = max(totalWidth - minCenter - reservedHandles - opposingPaneWidth, minPane)
         return min(max(width, minPane), min(maxPane, maxByCenter))
@@ -4139,8 +4460,8 @@ struct ProjectDetailScreen: View {
         let minPane = Double(CinefuseTokens.Control.minSidePanelWidth)
         let maxPane = Double(CinefuseTokens.Control.maxSidePanelWidth)
         let minCenter = Double(CinefuseTokens.Control.minCenterPreviewWidth)
-        let reservedHandles = (showLeftPane ? Double(CinefuseTokens.Control.splitterHitArea) : 0)
-            + (showRightPane ? Double(CinefuseTokens.Control.splitterHitArea) : 0)
+        let reservedHandles = (effectiveShowLeftPane ? Double(CinefuseTokens.Control.splitterHitArea) : 0)
+            + (effectiveShowRightPane ? Double(CinefuseTokens.Control.splitterHitArea) : 0)
             + Double(CinefuseTokens.Control.layoutHandleReserve)
         let maxByCenter = max(totalWidth - minCenter - reservedHandles - opposingPaneWidth, minPane)
         return min(max(width, minPane), min(maxPane, maxByCenter))

@@ -57,6 +57,10 @@
         },
         {
           "kind" : "file",
+          "name" : "/Users/atodman/Documents/GitHub/Cinefuse/packages/cinefuse-apple-core/Sources/CinefuseAppleCore/EditorMobileLayout.swift"
+        },
+        {
+          "kind" : "file",
           "name" : "/Users/atodman/Documents/GitHub/Cinefuse/packages/cinefuse-apple-core/Sources/CinefuseAppleCore/GeneratedFilesStore.swift"
         },
         {
@@ -101,6 +105,7 @@
         "/Users/atodman/Documents/GitHub/Cinefuse/packages/cinefuse-apple-core/.build/arm64-apple-macosx/debug/CinefuseAppleCore.build/AppComponents.swift.o",
         "/Users/atodman/Documents/GitHub/Cinefuse/packages/cinefuse-apple-core/.build/arm64-apple-macosx/debug/CinefuseAppleCore.build/DesignTokens.swift.o",
         "/Users/atodman/Documents/GitHub/Cinefuse/packages/cinefuse-apple-core/.build/arm64-apple-macosx/debug/CinefuseAppleCore.build/DiagnosticsLogger.swift.o",
+        "/Users/atodman/Documents/GitHub/Cinefuse/packages/cinefuse-apple-core/.build/arm64-apple-macosx/debug/CinefuseAppleCore.build/EditorMobileLayout.swift.o",
         "/Users/atodman/Documents/GitHub/Cinefuse/packages/cinefuse-apple-core/.build/arm64-apple-macosx/debug/CinefuseAppleCore.build/GeneratedFilesStore.swift.o",
         "/Users/atodman/Documents/GitHub/Cinefuse/packages/cinefuse-apple-core/.build/arm64-apple-macosx/debug/CinefuseAppleCore.build/HelpCenterView.swift.o",
         "/Users/atodman/Documents/GitHub/Cinefuse/packages/cinefuse-apple-core/.build/arm64-apple-macosx/debug/CinefuseAppleCore.build/Models.swift.o",
@@ -181,6 +186,10 @@
         },
         {
           "kind" : "file",
+          "name" : "/Users/atodman/Documents/GitHub/Cinefuse/packages/cinefuse-apple-core/.build/arm64-apple-macosx/debug/CinefuseAppleCore.build/EditorMobileLayout.swift.o"
+        },
+        {
+          "kind" : "file",
           "name" : "/Users/atodman/Documents/GitHub/Cinefuse/packages/cinefuse-apple-core/.build/arm64-apple-macosx/debug/CinefuseAppleCore.build/GeneratedFilesStore.swift.o"
         },
         {
@@ -215,6 +224,7 @@
         "/Users/atodman/Documents/GitHub/Cinefuse/packages/cinefuse-apple-core/Sources/CinefuseAppleCore/AppComponents.swift",
         "/Users/atodman/Documents/GitHub/Cinefuse/packages/cinefuse-apple-core/Sources/CinefuseAppleCore/DesignTokens.swift",
         "/Users/atodman/Documents/GitHub/Cinefuse/packages/cinefuse-apple-core/Sources/CinefuseAppleCore/DiagnosticsLogger.swift",
+        "/Users/atodman/Documents/GitHub/Cinefuse/packages/cinefuse-apple-core/Sources/CinefuseAppleCore/EditorMobileLayout.swift",
         "/Users/atodman/Documents/GitHub/Cinefuse/packages/cinefuse-apple-core/Sources/CinefuseAppleCore/GeneratedFilesStore.swift",
         "/Users/atodman/Documents/GitHub/Cinefuse/packages/cinefuse-apple-core/Sources/CinefuseAppleCore/HelpCenterView.swift",
         "/Users/atodman/Documents/GitHub/Cinefuse/packages/cinefuse-apple-core/Sources/CinefuseAppleCore/Models.swift",
@@ -242,6 +252,7 @@
       "/Users/atodman/Documents/GitHub/Cinefuse/packages/cinefuse-apple-core/Sources/CinefuseAppleCore/AppComponents.swift",
       "/Users/atodman/Documents/GitHub/Cinefuse/packages/cinefuse-apple-core/Sources/CinefuseAppleCore/DesignTokens.swift",
       "/Users/atodman/Documents/GitHub/Cinefuse/packages/cinefuse-apple-core/Sources/CinefuseAppleCore/DiagnosticsLogger.swift",
+      "/Users/atodman/Documents/GitHub/Cinefuse/packages/cinefuse-apple-core/Sources/CinefuseAppleCore/EditorMobileLayout.swift",
       "/Users/atodman/Documents/GitHub/Cinefuse/packages/cinefuse-apple-core/Sources/CinefuseAppleCore/GeneratedFilesStore.swift",
       "/Users/atodman/Documents/GitHub/Cinefuse/packages/cinefuse-apple-core/Sources/CinefuseAppleCore/HelpCenterView.swift",
       "/Users/atodman/Documents/GitHub/Cinefuse/packages/cinefuse-apple-core/Sources/CinefuseAppleCore/Models.swift",
@@ -344,6 +355,10 @@
         {
           "kind" : "file",
           "name" : "/Users/atodman/Documents/GitHub/Cinefuse/packages/cinefuse-apple-core/Sources/CinefuseAppleCore/DiagnosticsLogger.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/atodman/Documents/GitHub/Cinefuse/packages/cinefuse-apple-core/Sources/CinefuseAppleCore/EditorMobileLayout.swift"
         },
         {
           "kind" : "file",

@@ -37,6 +37,13 @@
     "swift-dependencies": "/Users/atodman/Documents/GitHub/Cinefuse/packages/cinefuse-apple-core/.build/arm64-apple-macosx/debug/CinefuseAppleCore.build/DiagnosticsLogger.swiftdeps",
     "diagnostics": "/Users/atodman/Documents/GitHub/Cinefuse/packages/cinefuse-apple-core/.build/arm64-apple-macosx/debug/CinefuseAppleCore.build/DiagnosticsLogger.dia"
   },
+  "/Users/atodman/Documents/GitHub/Cinefuse/packages/cinefuse-apple-core/Sources/CinefuseAppleCore/EditorMobileLayout.swift": {
+    "dependencies": "/Users/atodman/Documents/GitHub/Cinefuse/packages/cinefuse-apple-core/.build/arm64-apple-macosx/debug/CinefuseAppleCore.build/EditorMobileLayout.d",
+    "object": "/Users/atodman/Documents/GitHub/Cinefuse/packages/cinefuse-apple-core/.build/arm64-apple-macosx/debug/CinefuseAppleCore.build/EditorMobileLayout.swift.o",
+    "swiftmodule": "/Users/atodman/Documents/GitHub/Cinefuse/packages/cinefuse-apple-core/.build/arm64-apple-macosx/debug/CinefuseAppleCore.build/EditorMobileLayout~partial.swiftmodule",
+    "swift-dependencies": "/Users/atodman/Documents/GitHub/Cinefuse/packages/cinefuse-apple-core/.build/arm64-apple-macosx/debug/CinefuseAppleCore.build/EditorMobileLayout.swiftdeps",
+    "diagnostics": "/Users/atodman/Documents/GitHub/Cinefuse/packages/cinefuse-apple-core/.build/arm64-apple-macosx/debug/CinefuseAppleCore.build/EditorMobileLayout.dia"
+  },
   "/Users/atodman/Documents/GitHub/Cinefuse/packages/cinefuse-apple-core/Sources/CinefuseAppleCore/GeneratedFilesStore.swift": {
     "dependencies": "/Users/atodman/Documents/GitHub/Cinefuse/packages/cinefuse-apple-core/.build/arm64-apple-macosx/debug/CinefuseAppleCore.build/GeneratedFilesStore.d",
     "object": "/Users/atodman/Documents/GitHub/Cinefuse/packages/cinefuse-apple-core/.build/arm64-apple-macosx/debug/CinefuseAppleCore.build/GeneratedFilesStore.swift.o",
