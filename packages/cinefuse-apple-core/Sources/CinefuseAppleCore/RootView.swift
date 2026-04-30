@@ -1582,15 +1582,6 @@ struct ProjectWorkspaceScreen: View {
     }
 
     private var serverStatusBadge: some View {
-        let stateText: String = {
-            if isCheckingServerHealth {
-                return "Checking"
-            }
-            if let isServerReachable {
-                return isServerReachable ? "Online" : "Offline"
-            }
-            return "Unknown"
-        }()
         let dotColor: Color = {
             if isCheckingServerHealth {
                 return CinefuseTokens.ColorRole.warning
@@ -1600,15 +1591,26 @@ struct ProjectWorkspaceScreen: View {
             }
             return CinefuseTokens.ColorRole.textSecondary
         }()
+        let reachabilityPhrase: String = {
+            if isCheckingServerHealth {
+                return "checking connection"
+            }
+            if let isServerReachable {
+                return isServerReachable ? "online" : "offline"
+            }
+            return "connection unknown"
+        }()
 
         return HStack(spacing: CinefuseTokens.Spacing.xxs) {
             Circle()
                 .fill(dotColor)
                 .frame(width: 8, height: 8)
-            Text("\(serverModeLabel): \(stateText)")
+            Text(serverModeLabel)
                 .font(CinefuseTokens.Typography.caption)
                 .foregroundStyle(CinefuseTokens.ColorRole.textSecondary)
         }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(serverModeLabel), \(reachabilityPhrase)")
     }
 
     private func refreshServerHealth() async {
@@ -3669,50 +3671,60 @@ struct ProjectDetailScreen: View {
                     }
 
                     if !isRenderWorkspace {
-                        if collapseTimelinePanel {
-                            HorizontalTimelineTrack(
-                                shots: shotsForSoundOrVideoTimeline,
-                                jobs: jobs,
-                                localThumbnailURLByShotId: localThumbnailURLByShotId,
-                                localFileRecordsByRemoteURL: localFileRecordsByRemoteURL,
-                                shotRequestStateById: shotRequestStateById,
-                                selectedShotId: $selectedTimelineShotId,
-                                onPreviewShot: { shotId in
-                                    selectedTimelineShotId = shotId
-                                    previewPlaybackRequestToken += 1
-                                },
-                                onMoveShot: onReorderShots,
-                                showTooltips: showTooltips,
-                                themePalette: timelineThemeMode.palette,
-                                isCollapsed: $collapseTimelinePanel,
-                                clipVisualStyle: isAudioCreationMode ? .audioWaveform : .videoThumbnail
-                            )
-                        } else {
-                            VStack(spacing: 0) {
-                                HorizontalTimelineTrack(
-                                    shots: shotsForSoundOrVideoTimeline,
-                                    jobs: jobs,
-                                    localThumbnailURLByShotId: localThumbnailURLByShotId,
-                                    localFileRecordsByRemoteURL: localFileRecordsByRemoteURL,
-                                    shotRequestStateById: shotRequestStateById,
-                                    selectedShotId: $selectedTimelineShotId,
-                                    onPreviewShot: { shotId in
-                                        selectedTimelineShotId = shotId
-                                        previewPlaybackRequestToken += 1
-                                    },
-                                    onMoveShot: onReorderShots,
-                                    showTooltips: showTooltips,
-                                    themePalette: timelineThemeMode.palette,
-                                    isCollapsed: $collapseTimelinePanel,
-                                    clipVisualStyle: isAudioCreationMode ? .audioWaveform : .videoThumbnail
-                                )
-                                .frame(height: CGFloat(clampedTimelineStripHeight(timelineStripHeight)), alignment: .top)
-                                .clipped()
-                                HorizontalPanelHandle(accessibilityLabel: "Resize timeline height") { delta in
-                                    timelineStripHeight = clampedTimelineStripHeight(timelineStripHeight - delta)
+                        ScrollView(.vertical) {
+                            VStack(alignment: .leading, spacing: CinefuseTokens.Spacing.xs) {
+                                if collapseTimelinePanel {
+                                    HorizontalTimelineTrack(
+                                        shots: shotsForSoundOrVideoTimeline,
+                                        jobs: jobs,
+                                        localThumbnailURLByShotId: localThumbnailURLByShotId,
+                                        localFileRecordsByRemoteURL: localFileRecordsByRemoteURL,
+                                        shotRequestStateById: shotRequestStateById,
+                                        selectedShotId: $selectedTimelineShotId,
+                                        onPreviewShot: { shotId in
+                                            selectedTimelineShotId = shotId
+                                            previewPlaybackRequestToken += 1
+                                        },
+                                        onMoveShot: onReorderShots,
+                                        showTooltips: showTooltips,
+                                        themePalette: timelineThemeMode.palette,
+                                        isCollapsed: $collapseTimelinePanel,
+                                        clipVisualStyle: isAudioCreationMode ? .audioWaveform : .videoThumbnail
+                                    )
+                                } else {
+                                    VStack(spacing: 0) {
+                                        HorizontalTimelineTrack(
+                                            shots: shotsForSoundOrVideoTimeline,
+                                            jobs: jobs,
+                                            localThumbnailURLByShotId: localThumbnailURLByShotId,
+                                            localFileRecordsByRemoteURL: localFileRecordsByRemoteURL,
+                                            shotRequestStateById: shotRequestStateById,
+                                            selectedShotId: $selectedTimelineShotId,
+                                            onPreviewShot: { shotId in
+                                                selectedTimelineShotId = shotId
+                                                previewPlaybackRequestToken += 1
+                                            },
+                                            onMoveShot: onReorderShots,
+                                            showTooltips: showTooltips,
+                                            themePalette: timelineThemeMode.palette,
+                                            isCollapsed: $collapseTimelinePanel,
+                                            clipVisualStyle: isAudioCreationMode ? .audioWaveform : .videoThumbnail
+                                        )
+                                        .frame(height: CGFloat(clampedTimelineStripHeight(timelineStripHeight)), alignment: .top)
+                                        .clipped()
+                                        HorizontalPanelHandle(accessibilityLabel: "Resize timeline height") { delta in
+                                            timelineStripHeight = clampedTimelineStripHeight(timelineStripHeight - delta)
+                                        }
+                                    }
+                                }
+
+                                if !isAudioCreationMode {
+                                    videoLayerAudioUnderTimeline
                                 }
                             }
+                            .frame(maxWidth: .infinity, alignment: .leading)
                         }
+                        .frame(maxHeight: CGFloat(timelineVerticalScrollMaxHeight))
                     }
 
                     GeometryReader { geometry in
@@ -4134,7 +4146,7 @@ struct ProjectDetailScreen: View {
             if tracksInLane.isEmpty {
                 Text(
                     laneHasRow
-                        ? "No clips on this lane yet. Use **Audio Lanes** below or generate dialogue, score, or SFX."
+                        ? "No clips on this lane yet. Use Audio Lanes below or generate dialogue, score, or SFX."
                         : "Tap Add lane, then attach or generate audio that plays over the video timeline."
                 )
                 .font(CinefuseTokens.Typography.nano)
