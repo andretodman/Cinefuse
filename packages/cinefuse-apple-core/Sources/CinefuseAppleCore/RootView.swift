@@ -3835,6 +3835,9 @@ struct ProjectDetailScreen: View {
     @AppStorage("cinefuse.editor.timelineStripHeight") private var timelineStripHeight: Double = 220
     /// Caps the timeline column (strip + optional video audio layers) so it scrolls vertically instead of pushing the workspace away.
     @AppStorage("cinefuse.editor.timeline.verticalScrollMaxHeight") private var timelineVerticalScrollMaxHeight: Double = 540
+    /// Captured strip height at horizontal resize gesture start (parent state survives layout remounts; avoids incremental delta bugs).
+    @State private var timelineStripResizeBaseline: Double?
+    @State private var bottomPaneResizeBaseline: Double?
     @State private var selectedTimelineShotId: String?
     @State private var trackSyncModes: [Int: AudioTrackSyncMode] = [:]
     @State private var laneVolumeByIndex: [Int: Float] = [:]
@@ -4028,8 +4031,14 @@ struct ProjectDetailScreen: View {
                                         )
                                         .frame(height: CGFloat(clampedTimelineStripHeight(timelineStripHeight)), alignment: .top)
                                         .clipped()
-                                        HorizontalPanelHandle(accessibilityLabel: "Resize timeline height") { delta in
-                                            timelineStripHeight = clampedTimelineStripHeight(timelineStripHeight - delta)
+                                        HorizontalPanelHandle(accessibilityLabel: "Resize timeline height") { translationY in
+                                            if timelineStripResizeBaseline == nil {
+                                                timelineStripResizeBaseline = timelineStripHeight
+                                            }
+                                            let base = timelineStripResizeBaseline ?? timelineStripHeight
+                                            timelineStripHeight = clampedTimelineStripHeight(base + translationY)
+                                        } onDragEnd: {
+                                            timelineStripResizeBaseline = nil
                                         }
                                     }
                                 }
@@ -4185,11 +4194,17 @@ struct ProjectDetailScreen: View {
                                 }
 
                                 if showsBottomRegion {
-                                    HorizontalPanelHandle(accessibilityLabel: "Resize jobs and main workspace") { delta in
+                                    HorizontalPanelHandle(accessibilityLabel: "Resize jobs and main workspace") { translationY in
+                                        if bottomPaneResizeBaseline == nil {
+                                            bottomPaneResizeBaseline = bottomPaneHeight
+                                        }
+                                        let base = bottomPaneResizeBaseline ?? bottomPaneHeight
                                         bottomPaneHeight = clampedBottomPaneHeight(
-                                            bottomPaneHeight - delta,
+                                            base + translationY,
                                             totalHeight: totalHeight
                                         )
+                                    } onDragEnd: {
+                                        bottomPaneResizeBaseline = nil
                                     }
                                     HStack(alignment: .top, spacing: CinefuseTokens.Spacing.s) {
                                         if showVideoAudioLanesPanel {
@@ -5503,13 +5518,9 @@ struct HorizontalTimelineTrack: View {
     /// Ruler and clip row share one horizontal scroll width so the playhead aligns with time marks.
     @ViewBuilder
     private var timelineTrackWithSyncedRuler: some View {
-        if clipVisualStyle == .audioWaveform {
-            ScrollView(.vertical, showsIndicators: true) {
-                timelineHorizontalStripGeometry
-            }
-        } else {
-            timelineHorizontalStripGeometry
-        }
+        // Single horizontal scroll surface (matches video timeline). Nesting a vertical ScrollView here
+        // stacked indicators against the resize strip below and made drags feel like a broken scrollbar.
+        timelineHorizontalStripGeometry
     }
 
     private var timelineHorizontalStripGeometry: some View {
@@ -7738,9 +7749,22 @@ struct VerticalPanelHandle: View {
 
 struct HorizontalPanelHandle: View {
     var accessibilityLabel: String = "Drag to resize panels"
+    /// Cumulative `DragGesture.translation.height` from gesture start (positive = finger moved down).
     let onDrag: (Double) -> Void
-    @State private var lastTranslation: Double = 0
+    var onDragEnd: (() -> Void)? = nil
     @State private var isHovering = false
+
+    /// Vertical grippers read as “drag up/down”, not a horizontal scrollbar thumb.
+    private var verticalResizeGrip: some View {
+        HStack(spacing: 4) {
+            ForEach(0..<3, id: \.self) { _ in
+                Capsule()
+                    .fill(CinefuseTokens.ColorRole.textSecondary.opacity(isHovering ? 0.55 : 0.32))
+                    .frame(width: 2, height: 12)
+            }
+        }
+        .accessibilityHidden(true)
+    }
 
     var body: some View {
         ZStack {
@@ -7749,26 +7773,26 @@ struct HorizontalPanelHandle: View {
             Rectangle()
                 .fill(CinefuseTokens.ColorRole.borderSubtle.opacity(isHovering ? 0.95 : 0.65))
                 .frame(height: max(2, CinefuseTokens.Control.splitterThickness - 1))
-            Capsule()
-                .fill(CinefuseTokens.ColorRole.textSecondary.opacity(isHovering ? 0.55 : 0.3))
-                .frame(width: 36, height: 2)
+            verticalResizeGrip
         }
         .frame(height: CinefuseTokens.Control.splitterThickness)
         .contentShape(Rectangle())
         .onHover { isHovering = $0 }
         .modifier(ResizeSplitCursorModifier(axis: .verticalDrag))
         .accessibilityLabel(accessibilityLabel)
-        .gesture(
-            DragGesture(minimumDistance: 1)
+        .accessibilityHint(Text("Drag vertically to resize the panel above."))
+#if os(macOS)
+        .help("Drag up or down to resize the panel above this line.")
+#endif
+        // Must beat ancestor ScrollView(.vertical) so vertical drags on the strip resize the panel, not the scroll view.
+        // Use cumulative translation only; parents combine with a stable baseline so layout remounts cannot desync deltas.
+        .highPriorityGesture(
+            DragGesture(minimumDistance: 0)
                 .onChanged { value in
-                    let next = Double(value.translation.height)
-                    onDrag(next - lastTranslation)
-                    lastTranslation = next
+                    onDrag(Double(value.translation.height))
                 }
-                .onEnded { value in
-                    let next = Double(value.translation.height)
-                    onDrag(next - lastTranslation)
-                    lastTranslation = 0
+                .onEnded { _ in
+                    onDragEnd?()
                 }
         )
         .padding(.vertical, (CinefuseTokens.Control.splitterHitArea - CinefuseTokens.Control.splitterThickness) / 2)
