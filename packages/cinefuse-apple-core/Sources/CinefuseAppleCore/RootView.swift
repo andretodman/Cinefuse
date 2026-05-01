@@ -3838,6 +3838,8 @@ struct ProjectDetailScreen: View {
     /// Captured strip height at horizontal resize gesture start (parent state survives layout remounts; avoids incremental delta bugs).
     @State private var timelineStripResizeBaseline: Double?
     @State private var bottomPaneResizeBaseline: Double?
+    /// Stops the outer editor `ScrollView` from fighting the timeline height handle while dragging.
+    @State private var suppressTimelineVerticalScrollForResize = false
     @State private var selectedTimelineShotId: String?
     @State private var trackSyncModes: [Int: AudioTrackSyncMode] = [:]
     @State private var laneVolumeByIndex: [Int: Float] = [:]
@@ -4034,11 +4036,13 @@ struct ProjectDetailScreen: View {
                                         HorizontalPanelHandle(accessibilityLabel: "Resize timeline height") { translationY in
                                             if timelineStripResizeBaseline == nil {
                                                 timelineStripResizeBaseline = timelineStripHeight
+                                                suppressTimelineVerticalScrollForResize = true
                                             }
                                             let base = timelineStripResizeBaseline ?? timelineStripHeight
                                             timelineStripHeight = clampedTimelineStripHeight(base + translationY)
                                         } onDragEnd: {
                                             timelineStripResizeBaseline = nil
+                                            suppressTimelineVerticalScrollForResize = false
                                         }
                                     }
                                 }
@@ -4049,6 +4053,7 @@ struct ProjectDetailScreen: View {
                             }
                             .frame(maxWidth: .infinity, alignment: .leading)
                         }
+                        .scrollDisabled(suppressTimelineVerticalScrollForResize)
                         .frame(maxHeight: isTimelineFullscreen ? .infinity : CGFloat(timelineVerticalScrollMaxHeight))
                         .layoutPriority(isTimelineFullscreen ? 1 : 0)
                     }
@@ -4098,11 +4103,11 @@ struct ProjectDetailScreen: View {
                                     HStack(alignment: .top, spacing: CinefuseTokens.Spacing.s) {
                                         if showVideoAudioLanesPanel {
                                             audioLanesPanelCard
-                                                .frame(minWidth: 0, maxWidth: .infinity, alignment: .topLeading)
+                                                .frame(minWidth: 0, maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                                         }
                                         if showJobsPanel {
                                             jobsPanelCard
-                                                .frame(minWidth: 0, maxWidth: .infinity, alignment: .topLeading)
+                                                .frame(minWidth: 0, maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                                         }
                                         if !showVideoAudioLanesPanel && !showJobsPanel {
                                             EmptyStateCard(
@@ -4209,11 +4214,11 @@ struct ProjectDetailScreen: View {
                                     HStack(alignment: .top, spacing: CinefuseTokens.Spacing.s) {
                                         if showVideoAudioLanesPanel {
                                             audioLanesPanelCard
-                                                .frame(minWidth: 0, maxWidth: .infinity, alignment: .topLeading)
+                                                .frame(minWidth: 0, maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                                         }
                                         if showJobsPanel {
                                             jobsPanelCard
-                                                .frame(minWidth: 0, maxWidth: .infinity, alignment: .topLeading)
+                                                .frame(minWidth: 0, maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                                         }
                                     }
                                     .padding(.top, CinefuseTokens.Spacing.s)
@@ -4901,61 +4906,72 @@ struct ProjectDetailScreen: View {
         .padding(CinefuseTokens.Spacing.s)
     }
 
+    /// Audio lane sheet / inspector: one column of readable actions. Inline desktop: adaptive columns so labels are not truncated.
+    @ViewBuilder
+    private var audioLanesGenerationToolbar: some View {
+        TextField("Audio title", text: $audioTrackTitleDraft)
+            .textFieldStyle(.roundedBorder)
+
+        if editorMobileInspectorSheet {
+            VStack(spacing: CinefuseTokens.Spacing.xs) {
+                audioLanesPanelActionButton(title: "Generate Dialogue", tooltip: "Generate spoken dialogue track", action: onGenerateDialogue)
+                audioLanesPanelActionButton(title: "Generate Score", tooltip: "Generate background music score", action: onGenerateScore)
+                audioLanesPanelActionButton(title: "Generate SFX", tooltip: "Generate one-shot sound effect", action: onGenerateSFX)
+                audioLanesPanelActionButton(title: "Mix", tooltip: "Create mixed audio master for timeline", action: onMixAudio)
+                audioLanesPanelActionButton(title: "Lip-sync", tooltip: "Run lip-sync pass for selected shot", action: onLipSync)
+            }
+        } else {
+            LazyVGrid(
+                columns: [
+                    GridItem(.adaptive(minimum: 168, maximum: .infinity), spacing: CinefuseTokens.Spacing.s, alignment: .leading),
+                ],
+                alignment: .leading,
+                spacing: CinefuseTokens.Spacing.s
+            ) {
+                audioLanesPanelActionButton(title: "Generate Dialogue", tooltip: "Generate spoken dialogue track", action: onGenerateDialogue)
+                audioLanesPanelActionButton(title: "Generate Score", tooltip: "Generate background music score", action: onGenerateScore)
+                audioLanesPanelActionButton(title: "Generate SFX", tooltip: "Generate one-shot sound effect", action: onGenerateSFX)
+                audioLanesPanelActionButton(title: "Mix", tooltip: "Create mixed audio master for timeline", action: onMixAudio)
+                audioLanesPanelActionButton(title: "Lip-sync", tooltip: "Run lip-sync pass for selected shot", action: onLipSync)
+            }
+        }
+    }
+
+    private func audioLanesPanelActionButton(title: String, tooltip: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(title)
+        }
+        .tooltip(tooltip, enabled: showTooltips)
+        .buttonStyle(PanelSecondaryButtonStyle())
+    }
+
     private var audioLanesPanelCard: some View {
         SectionCard(
             title: "Audio Lanes",
-            isCollapsed: $collapseAudioPanel
+            isCollapsed: $collapseAudioPanel,
+            fillAvailableHeight: true
         ) {
             VStack(alignment: .leading, spacing: CinefuseTokens.Spacing.s) {
-                ViewThatFits(in: .horizontal) {
-                    HStack(spacing: CinefuseTokens.Spacing.s) {
-                        TextField("Audio title", text: $audioTrackTitleDraft)
-                            .textFieldStyle(.roundedBorder)
-                        Button("Generate Dialogue", action: onGenerateDialogue)
-                            .tooltip("Generate spoken dialogue track", enabled: showTooltips)
-                            .buttonStyle(SecondaryActionButtonStyle())
-                        Button("Generate Score", action: onGenerateScore)
-                            .tooltip("Generate background music score", enabled: showTooltips)
-                            .buttonStyle(SecondaryActionButtonStyle())
-                        Button("Generate SFX", action: onGenerateSFX)
-                            .tooltip("Generate one-shot sound effect", enabled: showTooltips)
-                            .buttonStyle(SecondaryActionButtonStyle())
-                        Button("Mix", action: onMixAudio)
-                            .tooltip("Create mixed audio master for timeline", enabled: showTooltips)
-                            .buttonStyle(SecondaryActionButtonStyle())
-                        Button("Lip-sync", action: onLipSync)
-                            .tooltip("Run lip-sync pass for selected shot", enabled: showTooltips)
-                            .buttonStyle(SecondaryActionButtonStyle())
-                    }
-                    VStack(alignment: .leading, spacing: CinefuseTokens.Spacing.s) {
-                        TextField("Audio title", text: $audioTrackTitleDraft)
-                            .textFieldStyle(.roundedBorder)
-                        HStack(spacing: CinefuseTokens.Spacing.s) {
-                            Button("Generate Dialogue", action: onGenerateDialogue)
-                                .tooltip("Generate spoken dialogue track", enabled: showTooltips)
-                                .buttonStyle(SecondaryActionButtonStyle())
-                            Button("Generate Score", action: onGenerateScore)
-                                .tooltip("Generate background music score", enabled: showTooltips)
-                                .buttonStyle(SecondaryActionButtonStyle())
-                            Button("Generate SFX", action: onGenerateSFX)
-                                .tooltip("Generate one-shot sound effect", enabled: showTooltips)
-                                .buttonStyle(SecondaryActionButtonStyle())
-                            Button("Mix", action: onMixAudio)
-                                .tooltip("Create mixed audio master for timeline", enabled: showTooltips)
-                                .buttonStyle(SecondaryActionButtonStyle())
-                            Button("Lip-sync", action: onLipSync)
-                                .tooltip("Run lip-sync pass for selected shot", enabled: showTooltips)
-                                .buttonStyle(SecondaryActionButtonStyle())
+                audioLanesGenerationToolbar
+                Group {
+                    if editorMobileInspectorSheet {
+                        Button {
+                            onAddAudioTrack()
+                        } label: {
+                            Label("Add audio lane", systemImage: "plus.rectangle.on.folder")
                         }
+                        .tooltip("Add an empty lane for manual placement", enabled: showTooltips)
+                        .buttonStyle(PanelSecondaryButtonStyle())
+                    } else {
+                        Button {
+                            onAddAudioTrack()
+                        } label: {
+                            Label("Add audio lane", systemImage: "plus.rectangle.on.folder")
+                        }
+                        .tooltip("Add an empty lane for manual placement", enabled: showTooltips)
+                        .buttonStyle(SecondaryActionButtonStyle())
                     }
                 }
-                Button {
-                    onAddAudioTrack()
-                } label: {
-                    Label("Add audio lane", systemImage: "plus.rectangle.on.folder")
-                }
-                .buttonStyle(SecondaryActionButtonStyle())
-                .tooltip("Add an empty lane for manual placement", enabled: showTooltips)
                 Group {
                     if editorMobileInspectorSheet {
                         AudioLaneView(
@@ -4981,7 +4997,9 @@ struct ProjectDetailScreen: View {
                         .frame(maxHeight: .infinity, alignment: .top)
                     }
                 }
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
     }
 
@@ -5407,6 +5425,10 @@ struct HorizontalTimelineTrack: View {
         }
     }
 
+    private var scrollTrayVerticalPadding: CGFloat {
+        clipVisualStyle == .audioWaveform ? 2 : CinefuseTokens.Spacing.xxs
+    }
+
     private var timelineDensityToolbar: some View {
         HStack(spacing: CinefuseTokens.Spacing.xxs) {
             Button {
@@ -5515,15 +5537,8 @@ struct HorizontalTimelineTrack: View {
         visibleShots.map { "\($0.id):\($0.clipUrl ?? "")" }.joined(separator: "|")
     }
 
-    /// Ruler and clip row share one horizontal scroll width so the playhead aligns with time marks.
-    @ViewBuilder
-    private var timelineTrackWithSyncedRuler: some View {
-        // Single horizontal scroll surface (matches video timeline). Nesting a vertical ScrollView here
-        // stacked indicators against the resize strip below and made drags feel like a broken scrollbar.
-        timelineHorizontalStripGeometry
-    }
-
-    private var timelineHorizontalStripGeometry: some View {
+    /// Single horizontal scroll surface (matches video timeline). Height grows with the splitter so clip cards fill the strip.
+    private func timelineHorizontalStripGeometry(stripTotalHeight: CGFloat, cardsRowHeight: CGFloat) -> some View {
         GeometryReader { geo in
             let spacing = clipVisualStyle == .audioWaveform ? CinefuseTokens.Spacing.xs : CinefuseTokens.Spacing.s
             let totalSec = totalTimelineDurationSeconds(for: visibleShots)
@@ -5536,6 +5551,7 @@ struct HorizontalTimelineTrack: View {
             )
             let contentWidth = widths.reduce(0, +) + spacing * CGFloat(max(0, visibleShots.count - 1))
             let stripW = max(geo.size.width, contentWidth)
+            let layoutHeight: CGFloat? = clipDensity == .thin ? nil : cardsRowHeight
             ScrollView(.horizontal, showsIndicators: true) {
                 VStack(alignment: .leading, spacing: rulerAndCardsSpacing) {
                     TimelineRulerStrip(
@@ -5543,7 +5559,7 @@ struct HorizontalTimelineTrack: View {
                         contentWidth: stripW,
                         palette: themePalette
                     )
-                    HStack(spacing: spacing) {
+                    HStack(alignment: .top, spacing: spacing) {
                         ForEach(Array(visibleShots.enumerated()), id: \.element.id) { index, shot in
                             TimelineClipCard(
                                 shot: shot,
@@ -5579,6 +5595,7 @@ struct HorizontalTimelineTrack: View {
                                 clipVisualStyle: clipVisualStyle,
                                 clipDensity: clipDensity,
                                 cardWidth: widths.indices.contains(index) ? widths[index] : nil,
+                                layoutCardHeight: layoutHeight,
                                 playbackProgressFraction: playbackFraction(for: shot),
                                 playbackFileURL: shot.playbackURL(localRecords: localFileRecordsByRemoteURL)
                             )
@@ -5599,7 +5616,7 @@ struct HorizontalTimelineTrack: View {
                     .frame(width: stripW, alignment: .leading)
                 }
                 .frame(width: stripW, alignment: .leading)
-                .padding(.vertical, clipVisualStyle == .audioWaveform ? 2 : CinefuseTokens.Spacing.xxs)
+                .padding(.vertical, scrollTrayVerticalPadding)
             }
 #if canImport(AVFoundation)
             .task(id: measurementSignature) {
@@ -5607,7 +5624,7 @@ struct HorizontalTimelineTrack: View {
             }
 #endif
         }
-        .frame(height: timelineTrackScrollableHeight)
+        .frame(height: stripTotalHeight)
     }
 
     var body: some View {
@@ -5619,7 +5636,8 @@ struct HorizontalTimelineTrack: View {
                 : CinefuseTokens.Typography.sectionTitle,
             stackSpacing: clipVisualStyle == .audioWaveform ? CinefuseTokens.Spacing.xxs : CinefuseTokens.Spacing.s,
             contentPadding: clipVisualStyle == .audioWaveform ? CinefuseTokens.Spacing.s : CinefuseTokens.Spacing.m,
-            headerAccessory: AnyView(timelineDensityToolbar)
+            headerAccessory: AnyView(timelineDensityToolbar),
+            fillAvailableHeight: true
         ) {
             if visibleShots.isEmpty {
                 VStack(alignment: .leading, spacing: CinefuseTokens.Spacing.s) {
@@ -5634,22 +5652,40 @@ struct HorizontalTimelineTrack: View {
                     }
                 }
             } else {
-                VStack(alignment: .leading, spacing: clipVisualStyle == .audioWaveform ? CinefuseTokens.Spacing.xxs : CinefuseTokens.Spacing.xs) {
-                    timelineTrackWithSyncedRuler
-                    if !hiddenShots.isEmpty {
-                        hiddenShotsControls
+                GeometryReader { geo in
+                    let trayInset = clipVisualStyle == .audioWaveform ? CinefuseTokens.Spacing.xs : CinefuseTokens.Spacing.s
+                    let trayVerticalOutset = trayInset * 2
+                    let vstackSpacing = clipVisualStyle == .audioWaveform ? CinefuseTokens.Spacing.xxs : CinefuseTokens.Spacing.xs
+                    let hiddenBlock = hiddenShots.isEmpty ? CGFloat(0) : CGFloat(108) + vstackSpacing
+                    let innerH = max(0, geo.size.height - trayVerticalOutset)
+                    let stripBudget = max(0, innerH - hiddenBlock)
+                    let stripTotal = max(timelineTrackScrollableHeight, stripBudget)
+                    let rulerBlock = CinefuseTokens.Control.timelineRulerHeight + rulerAndCardsSpacing
+                    let pv = scrollTrayVerticalPadding
+                    let cardsRowHeight = max(
+                        timelineCardsStripHeight,
+                        stripTotal - rulerBlock - 2 * pv
+                    )
+
+                    VStack(alignment: .leading, spacing: vstackSpacing) {
+                        timelineHorizontalStripGeometry(stripTotalHeight: stripTotal, cardsRowHeight: cardsRowHeight)
+                        if !hiddenShots.isEmpty {
+                            hiddenShotsControls
+                        }
                     }
+                    .padding(trayInset)
+                    .background(
+                        RoundedRectangle(cornerRadius: CinefuseTokens.Radius.medium)
+                            .fill(themePalette.timelineBase)
+                            .overlay(
+                                RoundedRectangle(cornerRadius: CinefuseTokens.Radius.medium)
+                                    .stroke(themePalette.timelineBevelTop, lineWidth: 1)
+                            )
+                            .shadow(color: themePalette.timelineBevelBottom.opacity(0.35), radius: 8, x: 0, y: 4)
+                    )
+                    .frame(width: geo.size.width, height: geo.size.height, alignment: .topLeading)
                 }
-                .padding(clipVisualStyle == .audioWaveform ? CinefuseTokens.Spacing.xs : CinefuseTokens.Spacing.s)
-                .background(
-                    RoundedRectangle(cornerRadius: CinefuseTokens.Radius.medium)
-                        .fill(themePalette.timelineBase)
-                        .overlay(
-                            RoundedRectangle(cornerRadius: CinefuseTokens.Radius.medium)
-                                .stroke(themePalette.timelineBevelTop, lineWidth: 1)
-                        )
-                        .shadow(color: themePalette.timelineBevelBottom.opacity(0.35), radius: 8, x: 0, y: 4)
-                )
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
         .onAppear {
@@ -5946,6 +5982,8 @@ struct TimelineClipCard: View {
     var clipDensity: TimelineClipDensity = .large
     /// When set, horizontal size follows timeline duration scaling (see `HorizontalTimelineTrack`).
     var cardWidth: CGFloat?
+    /// When set (medium/large density), expands the card vertically to fill a splitter-resized timeline strip.
+    var layoutCardHeight: CGFloat?
     /// Playhead position within this clip when it matches active preview (`0...1`).
     var playbackProgressFraction: Double?
     /// Resolved local/network URL for waveform rendering on audio timeline clips.
@@ -5990,6 +6028,14 @@ struct TimelineClipCard: View {
         case .large:
             return isAudioTimelineCard ? 102 : CinefuseTokens.Control.timelineCardHeight
         }
+    }
+
+    /// Clip row height when the timeline strip is taller than the density default (thin keeps compact strip layout).
+    private var effectiveCardHeight: CGFloat {
+        guard clipDensity != .thin, let layoutCardHeight else {
+            return resolvedCardHeight
+        }
+        return max(resolvedCardHeight, layoutCardHeight)
     }
 
     /// Video timeline: show waveform instead of thumbnail when `clipUrl` looks like an audio artifact.
@@ -6130,7 +6176,7 @@ struct TimelineClipCard: View {
         }
         .padding(.horizontal, contentHorizontalPadding)
         .padding(.vertical, CinefuseTokens.Spacing.xxs)
-        .frame(width: resolvedCardWidth, height: resolvedCardHeight, alignment: .center)
+        .frame(width: resolvedCardWidth, height: effectiveCardHeight, alignment: .center)
         .background(
             RoundedRectangle(cornerRadius: CinefuseTokens.Radius.medium)
                 .fill(cardFillColor)
@@ -6330,7 +6376,7 @@ struct TimelineClipCard: View {
         .padding(contentHorizontalPadding)
         .frame(
             width: resolvedCardWidth,
-            height: resolvedCardHeight,
+            height: effectiveCardHeight,
             alignment: .topLeading
         )
         .background(
@@ -6348,6 +6394,7 @@ struct TimelineClipCard: View {
                             )
                             .padding(.horizontal, contentHorizontalPadding)
                             .padding(.vertical, clipDensity == .large ? CinefuseTokens.Spacing.xs : CinefuseTokens.Spacing.xxs)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
                         } else {
                             RoundedRectangle(cornerRadius: CinefuseTokens.Radius.medium)
                                 .fill(
@@ -9073,7 +9120,8 @@ struct JobsPanel: View {
     var body: some View {
         SectionCard(
             title: "Jobs - Track render",
-            isCollapsed: $isCollapsed
+            isCollapsed: $isCollapsed,
+            fillAvailableHeight: true
         ) {
             VStack(alignment: .leading, spacing: CinefuseTokens.Spacing.s) {
                 ViewThatFits(in: .horizontal) {
@@ -9253,6 +9301,7 @@ struct JobsPanel: View {
                     )
                 }
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
         .confirmationDialog("Delete this job?", isPresented: Binding(
             get: { pendingDeleteJobId != nil },
@@ -10485,11 +10534,15 @@ struct AudioLaneView: View {
     let themePalette: CinefuseTokens.ThemePalette
     @Binding var laneVolumes: [Int: Float]
     @Binding var masterVolume: Float
+    @Environment(\.editorMobileInspectorSheet) private var editorMobileInspectorSheet
+
+    /// Sheet / phone layouts: stack lane header and sliders vertically so tracks read cleanly.
+    private var useCompactStackedLayout: Bool {
+        editorMobileInspectorSheet
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: CinefuseTokens.Spacing.xs) {
-//            Text("Audio Lanes")
-//                .font(CinefuseTokens.Typography.timelineHeader)
             if audioTracks.isEmpty {
                 Text("No audio tracks generated yet.")
                     .font(CinefuseTokens.Typography.caption)
@@ -10500,85 +10553,50 @@ struct AudioLaneView: View {
                     let computedStartMs = laneMode == .locked
                         ? lockedStartMs(for: track)
                         : track.startMs
-                    HStack(spacing: CinefuseTokens.Spacing.s) {
-                        VStack(alignment: .leading, spacing: CinefuseTokens.Spacing.xxs) {
-                            Text("Lane vol")
-                                .font(CinefuseTokens.Typography.micro)
-                                .foregroundStyle(CinefuseTokens.ColorRole.textSecondary)
-                            Slider(
-                                value: Binding(
-                                    get: { Double(laneVolumes[track.laneIndex] ?? 1) },
-                                    set: { laneVolumes[track.laneIndex] = Float($0) }
-                                ),
-                                in: 0...1.5
+                    Group {
+                        if useCompactStackedLayout {
+                            audioLaneCardCompact(
+                                track: track,
+                                laneMode: laneMode,
+                                computedStartMs: computedStartMs
                             )
-                            .frame(width: 120)
-                        }
-                        if let waveform = track.waveformUrl, let waveformURL = URL(string: waveform) {
-                            AsyncImage(url: waveformURL) { phase in
-                                switch phase {
-                                case .success(let image):
-                                    image.resizable().scaledToFill()
-                                default:
-                                    RoundedRectangle(cornerRadius: CinefuseTokens.Radius.small)
-                                        .fill(CinefuseTokens.ColorRole.surfacePrimary)
-                                        .overlay(Image(systemName: "waveform"))
-                                }
-                            }
-                            .frame(width: 74, height: 40)
-                            .clipped()
-                            .clipShape(RoundedRectangle(cornerRadius: CinefuseTokens.Radius.small))
-                        }
-                        VStack(alignment: .leading, spacing: CinefuseTokens.Spacing.xxs) {
-                            Text("\(track.kind.capitalized): \(track.title)")
-                                .font(CinefuseTokens.Typography.label)
-                            Text("Lane \(track.laneIndex + 1) • Start \(computedStartMs)ms • \(track.durationMs)ms")
-                                .font(CinefuseTokens.Typography.caption)
-                                .foregroundStyle(CinefuseTokens.ColorRole.textSecondary)
-                            if laneMode == .locked {
-                                Text("Locked to video timeline")
-                                    .font(CinefuseTokens.Typography.micro)
-                                    .foregroundStyle(themePalette.accent)
-                            }
-                        }
-                        Spacer()
-                        Picker("Sync", selection: Binding(
-                            get: { syncModes[track.laneIndex] ?? .locked },
-                            set: { syncModes[track.laneIndex] = $0 }
-                        )) {
-                            ForEach(AudioTrackSyncMode.allCases) { mode in
-                                Text(mode.label).tag(mode)
-                            }
-                        }
-                        .pickerStyle(.menu)
-                        if let sourceUrl = track.sourceUrl, let url = URL(string: sourceUrl) {
-                            Link("Play", destination: url)
-                                .font(CinefuseTokens.Typography.caption)
-                        }
-                        if track.status.lowercased() != "ready" {
-                            StatusBadge(status: track.status)
+                        } else {
+                            audioLaneCardInline(
+                                track: track,
+                                laneMode: laneMode,
+                                computedStartMs: computedStartMs
+                            )
                         }
                     }
-                    .padding(CinefuseTokens.Spacing.xs)
+                    .padding(CinefuseTokens.Spacing.s)
                     .background(
-                        RoundedRectangle(cornerRadius: CinefuseTokens.Radius.small)
+                        RoundedRectangle(cornerRadius: CinefuseTokens.Radius.medium)
                             .fill(CinefuseTokens.ColorRole.surfaceSecondary.opacity(laneMode == .locked ? 0.92 : 0.76))
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: CinefuseTokens.Radius.medium)
+                            .stroke(CinefuseTokens.ColorRole.borderSubtle.opacity(0.35), lineWidth: 1)
                     )
                 }
             }
             if !audioTracks.isEmpty {
-                HStack(spacing: CinefuseTokens.Spacing.s) {
-                    Text("Master")
-                        .font(CinefuseTokens.Typography.caption)
-                        .foregroundStyle(CinefuseTokens.ColorRole.textSecondary)
+                VStack(alignment: .leading, spacing: CinefuseTokens.Spacing.xxs) {
+                    HStack {
+                        Text("Master volume")
+                            .font(CinefuseTokens.Typography.caption.weight(.medium))
+                            .foregroundStyle(CinefuseTokens.ColorRole.textSecondary)
+                        Spacer()
+                        Text("\(Int(masterVolume * 100))%")
+                            .font(CinefuseTokens.Typography.caption.monospacedDigit())
+                            .foregroundStyle(CinefuseTokens.ColorRole.textSecondary)
+                    }
                     Slider(value: Binding(
                         get: { Double(masterVolume) },
                         set: { masterVolume = Float($0) }
                     ), in: 0...1.5)
-                    .frame(maxWidth: 280)
-                    Text("\(Int(masterVolume * 100))%")
-                        .font(CinefuseTokens.Typography.micro)
-                        .foregroundStyle(CinefuseTokens.ColorRole.textSecondary)
+#if os(iOS)
+                    .controlSize(editorMobileInspectorSheet ? .small : .regular)
+#endif
                 }
                 .padding(.top, CinefuseTokens.Spacing.xs)
             }
@@ -10592,6 +10610,142 @@ struct AudioLaneView: View {
                         .stroke(themePalette.timelineRuler.opacity(0.32), lineWidth: 1)
                 )
         )
+    }
+
+    @ViewBuilder
+    private func waveformThumb(track: AudioTrack) -> some View {
+        if let waveform = track.waveformUrl, let waveformURL = URL(string: waveform) {
+            AsyncImage(url: waveformURL) { phase in
+                switch phase {
+                case .success(let image):
+                    image.resizable().scaledToFill()
+                default:
+                    RoundedRectangle(cornerRadius: CinefuseTokens.Radius.small)
+                        .fill(CinefuseTokens.ColorRole.surfacePrimary)
+                        .overlay(
+                            Image(systemName: "waveform")
+                                .foregroundStyle(CinefuseTokens.ColorRole.textSecondary.opacity(0.5))
+                        )
+                }
+            }
+            .frame(width: 74, height: 40)
+            .clipped()
+            .clipShape(RoundedRectangle(cornerRadius: CinefuseTokens.Radius.small))
+        }
+    }
+
+    @ViewBuilder
+    private func laneVolumeSliderFullWidth(track: AudioTrack) -> some View {
+        VStack(alignment: .leading, spacing: CinefuseTokens.Spacing.xxs) {
+            Text("Lane volume")
+                .font(CinefuseTokens.Typography.caption)
+                .foregroundStyle(CinefuseTokens.ColorRole.textSecondary)
+            Slider(
+                value: Binding(
+                    get: { Double(laneVolumes[track.laneIndex] ?? 1) },
+                    set: { laneVolumes[track.laneIndex] = Float($0) }
+                ),
+                in: 0...1.5
+            )
+#if os(iOS)
+            .controlSize(.small)
+#endif
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    @ViewBuilder
+    private func audioLaneCardCompact(track: AudioTrack, laneMode: AudioTrackSyncMode, computedStartMs: Int) -> some View {
+        VStack(alignment: .leading, spacing: CinefuseTokens.Spacing.s) {
+            HStack(alignment: .top, spacing: CinefuseTokens.Spacing.s) {
+                waveformThumb(track: track)
+                VStack(alignment: .leading, spacing: CinefuseTokens.Spacing.xxs) {
+                    Text("\(track.kind.capitalized): \(track.title)")
+                        .font(CinefuseTokens.Typography.label)
+                        .foregroundStyle(CinefuseTokens.ColorRole.textPrimary)
+                    Text("Lane \(track.laneIndex + 1) • Start \(computedStartMs)ms • \(track.durationMs)ms")
+                        .font(CinefuseTokens.Typography.caption)
+                        .foregroundStyle(CinefuseTokens.ColorRole.textSecondary)
+                    if laneMode == .locked {
+                        Text("Locked to video timeline")
+                            .font(CinefuseTokens.Typography.micro)
+                            .foregroundStyle(themePalette.accent)
+                    }
+                }
+                Spacer(minLength: 0)
+                VStack(alignment: .trailing, spacing: CinefuseTokens.Spacing.xxs) {
+                    Picker("Sync", selection: Binding(
+                        get: { syncModes[track.laneIndex] ?? .locked },
+                        set: { syncModes[track.laneIndex] = $0 }
+                    )) {
+                        ForEach(AudioTrackSyncMode.allCases) { mode in
+                            Text(mode.label).tag(mode)
+                        }
+                    }
+                    .pickerStyle(.menu)
+                    if let sourceUrl = track.sourceUrl, let url = URL(string: sourceUrl) {
+                        Link("Play", destination: url)
+                            .font(CinefuseTokens.Typography.caption)
+                    }
+                    if track.status.lowercased() != "ready" {
+                        StatusBadge(status: track.status)
+                    }
+                }
+            }
+            laneVolumeSliderFullWidth(track: track)
+        }
+    }
+
+    @ViewBuilder
+    private func audioLaneCardInline(track: AudioTrack, laneMode: AudioTrackSyncMode, computedStartMs: Int) -> some View {
+        HStack(alignment: .top, spacing: CinefuseTokens.Spacing.s) {
+            VStack(alignment: .leading, spacing: CinefuseTokens.Spacing.xxs) {
+                Text("Lane volume")
+                    .font(CinefuseTokens.Typography.micro)
+                    .foregroundStyle(CinefuseTokens.ColorRole.textSecondary)
+                Slider(
+                    value: Binding(
+                        get: { Double(laneVolumes[track.laneIndex] ?? 1) },
+                        set: { laneVolumes[track.laneIndex] = Float($0) }
+                    ),
+                    in: 0...1.5
+                )
+                .frame(minWidth: 120, idealWidth: 168, maxWidth: 220)
+            }
+            waveformThumb(track: track)
+            VStack(alignment: .leading, spacing: CinefuseTokens.Spacing.xxs) {
+                Text("\(track.kind.capitalized): \(track.title)")
+                    .font(CinefuseTokens.Typography.label)
+                Text("Lane \(track.laneIndex + 1) • Start \(computedStartMs)ms • \(track.durationMs)ms")
+                    .font(CinefuseTokens.Typography.caption)
+                    .foregroundStyle(CinefuseTokens.ColorRole.textSecondary)
+                if laneMode == .locked {
+                    Text("Locked to video timeline")
+                        .font(CinefuseTokens.Typography.micro)
+                        .foregroundStyle(themePalette.accent)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            Spacer(minLength: 0)
+            VStack(alignment: .trailing, spacing: CinefuseTokens.Spacing.xxs) {
+                Picker("Sync", selection: Binding(
+                    get: { syncModes[track.laneIndex] ?? .locked },
+                    set: { syncModes[track.laneIndex] = $0 }
+                )) {
+                    ForEach(AudioTrackSyncMode.allCases) { mode in
+                        Text(mode.label).tag(mode)
+                    }
+                }
+                .pickerStyle(.menu)
+                if let sourceUrl = track.sourceUrl, let url = URL(string: sourceUrl) {
+                    Link("Play", destination: url)
+                        .font(CinefuseTokens.Typography.caption)
+                }
+                if track.status.lowercased() != "ready" {
+                    StatusBadge(status: track.status)
+                }
+            }
+        }
     }
 
     private func lockedStartMs(for track: AudioTrack) -> Int {

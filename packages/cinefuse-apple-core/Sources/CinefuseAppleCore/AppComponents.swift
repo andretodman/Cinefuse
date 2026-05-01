@@ -40,6 +40,31 @@ struct SecondaryActionButtonStyle: ButtonStyle {
     }
 }
 
+/// Stacked inspector / sheet actions: full-width friendly, up to two lines, avoids clipped “Generate…” labels on narrow widths.
+struct PanelSecondaryButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(CinefuseTokens.Typography.label)
+            .multilineTextAlignment(.center)
+            .lineLimit(2)
+            .minimumScaleFactor(0.88)
+            .padding(.horizontal, CinefuseTokens.Spacing.m)
+            .padding(.vertical, CinefuseTokens.Spacing.s)
+            .frame(maxWidth: .infinity, minHeight: CinefuseTokens.Control.minButtonHeight)
+            .foregroundStyle(CinefuseTokens.ColorRole.textPrimary)
+            .background(
+                RoundedRectangle(cornerRadius: CinefuseTokens.Radius.medium)
+                    .fill(CinefuseTokens.ColorRole.surfacePrimary.opacity(configuration.isPressed ? 0.6 : 1))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: CinefuseTokens.Radius.medium)
+                            .stroke(CinefuseTokens.ColorRole.borderSubtle, lineWidth: 1)
+                    )
+            )
+            .scaleEffect(configuration.isPressed ? 0.985 : 1)
+            .animation(CinefuseTokens.Motion.quick, value: configuration.isPressed)
+    }
+}
+
 struct DestructiveActionButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
@@ -68,6 +93,8 @@ struct SectionCard<Content: View>: View {
     let contentPadding: CGFloat
     /// Shown to the **left** of the collapse chevron (e.g. timeline density controls).
     let headerAccessory: AnyView?
+    /// When true, expanded content uses the full vertical space offered by the parent (splitter-resized stacks).
+    let fillAvailableHeight: Bool
     @ViewBuilder let content: Content
 
     init(
@@ -78,6 +105,7 @@ struct SectionCard<Content: View>: View {
         stackSpacing: CGFloat = CinefuseTokens.Spacing.s,
         contentPadding: CGFloat = CinefuseTokens.Spacing.m,
         headerAccessory: AnyView? = nil,
+        fillAvailableHeight: Bool = false,
         @ViewBuilder content: () -> Content
     ) {
         self.title = title
@@ -87,6 +115,7 @@ struct SectionCard<Content: View>: View {
         self.stackSpacing = stackSpacing
         self.contentPadding = contentPadding
         self.headerAccessory = headerAccessory
+        self.fillAvailableHeight = fillAvailableHeight
         self.content = content()
     }
 
@@ -119,9 +148,11 @@ struct SectionCard<Content: View>: View {
             }
             if !(isCollapsed?.wrappedValue ?? false) {
                 content
+                    .frame(maxWidth: .infinity, maxHeight: fillAvailableHeight ? .infinity : nil, alignment: .topLeading)
                     .transition(.opacity.combined(with: .move(edge: .top)))
             }
         }
+        .frame(maxWidth: .infinity, maxHeight: fillAvailableHeight ? .infinity : nil, alignment: .topLeading)
         .padding(contentPadding)
         .background(
             RoundedRectangle(cornerRadius: CinefuseTokens.Radius.large)
